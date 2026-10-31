@@ -341,6 +341,41 @@ class Scope:
         self._save_awg(st)
         return st
 
+    def awg_sweep(self, start, end, time, sweep_type='linear', wave='sine', high=3.0, low=0.0, duty=50.0):
+        """Frequency sweep from `start` to `end` Hz in `time` s (repeats); register program from DSWave's HAL."""
+        from . import awg, awg_modes
+        direction = 'up' if end > start else 'down'
+        awg.apply(self.dev.t, awg_modes.program_sweep(start, end, time, sweep_type, direction, wave=wave, high=high,
+                                                      low=low, duty=duty))
+        awg.apply(self.dev.t, awg.START)
+        st = {'mode': 'sweep', 'wave': wave, 'start_hz': start, 'end_hz': end, 'time_s': time, 'sweep_type': sweep_type,
+              'high_v': high, 'low_v': low, 'enabled': True}
+        self._save_awg(st)
+        return st
+
+    def awg_burst(self, wave, freq, high, low, cycles, period, duty=50.0, phase=0.0):
+        """`cycles` periods of the carrier every `period` s (internal trigger)."""
+        from . import awg, awg_modes
+        awg.apply(self.dev.t, awg_modes.program_burst(wave, freq, high, low, duty, phase, cycles=cycles, period=period))
+        awg.apply(self.dev.t, awg.START)
+        st = {'mode': 'burst', 'wave': wave, 'freq_hz': freq, 'cycles': cycles, 'period_s': period, 'high_v': high,
+              'low_v': low, 'enabled': True}
+        self._save_awg(st)
+        return st
+
+    def awg_modulate(self, kind, wave, freq, high, low, mod_wave='sine', mod_freq=100.0, depth=50.0, deviation=None,
+                     hop=None, duty=50.0):
+        """AM (depth %), FM (deviation Hz) or FSK (hop Hz) of a carrier, internal modulation source."""
+        from . import awg, awg_modes
+        awg.apply(self.dev.t, awg_modes.program_modulation(kind, wave, freq, high, low, duty, mod_wave=mod_wave,
+                                                           mod_freq=mod_freq, depth=depth, deviation=deviation, hop=hop))
+        awg.apply(self.dev.t, awg.START)
+        st = {'mode': 'modulation', 'kind': kind, 'wave': wave, 'freq_hz': freq, 'mod_wave': mod_wave,
+              'mod_freq_hz': mod_freq, 'high_v': high, 'low_v': low, 'enabled': True}
+        st.update({'am': {'depth_pct': depth}, 'fm': {'deviation_hz': deviation}, 'fsk': {'hop_hz': hop}}.get(kind, {}))
+        self._save_awg(st)
+        return st
+
     def awg_from_spec(self, spec):
         from .units import si
         p = spec.split(',')

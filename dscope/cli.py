@@ -146,6 +146,24 @@ def build_parser():
     s.add_argument('--high', default=None); s.add_argument('--low', default=None)
     s.add_argument('--vpp', default=None); s.add_argument('--dc', default=None, help='centre voltage (with --vpp)')
     s.add_argument('--duty', default='50%'); s.add_argument('--phase', default='0')
+    sw = asub.add_parser('sweep', help='frequency sweep start -> end in --time (repeats)')
+    sw.add_argument('--start', required=True); sw.add_argument('--end', required=True)
+    sw.add_argument('--time', default='100ms', help='sweep time 1 ms .. 500 s')
+    sw.add_argument('--log', action='store_true', help='logarithmic sweep (default linear)')
+    bu = asub.add_parser('burst', help='--cycles periods of the carrier every --period')
+    bu.add_argument('--cycles', type=int, default=1); bu.add_argument('--period', default='10ms')
+    mo = asub.add_parser('mod', help='AM / FM / FSK of the carrier (internal source)')
+    mo.add_argument('--kind', choices=['am', 'fm', 'fsk'], default='am')
+    mo.add_argument('--mod-wave', choices=['sine', 'triangle', 'square'], default='sine')
+    mo.add_argument('--mod-freq', default='100')
+    mo.add_argument('--depth', default='50%', help='AM depth')
+    mo.add_argument('--deviation', default=None, help='FM peak deviation (Hz)')
+    mo.add_argument('--hop', default=None, help='FSK hop frequency (Hz, absolute)')
+    for x in (sw, bu, mo):
+        x.add_argument('--wave', default='sine', choices=['sine', 'triangle', 'square'])
+        x.add_argument('--high', default='3V'); x.add_argument('--low', default='0V'); x.add_argument('--duty', default='50%')
+    for x in (bu, mo):
+        x.add_argument('--freq', default='1k', help='carrier frequency')
     dcp = asub.add_parser('dc', help='steady DC level (0..3 V, 6.4 mV steps)')
     dcp.add_argument('--level', required=True)
     asub.add_parser('off'); asub.add_parser('status')
@@ -311,6 +329,21 @@ def cmd_awg(args, scope):
     from .units import si
     if args.awg_cmd == 'off':
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_off()}); return
+    if args.awg_cmd in ('sweep', 'burst', 'mod'):
+        lv = dict(high=si(args.high, 'V', '--high'), low=si(args.low, 'V', '--low'), duty=si(args.duty, None, '--duty'))
+        if args.awg_cmd == 'sweep':
+            st = scope.awg_sweep(si(args.start, 'Hz', '--start'), si(args.end, 'Hz', '--end'), si(args.time, 's', '--time'),
+                                 'log' if args.log else 'linear', args.wave, **lv)
+        elif args.awg_cmd == 'burst':
+            st = scope.awg_burst(args.wave, si(args.freq, 'Hz', '--freq'), lv['high'], lv['low'], args.cycles,
+                                 si(args.period, 's', '--period'), lv['duty'])
+        else:
+            st = scope.awg_modulate(args.kind, args.wave, si(args.freq, 'Hz', '--freq'), lv['high'], lv['low'],
+                                    args.mod_wave, si(args.mod_freq, 'Hz', '--mod-freq'), si(args.depth, None, '--depth'),
+                                    si(args.deviation, 'Hz', '--deviation') if args.deviation else None,
+                                    si(args.hop, 'Hz', '--hop') if args.hop else None, lv['duty'])
+        _emit({'ok': True, 'cmd': 'awg', 'awg': st, 'persists_after_exit': True})
+        return
     if args.awg_cmd == 'dc':
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_dc(si(args.level, 'V', '--level')), 'persists_after_exit': True})
         return
