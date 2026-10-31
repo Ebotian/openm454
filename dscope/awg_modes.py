@@ -626,17 +626,19 @@ class DswaveAwgHal:
 
 
 def replay(lines, hal=None):
-    """Replay SCPI lines through a DswaveAwgHal -> dict(writes, per_cmd, rets, ids, log, hal)."""
+    """Replay SCPI lines through a DswaveAwgHal -> dict(writes, per_cmd, rets, ids, log, per_cmd_log, hal)."""
     hal = hal if hal is not None else DswaveAwgHal()
     hal.log, hal.ids = [], []
-    writes, per_cmd, rets = [], [], []
+    writes, per_cmd, rets, per_cmd_log = [], [], [], []
     for line in lines:
+        n0 = len(hal.log)
         ret, w = hal.scpi(line)
         writes += w
         per_cmd.append(w)
         rets.append(ret)
+        per_cmd_log.append(list(hal.log[n0:]))
     return {'writes': writes, 'per_cmd': per_cmd, 'rets': rets, 'ids': list(hal.ids), 'log': list(hal.log),
-            'hal': hal}
+            'per_cmd_log': per_cmd_log, 'hal': hal}
 
 
 def final(writes):

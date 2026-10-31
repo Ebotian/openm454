@@ -29,6 +29,9 @@ RATES = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000,
          10000000, 20000000, 50000000, 100000000]
 EDGES = {'rise': 0, 'rising': 0, 'fall': 1, 'falling': 1, 'any': 2, 'both': 2,
          'pulse>': 3, 'pulse<': 4, 'npulse>': 5, 'npulse<': 6}
+#: after a run without analog channels (or at the start of a session) the analog inputs start 8-14 codes high and
+#: settle within ~80 ms (measured 2026-10-31), so the first analog run waits this long after its setup writes
+ANALOG_WAKE_SETTLE = 0.15
 OVERDRIVE_SETTLE = 0.3           # measured: 1500 div of overdrive at 1 mV/div needs ~215 ms to settle within 0.5 LSB
 MAX_SAMPLES = 400_000_000     # per channel; the 4 Gbit sample memory is the real bound (checked by mso)
 
@@ -215,6 +218,7 @@ class Scope:
         self.lock = None
         self._last_cross = None      # CROSS tables written earlier in this session
         self._overdriven = False     # last capture saturated an analog input: let the front end recover first
+        self._analog_awake = False   # the previous run of this session had analog channels
         import threading
         self._close_lock = threading.Lock()
 
@@ -419,6 +423,10 @@ class Scope:
             send = [w for w in prog if w[0] not in CROSS_REGS]
         self._last_cross = None
         settle, self._overdriven = (OVERDRIVE_SETTLE if self._overdriven else 0.0), False
+        analog_on = bool(geom.get('analog_rate'))
+        if analog_on and not self._analog_awake:     # analog side idle before (or unknown): front end recovers
+            settle = max(settle, ANALOG_WAKE_SETTLE)
+        self._analog_awake = analog_on
         raw = self.engine.run(send, pkt_bytes=geom['pkt_bytes'], need_bytes=geom['need_bytes'],
                               n_transfers=geom.get('transfer_count', 16), trigger_timeout=trigger_timeout,
                               collect_timeout=collect_timeout, settle=settle, **kw)

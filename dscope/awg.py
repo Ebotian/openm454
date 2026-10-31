@@ -6,7 +6,7 @@ verified by loopback on A0:
   FCW (4/5)      = floor(f_Hz * 40)                       (32-bit, lo/hi)
   RPAR/FPAR      = int(3846153.2 / f_Hz + 0.5)           (14/15, 16/17; edge parameter, same for both)
   PHASE (6/7)    = phase_deg / 360 * 4e9
-  HIGH/LOW (8/9) = volts * 156
+  HIGH/LOW (8/9) = trunc(uV / 6e6 * 0.91525 * 1023)  (~156.05 codes per volt)
   DUTY (10/11)   = duty_fraction * 4e9
   RSLOPE/FSLOPE (12/13) = floor(68.75 / duty), floor(68.75 / (1 - duty))
   WAVE (0): 0 sine, 1 triangle, 2 square, 3 noise;  MODE (1): 0 basic
@@ -43,13 +43,14 @@ def program(wave='sine', freq=1000.0, high=3.0, low=0.0, duty=50.0, phase=0.0):
         period = 1.0 / freq
         if min(duty, 100 - duty) / 100 * period < MIN_PULSE_S * (1 - 1e-9):     # 380 ns itself is allowed
             raise DscopeError('INVALID_ARG', 'pulse narrower than 380 ns at this frequency/duty')
-    d = duty / 100.0
-    fcw = int(math.floor(freq * 40))
-    rpar = int(3846153.2 / freq + 0.5)
-    ph = int(round((phase % 360) / 360.0 * 4e9)) & 0xFFFFFFFF
-    dw = int(round(d * 4e9)) & 0xFFFFFFFF
-    hi, lo = int(round(high * 156)), int(round(low * 156))
-    rs, fs = int(68.75 / d), int(68.75 / (1 - d))
+    # DSWave's exact conversions (dscope/awg_modes.py replays its AWG handler write for write)
+    from .awg_modes import edge_param, level_code, micro, slopes
+    fcw = int((micro(freq) / 1e6) * 40.0)
+    rpar = edge_param(freq)
+    ph = int(((micro(phase % 360) // 1000000) / 360.0) * 4e9) & 0xFFFFFFFF      # whole degrees, truncated
+    dw, rs, fs = slopes(duty)
+    dw &= 0xFFFFFFFF
+    hi, lo = level_code(high), level_code(low)
     return [
         (A_ENABLE, 0x0002),
         (A_SWITCH, 1), (A_MODE, 0), (A_SWITCH, 0),
@@ -73,7 +74,8 @@ def dc(level):
     """Writes for a steady DC output: stopped, the generator holds LOW (not a DSWave feature; measured)."""
     if not 0.0 <= level <= V_MAX + 1e-9:
         raise DscopeError('INVALID_ARG', 'DC level must be 0 .. 3.0 V')
-    return STOP + [(A_LOW, int(round(level * 156)))]
+    from .awg_modes import level_code
+    return STOP + [(A_LOW, level_code(level))]
 
 
 def apply(transport, writes):
@@ -82,10 +84,14 @@ def apply(transport, writes):
         transport.write(REG_DATA, val)
 
 
+CODES_PER_V = 1023 * 0.91525 / 6.0       # HIGH/LOW code per volt (DSWave: trunc(uV / 6e6 * 0.91525 * 1023))
+
+
 def describe(wave, freq, high, low, duty, phase):
+    from .awg_modes import level_code
     fcw = int(math.floor(freq * 40))
     if wave == 'noise':
         return {'wave': wave, 'high_v': high, 'low_v': low, 'note': 'Gaussian-like noise around (low+high)/2 with sigma '
                 'about 2.8 % of (high-low), peaks about +-0.2 x (high-low), flat to ~2 MHz; frequency is ignored'}
-    return {'wave': wave, 'freq_hz': freq, 'freq_actual_hz': fcw / 40.0, 'high_v': round(int(round(high * 156)) / 156, 4),
-            'low_v': round(int(round(low * 156)) / 156, 4), 'duty_pct': duty, 'phase_deg': phase}
+    return {'wave': wave, 'freq_hz': freq, 'freq_actual_hz': fcw / 40.0, 'high_v': round(level_code(high) / CODES_PER_V, 4),
+            'low_v': round(level_code(low) / CODES_PER_V, 4), 'duty_pct': duty, 'phase_deg': phase}
