@@ -49,18 +49,32 @@ class Capture:
         return dict(self._measured[key])
 
     def _measure(self, ch, edges_n=0, window=None):
+        """measure.analog/digital on the channel (or a time window of it); edges_rise_s / edges_fall_s are converted
+        to the capture's time base (t = 0 at the trigger), like time() and dump()."""
+        a = self._win_start(ch, window)
         if ch.startswith('A'):
             v = self.volts(ch)
             s = self.scale(ch)
             k = s.get('probe', 1.0) * s['volts_per_code']
             if window:
                 v = self._win(ch, v, window)
-            return measure.analog(v, self.rate(ch), clip_lo=(CODE_MIN + 1 - s['zero_code']) * k,
-                                  clip_hi=(CODE_MAX - 1 - s['zero_code']) * k, edges_n=edges_n, lsb=k)
-        b = self.digital[ch]
-        if window:
-            b = self._win(ch, b, window)
-        return measure.digital(b, self.rate(ch), edges_n=edges_n)
+            res = measure.analog(v, self.rate(ch), clip_lo=(CODE_MIN + 1 - s['zero_code']) * k,
+                                 clip_hi=(CODE_MAX - 1 - s['zero_code']) * k, edges_n=edges_n, lsb=k)
+        else:
+            b = self.digital[ch]
+            if window:
+                b = self._win(ch, b, window)
+            res = measure.digital(b, self.rate(ch), edges_n=edges_n)
+        t_first = self.t0(ch) + a / self.rate(ch)
+        for key in ('edges_rise_s', 'edges_fall_s'):
+            if key in res:
+                res[key] = [float('%.10g' % (t_first + x)) for x in res[key]]
+        return res
+
+    def _win_start(self, ch, window):
+        if not window or window[0] is None:
+            return 0
+        return max(0, int((window[0] - self.t0(ch)) * self.rate(ch)))
 
     def _win(self, ch, arr, window):
         t0, t1 = window

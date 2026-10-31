@@ -161,8 +161,8 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
     if clip_hi is not None:
         res['clip_hi'] = bool(np.mean(v >= clip_hi) > 0.001)
     if edges_n:
-        res['edges_rise_s'] = [_r(x / rate, 7) for x in rises[:edges_n]]
-        res['edges_fall_s'] = [_r(x / rate, 7) for x in falls[:edges_n]]
+        res['edges_rise_s'] = [_r(x / rate, 10) for x in rises[:edges_n]]
+        res['edges_fall_s'] = [_r(x / rate, 10) for x in falls[:edges_n]]
     return res
 
 
@@ -229,6 +229,6 @@ def digital(bits, rate, edges_n=0):
         seg = b[rises[0]:rises[-1]]
         res['duty_pct'] = _r(seg.mean() * 100, 4)
     if edges_n:
-        res['edges_rise_s'] = [_r(x / rate, 7) for x in rises[:edges_n]]
-        res['edges_fall_s'] = [_r(x / rate, 7) for x in falls[:edges_n]]
+        res['edges_rise_s'] = [_r(x / rate, 10) for x in rises[:edges_n]]
+        res['edges_fall_s'] = [_r(x / rate, 10) for x in falls[:edges_n]]
     return res

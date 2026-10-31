@@ -83,7 +83,7 @@ def plot(cap, path, window=None, title=None, summary=None, channels=None):
                                                _si(m.get('vpp_v'), 'V'), _si(m.get('freq_hz'), 'Hz'))
             ax.plot(tt / f, vv, color=SERIES[int(c[1])], lw=1.0, label=lab)
         trig = cap.meta.get('trigger', {})
-        if trig.get('source', '').startswith('A') and trig.get('level_v') is not None:
+        if (trig.get('source') or '').startswith('A') and trig.get('level_v') is not None:
             ax.axhline(trig['level_v'], color=INK2, lw=0.7, ls=':')
         ax.set_ylabel('V', color=INK2)
         ax.legend(loc='upper right', fontsize=8.5, frameon=True, facecolor=SURFACE, edgecolor=GRID, labelcolor=INK)

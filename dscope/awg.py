@@ -12,6 +12,8 @@ verified by loopback on A0:
   WAVE (0): 0 sine, 1 triangle, 2 square, 3 noise;  MODE (1): 0 basic
   SWITCH (2) = 1 ... 0 brackets mode/wave/frequency updates; ENABLE (3): 2 = armed, 3 = output running
 Stopped (ENABLE 2), the output holds the LOW level; awg_off also writes LOW = 0 so "off" means 0 V.
+Noise (measured 2026-10-31): Gaussian-like around (low+high)/2 (+30..160 mV), sigma ~2.8 % of (high-low), peaks
+about +-0.2 x (high-low), flat to ~2 MHz; the frequency setting has no effect.
 """
 import math
 
@@ -82,5 +84,8 @@ def apply(transport, writes):
 
 def describe(wave, freq, high, low, duty, phase):
     fcw = int(math.floor(freq * 40))
+    if wave == 'noise':
+        return {'wave': wave, 'high_v': high, 'low_v': low, 'note': 'Gaussian-like noise around (low+high)/2 with sigma '
+                'about 2.8 % of (high-low), peaks about +-0.2 x (high-low), flat to ~2 MHz; frequency is ignored'}
     return {'wave': wave, 'freq_hz': freq, 'freq_actual_hz': fcw / 40.0, 'high_v': round(int(round(high * 156)) / 156, 4),
             'low_v': round(int(round(low * 156)) / 156, 4), 'duty_pct': duty, 'phase_deg': phase}

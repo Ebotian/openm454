@@ -41,7 +41,7 @@ def _near(x, ref, rel=None, abs_=None):
 def _t_of_first_edge_near_zero(cap, ch, rising=True):
     m = cap.measure(ch, edges_n=50)
     key = 'edges_rise_s' if rising else 'edges_fall_s'
-    ts = [cap.t0(ch) + t for t in (m.get(key) or [])]
+    ts = list(m.get(key) or [])                    # relative to the trigger
     return min(ts, key=abs) if ts else None
 
 

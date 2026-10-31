@@ -99,13 +99,13 @@ def test_triggered_square_at_t0():
     assert cap.meta['acq']['triggered']
     m = cap.measure('A1', edges_n=10)
     assert m['freq_hz'] is None or abs(m['freq_hz'] - 998.75) < 3     # 1 ms window = 1 period only
-    assert any(abs(cap.t0('A1') + t - 0.5e-3) < 20e-6 for t in m['edges_fall_s'])
+    assert any(abs(t - 0.5e-3) < 20e-6 for t in m['edges_fall_s'])
     assert abs(m['vtop_v'] - 2.83) < 0.2 and abs(m['vbase_v']) < 0.1
-    t_edges = [cap.t0('A1') + t for t in m['edges_rise_s']]
+    t_edges = list(m['edges_rise_s'])
     assert min(abs(t) for t in t_edges) < 15e-6          # slow (~8 us) edge, trigger at 1.4 V
     d = cap.measure('D0', edges_n=5)
     assert d['state'] == 'toggling'
-    td = min(abs(cap.t0('D0') + t) for t in d['edges_rise_s'])
+    td = min(abs(t) for t in d['edges_rise_s'])
     assert td < 15e-6
     assert cap.measure('D1')['state'] == 'low'
 

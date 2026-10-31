@@ -369,8 +369,9 @@ class Scope:
         prog, geom = self._compile_ok(hal, warnings)
         collect = max(10.0, 1.5 * geom['record_s'] + 2.0)
         raw = self._run(prog, geom, self._head_wait(geom, wait if triggered_wanted else 2.0), collect)
-        attempts.append('triggered' if raw.head else 'no-trigger')
+        attempts.append(('triggered' if triggered_wanted else 'forced') if raw.head else 'no-trigger')
         if raw.head is None:
+            self._overdriven = True             # no data to check: an input may have been saturated while waiting
             if raw.aborted:
                 raise DscopeError('TIMEOUT_WATCHDOG', 'capture aborted before the trigger')
             if mode == 'normal':
@@ -517,12 +518,17 @@ class Scope:
                    'coupling': {c: st.coupling.get(c, 'dc') for c in st.analog},
                    'bw20': st.bw20, 'invert': st.invert, 'threshold_v': hal['threshold_uv'] / 1e6,
                    'trigger': trig, 'duration_req_s': st.duration}
-        n = max([len(v) for v in frame['analog'].values()] + [len(v) for v in frame['digital'].values()] + [0])
+        n_a = max([len(v) for v in frame['analog'].values()] + [0])
+        n_d = max([len(v) for v in frame['digital'].values()] + [0])
+        # samples / duration_s describe the analog channels when there are any (their rate can differ from the
+        # digital one in mixed captures); digital_samples is the per-channel digital count
+        n, rate = (n_a, geom.get('analog_rate')) if frame['analog'] else (n_d, geom.get('digital_rate'))
         acq = {'analog_rate_hz': geom.get('analog_rate'), 'digital_rate_hz': geom.get('digital_rate'),
-               'samples': n, 'duration_s': n / (geom.get('analog_rate') or geom.get('digital_rate')),
+               'samples': n, 'duration_s': n / rate if rate else 0.0,
                'triggered': bool(raw.triggered), 'attempts': attempts,
                'stop': getattr(raw, 'stop', None), 'handshakes': len(getattr(raw, 'handshakes', [])),
                'complete': self._check_complete(raw, geom),
+               'digital_samples': n_d if frame['digital'] else None,
                'elapsed_ms': round((time.time() - t_begin) * 1000)}
         return {'version': 1, 'device': 'DSCope M454', 'time': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'applied': applied, 'acq': acq, 'channels': ch_scale,
