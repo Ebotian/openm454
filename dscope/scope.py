@@ -119,6 +119,8 @@ def hal_config(st):
         pass
     if not st.analog and not st.digital:
         raise DscopeError('INVALID_ARG', 'no channels enabled')
+    if not (st.duration and st.duration > 0 and st.duration * 1e12 >= 1):
+        raise DscopeError('INVALID_ARG', '--duration/--timebase must be > 0')
     if st.trig_source and st.trig_source not in st.analog + st.digital:
         raise DscopeError('INVALID_ARG', 'trigger source %s is not an enabled channel' % st.trig_source)
     if st.trig_edge not in EDGES:
@@ -170,6 +172,10 @@ def hal_config(st):
     if st.trig_source:
         trig['ch_type'] = 1 if st.trig_source.startswith('A') else 0
         trig['ch_index'] = int(st.trig_source[1:])
+    elif st.analog:            # untriggered: the trigger domain must still have channels (it sets the depth)
+        trig['ch_type'], trig['ch_index'] = 1, int(st.analog[0][1:])
+    else:
+        trig['ch_type'], trig['ch_index'] = 0, int(st.digital[0][1:])
     hal = {'analog': ana, 'digital': [int('D%d' % i in st.digital) for i in range(8)],
            'threshold_uv': int(round(min(max(st.threshold, 0.0), 5.0) * 1e6)),
            'sample_time_ps': int(round(st.duration * 1e12)), 'storage_depth': storage, 'auto_rate': 1,
@@ -185,6 +191,8 @@ class Scope:
         self.engine = None
         self.lock = None
         self._last_cross = None      # CROSS tables written earlier in this session
+        import threading
+        self._close_lock = threading.Lock()
 
     # ------------------------------------------------------------ lifecycle
     def open(self):
@@ -192,37 +200,75 @@ class Scope:
         from .device import Device
         from .acquire import Engine
         self.lock = DeviceLock().acquire()
+        dev = Device(log=self.log)
         try:
-            self.dev = Device(log=self.log).open()
-        except Exception:
+            dev.open()
+        except BaseException:
+            dev.close()
             self.lock.release()
+            self.lock = None
             raise
+        self.dev = dev
         self.engine = Engine(self.dev)
         return self
 
     def close(self):
-        if self.dev:
-            self.dev.close()
-            self.dev = None
-        if self.lock:
-            self.lock.release()
-            self.lock = None
+        """Idempotent and safe to call from two threads (main thread and watchdog): only one closes."""
+        with self._close_lock:
+            dev, self.dev = self.dev, None
+            lock, self.lock = self.lock, None
+        if dev:
+            dev.close()
+        if lock:
+            lock.release()
 
     def emergency_stop(self, wait=5.0):
-        """Called from the watchdog thread. A running capture is asked to stop through its own loop (normal stop
-        handshake); registers are never written from here. If the capture does not stop in time, nothing is
-        sent and the process exit releases the handle."""
+        """Called from the watchdog thread. The engine is shut down for good (no further run can start) and a
+        running capture stops through its own loop (normal stop handshake); registers are never written from here.
+        If the capture does not stop in time nothing is sent and the process exit releases the handle."""
         eng = self.engine
-        if eng is not None and eng.active:
-            eng.abort()
+        if eng is not None:
+            eng.shutdown()
             if not eng.wait_idle(wait):
                 return
-        if self.dev is not None and self.dev.t.running:
+        dev = self.dev
+        if dev is not None and dev.t.running:
             return
         try:
             self.close()
         except Exception:
             pass
+
+    def _check_link(self):
+        sp = (getattr(self.dev, 'info', None) or {}).get('usb_speed', 'super')
+        if sp not in ('super', 'super+'):
+            raise DscopeError('UNSUPPORTED', 'the scope is connected at USB %s speed; only the USB 3 (SuperSpeed) '
+                              'transfer profile is verified' % sp, 'plug the scope into a USB 3 port with a USB 3 cable')
+
+    def _compile_ok(self, hal, warnings):
+        """Compile; if the window needs the small-packet roll mode (never recorded from DSWave, not supported),
+        raise the sample count until it does not."""
+        zero = self.dev.zero_info if self.dev is not None else _cached_zero()
+        prog, geom = _compile(hal, zero)
+        n = 0
+        limit = max(MAX_SAMPLES, geom['analog_depth'], geom['digital_depth'])
+        while geom['small_pkt'] and n < 12 and 2 * max(geom['analog_depth'], geom['digital_depth']) <= limit:
+            hal['storage_depth'] *= 2
+            n += 1
+            prog, geom = _compile(hal, zero)
+        if geom['small_pkt']:
+            raise DscopeError('INVALID_ARG', 'this window needs the small-packet stream mode, which is not supported',
+                              'use more --samples or a higher --rate, a shorter --duration, or more channels')
+        if n:
+            warnings.append('sample count raised %dx: slower rates would need the unsupported small-packet stream '
+                            'mode' % (2 ** n))
+        return prog, geom
+
+    @staticmethod
+    def _check_complete(raw, geom):
+        if raw.head is None or geom.get('repeat'):
+            return True
+        return not raw.timed_out and not raw.aborted and len(raw.data) >= geom['need_bytes']
 
     def __enter__(self):
         return self.open()
@@ -280,11 +326,19 @@ class Scope:
     # ------------------------------------------------------------ capture
     def plan(self, st):
         hal, scale, warnings, hints = hal_config(st)
-        prog, geom = _compile(hal, self.dev.zero_info if self.dev else _cached_zero())
-        return {'hal': hal, 'geometry': geom, 'writes': len(prog), 'program': ['%02X=%04X' % w for w in prog[:400]],
-                'warnings': warnings}
+        hal['trigger']['enable'] = int(bool(st.trig_source) and st.trig_mode != 'force')
+        prog, geom = self._compile_ok(hal, warnings)
+        return {'hal': hal, 'geometry': {k: v for k, v in geom.items() if k != '_regs'}, 'writes': len(prog),
+                'program': ['%02X=%04X' % w for w in prog[:400]], 'warnings': warnings}
+
+    @staticmethod
+    def _head_wait(geom, wait):
+        """Time from the start writes until the head can arrive: outside roll mode the head comes only after the
+        whole record has been acquired (pre-trigger fill + trigger + post-trigger), plus transfer latency."""
+        return wait + (0.0 if geom.get('roll') else geom.get('record_s', 0.0)) + 0.5
 
     def capture(self, st):
+        self._check_link()
         hal, scale, warnings, hints = hal_config(st)
         t_begin = time.time()
         attempts = []
@@ -292,21 +346,29 @@ class Scope:
         triggered_wanted = bool(st.trig_source) and mode != 'force'
         wait = st.auto_after if mode == 'auto' else st.timeout
         hal['trigger']['enable'] = int(triggered_wanted)
-        prog, geom = _compile(hal, self.dev.zero_info)
-        collect = max(10.0, 1.5 * st.duration + 2.0)
-        raw = self._run(prog, geom, wait, collect)
+        prog, geom = self._compile_ok(hal, warnings)
+        collect = max(10.0, 1.5 * geom['record_s'] + 2.0)
+        raw = self._run(prog, geom, self._head_wait(geom, wait if triggered_wanted else 2.0), collect)
         attempts.append('triggered' if raw.head else 'no-trigger')
         if raw.head is None:
+            if raw.aborted:
+                raise DscopeError('TIMEOUT_WATCHDOG', 'capture aborted before the trigger')
             if mode == 'normal':
-                raise DscopeError('TIMEOUT_NO_TRIGGER', 'no trigger within %.3g s on %s' % (wait, st.trig_source),
+                raise DscopeError('TIMEOUT_NO_TRIGGER', 'no trigger within %.3g s on %s (%.3g s wait + %.3g s record)'
+                                  % (self._head_wait(geom, wait), st.trig_source, wait, geom['record_s']),
                                   'check the trigger level/edge or use --trig-mode auto')
             hal['trigger']['enable'] = 0
-            prog, geom = _compile(hal, self.dev.zero_info)
-            raw = self._run(prog, geom, 2.0, collect)
+            prog, geom = self._compile_ok(hal, warnings)
+            collect = max(10.0, 1.5 * geom['record_s'] + 2.0)
+            raw = self._run(prog, geom, self._head_wait(geom, 2.0), collect)
             attempts.append('forced')
             if raw.head is None:
                 raise DscopeError('PROTOCOL_ERROR', 'device returned no data even for a forced capture',
                                   'run "dscope release"; if it persists replug the scope')
+        if not self._check_complete(raw, geom):
+            raise DscopeError('TIMEOUT_DATA', 'incomplete record: %d of %d data bytes (%s)' % (
+                len(raw.data), geom['need_bytes'], 'aborted' if raw.aborted else 'data stopped arriving'),
+                'retry once; if it repeats, check the USB 3 connection')
         frame = _decode(raw, geom, hal)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin)
         cap = Capture(meta, frame['analog'], frame['digital'])
@@ -328,15 +390,17 @@ class Scope:
             self._last_cross = cross
         return raw
 
-    def stream(self, st, every=1.0, emit=None):
+    def stream(self, st, every=1.0, emit=None, stop_flag=None):
         """Long untriggered recording with live statistics: the device streams the record while it is
         acquired (roll mode for data rates below ~100 MB/s). emit(dict) receives one line per `every` seconds
-        of signal time. Returns the full Capture at the end."""
+        of signal time. stop_flag(): optional callable that ends the recording early (normal stop).
+        Returns the full Capture at the end."""
         from . import packet
+        self._check_link()
         st.trig_source, st.trig_mode = None, 'force'
         hal, scale, warnings, hints = hal_config(st)
         hal['trigger']['enable'] = 0
-        prog, geom = _compile(hal, self.dev.zero_info)
+        prog, geom = self._compile_ok(hal, warnings)
         layout = packet.layout_from_regs(geom['_regs'], rates={'analog': geom['analog_rate'], 'digital': geom['digital_rate']},
                                          trig_domain=geom['trig_domain'])
         asm = packet.StreamAssembler(layout)
@@ -374,7 +438,10 @@ class Scope:
                 emit(line)
 
         def on_chunk(buf):
-            for ev in asm.feed(buf):
+            handle(asm.feed(buf))
+
+        def handle(events):
+            for ev in events:
                 if ev['kind'] != 'samples':
                     continue
                 for c in an:
@@ -391,10 +458,20 @@ class Scope:
                     report()
                     state['next'] += every
 
-        raw = self._run(prog, geom, 5.0, 1.5 * st.duration + 5.0, on_chunk=on_chunk)
+        rec = geom['record_s']
+        raw = self._run(prog, geom, self._head_wait(geom, 5.0), 1.5 * rec + 5.0, on_chunk=on_chunk, stop_flag=stop_flag)
+        handle(asm.flush())                 # blocks of a record that ended early (stop request, timeout)
         report(final=True)
         if raw.head is None:
+            if raw.stopped:
+                raise DscopeError('STOPPED', 'stream stopped on request before any data arrived')
+            if raw.aborted:
+                raise DscopeError('TIMEOUT_WATCHDOG', 'stream stopped before any data arrived')
             raise DscopeError('PROTOCOL_ERROR', 'no data from the device')
+        if not self._check_complete(raw, geom):
+            warnings.append('record incomplete: %d of %d data bytes (%s)' % (
+                len(raw.data), geom['need_bytes'], 'stopped on request' if raw.stopped else
+                'aborted' if raw.aborted else 'data stopped arriving'))
         frame = _decode(raw, geom, hal)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, ['stream'], t0)
         meta['acq']['mode'] = 'roll' if geom.get('roll') else 'single'
@@ -422,6 +499,7 @@ class Scope:
                'samples': n, 'duration_s': n / (geom.get('analog_rate') or geom.get('digital_rate')),
                'triggered': bool(raw.triggered), 'attempts': attempts,
                'stop': getattr(raw, 'stop', None), 'handshakes': len(getattr(raw, 'handshakes', [])),
+               'complete': self._check_complete(raw, geom),
                'elapsed_ms': round((time.time() - t_begin) * 1000)}
         return {'version': 1, 'device': 'DSCope M454', 'time': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'applied': applied, 'acq': acq, 'channels': ch_scale,
@@ -436,7 +514,11 @@ class Scope:
             d = t.read(int(args.addr, 0), int(args.len, 0), int(args.ext, 0))
             return {'addr': args.addr, 'hex': d.hex()}
         if args.debug_cmd == 'regs-write':
-            t.write(int(args.addr, 0), int(args.value, 0))
+            addr = int(args.addr, 0)
+            if addr in (0x00, 0x01, 0x02, 0x03):
+                raise DscopeError('UNSAFE_OPERATION', 'MODE/CTRL/ACTION/SYNC are only written by the acquisition '
+                                  'engine (a run must be started with queued reads and stopped with a handshake)')
+            t.write(addr, int(args.value, 0))
             return {'written': [args.addr, args.value]}
         return {}
 
@@ -465,8 +547,16 @@ def _hints(cap):
 
 
 def _cached_zero():
+    """Calibration for offline compiles (validation, budgets, `debug plan`): the cached zero info if it parses,
+    else a neutral default (VGA table from the profile). Captures always use the device's own calibration."""
+    from . import mso
     p = os.path.join(STATE, 'cache', 'zero_info_from_trace.bin')
-    return open(p, 'rb').read() if os.path.exists(p) else bytes(512)
+    try:
+        blob = open(p, 'rb').read()
+        mso.parse_zero_info(blob)
+        return blob
+    except (OSError, ValueError):
+        return [mso.ProbeCal(pwm_scale=485, adc_trim=0, extra=0, vga=[]) for _ in range(4)]
 
 
 # ------------------------------------------------------------------------------------------------ adapters

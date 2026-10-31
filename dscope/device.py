@@ -25,6 +25,10 @@ class Device:
 
     # ------------------------------------------------------------------ open
     def open(self):
+        """UsbDevice_Open order, with UsbDevice_Reopen's ForceAcquire(0) moved to the earliest safe point: right
+        after HW_STATUS shows a configured FPGA, the device may still be running a capture that an earlier session
+        left behind (error stop, killed process), so it is stopped before anything else is sent. An unconfigured
+        FPGA cannot be running, and its configuration must stay the first write of the session."""
         t0 = time.time()
         t = self.t.open()
         info = self.info
@@ -38,7 +42,9 @@ class Device:
                               'let the official DSWave update the device once; this driver never flashes firmware')
         status = t.read16(regs.HW_STATUS)
         info['fpga_configured_now'] = False
-        if not status & 0x80:
+        if status & 0x80:
+            self.reset_acquisition()
+        else:
             self.fpga_config()
             info['fpga_configured_now'] = True
         time.sleep(0.100)
@@ -53,7 +59,6 @@ class Device:
         info['probe_ratio_raw'] = [t.read16(regs.RATIO_INFO, ext=i) for i in range(4)]
         self.zero_info = b''.join(t.nvm_read(ZERO_INFO_ADDR + ZERO_INFO_BLOCK * i, ZERO_INFO_BLOCK)
                                   for i in range(ZERO_INFO_BLOCKS))
-        self.reset_acquisition()
         self.idle()
         self.opened = True
         info['open_ms'] = round((time.time() - t0) * 1000)
@@ -115,7 +120,8 @@ class Device:
 
     def reset_acquisition(self):
         """End any acquisition a previous session left behind (DSWave UsbDevice_Reopen -> ForceAcquire(0)):
-        W CTRL=0, 1 ms, W ACTION=4. DSWave sends the same pair after every capture, so it is harmless when idle."""
+        W CTRL=0, 1 ms, W ACTION=4. DSWave sends the same pair after every capture, so it is harmless when idle.
+        Best effort: a device that no longer answers needs a power cycle."""
         self.t.write(regs.CTRL, 0x0000)
         time.sleep(0.001)
         self.t.write(regs.ACTION, 0x0004)
@@ -127,12 +133,8 @@ class Device:
 
     # ------------------------------------------------------------------ close
     def close(self):
-        # DSWave's Close sends nothing; CTRL=0 is only written from a healthy, idle session
-        if self.t.h is not None and self.opened and not self.t.failed and not self.t.running:
-            try:
-                self.t.write(regs.CTRL, 0x0000)
-            except Exception:
-                pass
+        """Send nothing (DSWave UsbDevice_Close): a normal stop already ended with W CTRL=0 / W ACTION=4 and open
+        ends with W CTRL=0 / W ACTION=8; after an error the device must not be touched."""
         self.t.close()
         self.opened = False
 

@@ -65,15 +65,18 @@ PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. F
 
 1. R 0xF0 (>= 0x3110), R 0xF2 (>= 0x3100). Older firmware would make DSWave run an ISP upgrade: the driver refuses.
 2. Claim interface 0. R 0xFF.
-3. If bit7 (DONE) = 0: FPGA configuration: W 0xFE=0xFFFE, ~10 ms, W 0xFE=1, poll R 0xFF bit1 (<= 11x),
+   If bit7 (DONE) = 1, the device may still be running a capture an earlier session left behind (error stop, killed
+   process). The driver stops it before anything else: W 0x01 = 0, 1 ms, W 0x02 = 4. This is DSWave's
+   UsbDevice_Reopen 0x33eaa0 order: IsFpgaDone, then ForceAcquire(0). Then it waits 100 ms. This is best effort:
+   a controller that no longer answers needs a power cycle.
+3. If bit7 (DONE) = 0: FPGA configuration (always the first write of the session; an unconfigured FPGA cannot be
+   running): W 0xFE=0xFFFE, ~10 ms, W 0xFE=1, poll R 0xFF bit1 (<= 11x),
    W 0xFC = len & 0xFFFF, W 0xFD = len >> 16, EP2 OUT the raw bitstream (466,408 bytes) in one transfer,
    poll R 0xFF bit7 (<= 11 x 50 ms). DSWave takes ~110 ms for this.
 4. Wait 100 ms, R 0xF1 (>= 0x3100).
 5. Security handshake (§5).
 6. R 0xFA ext 0..3 (probe ratio), read calibration: 8 x (W 0xFB = 0x40·i, R 0xFB 64 bytes) = EEPROM 0x000-0x1FF.
-7. Reset a run a previous session may have left behind (DSWave UsbDevice_Reopen -> ForceAcquire(0)):
-   W 0x01 = 0, 1 ms, W 0x02 = 4. DSWave's fresh open skips this; it sends the same pair after every capture.
-8. Idle: W 0x01 = 0, W 0x02 = 8.
+7. Idle (InitMso 0x3497a0): W 0x01 = 0, W 0x02 = 8. Close sends nothing (UsbDevice_Close 0x33f300).
 
 Warm open takes ~0.6 s (dominated by the 10 ms read delay).
 
@@ -159,6 +162,11 @@ Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implemen
    inside an **EP 0x84 handshake**. Read 1 byte from EP 0x84 and expect 01. Read another and expect 02. Then send
    the control transfers. Read one more and expect 03. Each read has a 1000 ms timeout. DSWave never sends a
    control transfer while running outside this pattern (1800 EP 0x84 bytes in the corpus, all 01/02/03 triples).
+   A failed EP 0x84 read abandons the handshake: nothing more is sent. A failed register write inside a write
+   handshake does not: RegQueueThread 0x34b8c0 logs it, sends the remaining writes and still reads 03; the device
+   is in error afterwards. A failed read in a progress poll skips 03 (QueryPercent returns at once).
+   The B1 -> B2 read delay is nominally 10 ms, which lasts 13-31 ms on the Windows timer tick. The driver uses
+   15 ms (never below 12.95 ms in the 470 recorded polls).
 5. While the head has not arrived (not in repeat mode), poll progress from 100 ms after the start, about every
    15 ms. Each poll is a handshake around R 0x02. The value v gives n = (v & 0xFFFE) << 13 samples
    (v & 1: hw_depth - n). Normal mode waits until the user stops; auto mode delivers the head after ~15 ms.
@@ -172,6 +180,12 @@ Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implemen
 8. Error stop (failed handshake step, failed control transfer, bad head, transfer status other than
    COMPLETED/CANCELLED, zero-length data transfer, failed resubmit): send **nothing** more, not even EP 0x84 reads.
    Cancel the reads, wait for them, and leave the device until it is reopened. DSWave's close sends nothing either.
+   Priority (TransferThread 0x33f950): frame complete or abort is handled **before** an error that arrived with
+   it. Such a run gets the normal stop handshake and drain, but not the final W 0x01 / W 0x02 = 4 (ForceAcquire is
+   refused once the device is in error).
+   A run is complete only once the 4 KiB tail has arrived, at acqu_bytes + 4096 data bytes. A triggered
+   (non-roll) head arrives only after the whole record has been acquired, so trigger waits must include the record
+   time.
 9. If the controller stops answering 0xB2 reads, nothing on the host recovers it: pipe resets and device resets
    don't help, and DSWave has no reset path. Recovery is a power cycle (replug).
 

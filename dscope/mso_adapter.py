@@ -38,13 +38,26 @@ def to_mso(hal):
     cfg.trig_sample_index = int(round(t['pos_pct'] / 100.0 * depth))
     if not cfg.trig_enable:
         cfg.trig_mode = 0                   # free-running (DSWave 'auto' with no trigger enabled)
+    if cfg.trig_channel_type == 1 and not any(a.enable for a in cfg.analog) or \
+            cfg.trig_channel_type == 0 and not any(cfg.digital):
+        # the depth/pretrigger registers follow the trigger domain; one without channels gives a short HORI_DEPTH
+        raise DscopeError('INVALID_ARG', 'the trigger channel type has no enabled channel',
+                          'trigger on an enabled channel (or enable a channel of that type)')
     return cfg
 
 
 def compile(hal, zero_info, include_cross=True):
+    """-> (program, geometry dict). geometry['need_bytes'] includes the 4 KiB tail (DSWave only ends a frame once
+    the tail has been parsed); 'record_s' is the time the device needs to acquire the record in the trigger domain;
+    'small_pkt' marks the small-packet roll mode, which no recorded DSWave run used (callers refuse it)."""
+    from . import packet
     cfg = to_mso(hal)
-    g = mso.geometry(cfg)
-    prog = mso.setup_program(cfg, zero_info, include_cross=include_cross)
+    try:
+        g = mso.geometry(cfg)
+        prog = mso.setup_program(cfg, zero_info, include_cross=include_cross)
+    except ValueError as e:
+        raise DscopeError('INVALID_ARG', 'settings out of the hardware range: %s' % e,
+                          'shorten --duration/--timebase or raise --samples/--rate; shorten --holdoff or the pulse width') from e
     for addr, val in prog:
         if addr >= 0xF0 and addr not in (0xF9, 0xF4):
             raise DscopeError('UNSAFE_OPERATION', 'compiler produced MCU register write %02X' % addr)
@@ -53,13 +66,17 @@ def compile(hal, zero_info, include_cross=True):
         'digital_rate': g.digital_rate if g.n_digital else None,
         'analog_depth': g.analog_depth if g.n_analog else 0,
         'digital_depth': g.digital_depth if g.n_digital else 0,
-        'pkt_bytes': g.transfer_size, 'transfer_count': g.transfer_count, 'need_bytes': g.acqu_bytes,
+        'pkt_bytes': g.transfer_size, 'transfer_count': g.transfer_count,
+        'need_bytes': g.acqu_bytes + (0 if cfg.repeat_mode else packet.TAIL_BYTES), 'acqu_bytes': g.acqu_bytes,
+        'small_pkt': bool(g.small_pkt),
         'hw_mode': g.hw_mode, 'pretrig': g.pretrig, 'sample_index': cfg.trig_sample_index,
         'trig_domain': 'analog' if cfg.trig_channel_type == 1 and g.n_analog else 'digital',
         'afold_log2': g.afold_log2, 'dfold_log2': g.dfold_log2, 'send_samples': g.send_samples,
         'blk_bytes': g.blk_bytes, 'repeat': bool(cfg.repeat_mode), 'roll': bool(g.roll),
         '_regs': {a: v for a, v in prog},
     }
+    dom = geom['trig_domain']
+    geom['record_s'] = (geom[dom + '_depth'] / geom[dom + '_rate']) if geom[dom + '_rate'] else 0.0
     return prog, geom
 
 

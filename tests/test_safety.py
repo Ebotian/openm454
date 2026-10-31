@@ -24,8 +24,33 @@ def t():
 
 
 def test_only_allowed_requests(t):
-    t.write(0x01, 1); t.read(0xF0); t.nvm_read(0x0000, 64)
+    t.write(0x10, 1); t.read(0xF0); t.nvm_read(0x0000, 64)
     assert {op[2] for op in t.h.ops if op[0] in 'WR'} <= {0xB0, 0xB1, 0xB2}
+
+
+def test_ctrl_run_bit_only_from_the_engine(t):
+    with pytest.raises(DscopeError) as ei:
+        t.write(0x01, 1)
+    assert ei.value.code == 'UNSAFE_OPERATION' and not t.h.ops and not t.running
+    t.write(0x01, 0)                               # stopping is always allowed when idle
+    with t.guarded('run'):
+        t.write(0x01, 1)
+    assert t.running                               # set as the start write is sent
+    with pytest.raises(DscopeError):               # plain access while running is refused
+        t.write(0x02, 8)
+
+
+def test_debug_regs_write_refuses_run_registers():
+    from types import SimpleNamespace
+    from dscope.scope import Scope
+    s = Scope()
+    s.dev = SimpleNamespace(t=Transport())
+    s.dev.t.h = FakeHandle()
+    for addr in ('0x00', '0x01', '0x02', '0x03'):
+        with pytest.raises(DscopeError) as ei:
+            s.debug(SimpleNamespace(debug_cmd='regs-write', addr=addr, value='0'))
+        assert ei.value.code == 'UNSAFE_OPERATION'
+    assert not s.dev.t.h.ops
 
 
 @pytest.mark.parametrize('addr,val', [(0xFE, 0xFFFE), (0xFC, 1), (0xFD, 1), (0xFB, 0x1000), (0xF0, 1), (0x0E, 1), (0x0F, 1), (0xF4, 1)])

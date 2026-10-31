@@ -32,11 +32,12 @@ VID, PID = 0x2A0E, 0x0080
 REQ_WRITE, REQ_READ_SETUP, REQ_READ = 0xB0, 0xB1, 0xB2
 _ALLOWED_REQUESTS = (REQ_WRITE, REQ_READ_SETUP, REQ_READ)
 EP_OUT, EP_CTRL_IN, EP_DATA_IN = 0x02, 0x84, 0x86
-READ_DELAY = 0.010
+READ_DELAY = 0.015             # RegRead asks for 10 ms, which lasts 13-31 ms on the Windows timer tick (trace)
 TIMEOUT_MS = 1000
 HS_TIMEOUT_MS = 1000             # UsbBsp3x_RegBulkIn timeout
-HINT_REOPEN = ('run the command again (the next open resets the acquisition state); '
-               'if that fails with USB_ERROR, unplug and replug the scope')
+HINT_REOPEN = ('run the command once more: the next open first stops a run left behind (best effort). '
+               'If that fails too (USB_ERROR or DEVICE_ERROR), ask the owner to unplug and replug the scope')
+_ABANDONED = []                  # libusb objects that must never be closed or finalized (see Transport.close)
 
 
 class Transport:
@@ -50,8 +51,11 @@ class Transport:
         self._wrote_anything = False
         self.lock = threading.RLock()
         self.log = None                  # optional callable(str) for a wire log
-        self.running = False             # acquisition started and its stop handshake not yet done
+        self.running = False             # CTRL=1 sent and the stop handshake not yet done
         self.failed = None               # reason once the device failed (no further I/O until reopened)
+        self.stale = False               # EP 0x86 reads that never came back: libusb close would hang
+        self.stale_transfers = []        # those transfers (their finalizers are detached when abandoned)
+        self.t_last_write = 0.0          # time of the last register write (run spacing)
         self._in_hs = False              # inside an EP 0x84 handshake
 
     # ---------------------------------------------------------------- open / close
@@ -89,16 +93,42 @@ class Transport:
         return self
 
     def close(self):
-        if self.h is not None:
-            with contextlib.suppress(Exception):
-                self.h.releaseInterface(0)
-            with contextlib.suppress(Exception):
-                self.h.close()
-            self.h = None
-        if self.ctx is not None:
-            with contextlib.suppress(Exception):
-                self.ctx.close()
-            self.ctx = None
+        """Release the interface and the libusb handle. If transfers are still in flight (stale) or another thread
+        holds the lock (a control transfer in progress), the libusb objects are abandoned instead: libusb1's close
+        would wait for those transfers forever. The OS releases the handle when the process exits."""
+        if self.h is None and self.ctx is None:
+            return
+        if self.stale or not self.lock.acquire(timeout=2.0):
+            self._abandon()
+            return
+        try:
+            if self.h is not None:
+                with contextlib.suppress(Exception):
+                    self.h.releaseInterface(0)
+                with contextlib.suppress(Exception):
+                    self.h.close()
+                self.h = None
+            if self.ctx is not None:
+                with contextlib.suppress(Exception):
+                    self.ctx.close()
+                self.ctx = None
+        finally:
+            self.lock.release()
+
+    def _abandon(self):
+        """Keep the libusb objects alive and detach python-libusb1's weakref finalizers (handle, context and stale
+        transfers), which would otherwise run at interpreter exit and loop forever on transfers that never
+        complete. The OS releases the device when the process ends."""
+        objs = [(self.h, 'close'), (self.ctx, '_USBContext__close')]
+        objs += [(tr, '_USBTransfer__close') for tr in self.stale_transfers]
+        for obj, attr in objs:
+            fin = getattr(obj, attr, None) if obj is not None else None
+            detach = getattr(fin, 'detach', None)
+            if detach is not None:
+                with contextlib.suppress(Exception):
+                    detach()
+        _ABANDONED.append((self.h, self.ctx, list(self.stale_transfers)))
+        self.h = self.ctx = None
 
     # ---------------------------------------------------------------- raw control
     def _ctrl_out(self, req, data):
@@ -123,6 +153,9 @@ class Transport:
             raise DscopeError('UNSAFE_OPERATION', 'register write out of range %r=%r' % (addr, value))
         if addr in (regs.SEC_CTRL, regs.SEC_DATA) and 'security' not in self._ctx_guard:
             raise DscopeError('UNSAFE_OPERATION', 'security registers only inside the handshake')
+        if addr == regs.CTRL and value != 0 and 'run' not in self._ctx_guard:
+            raise DscopeError('UNSAFE_OPERATION', 'only the acquisition engine may set CTRL (it must queue the '
+                              'EP 0x86 reads first and stop the run with a handshake)')
         if addr < 0x80:
             return
         if addr == regs.FLUSH_DATA:
@@ -157,7 +190,10 @@ class Transport:
             if addr == regs.EEPROM_ADDR:
                 self._fb_written = True
             self._wrote_anything = True
+            if addr == regs.CTRL and value & 1:
+                self.running = True          # from the moment it is sent the device may be running
             self._ctrl_out(REQ_WRITE, [addr, value & 0xFF, (value >> 8) & 0xFF])
+            self.t_last_write = time.time()
             if self.log:
                 self.log('W %02X(%s)=%s' % (addr, regs.name(addr), '****' if addr == regs.SEC_DATA else '%04X' % value))
 
@@ -218,35 +254,35 @@ class Transport:
             raise DscopeError('USB_ERROR', 'EP 0x84 read failed: %s' % e)
         return d[0] if d else None
 
+    def _hs_step(self, want, record):
+        try:
+            v = self.ep84_byte(HS_TIMEOUT_MS)
+        except DscopeError:
+            raise
+        except BaseException:
+            self.fail('EP 0x84 handshake interrupted')
+            raise
+        if record is not None:
+            record.append(v)
+        if self.log:
+            self.log('EP84 -> %s' % ('timeout' if v is None else '%02X' % v))
+        if v != want:
+            why = 'EP 0x84 handshake: expected %02X, got %s' % (want, 'timeout' if v is None else '%02X' % v)
+            self.fail(why)
+            raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN)
+
     @contextlib.contextmanager
     def handshake(self, record=None):
-        """Register access while an acquisition runs (DSWave RegQueueThread / QueryPercent):
-        EP 0x84 byte (expect 01), EP 0x84 byte (expect 02), the control transfers, EP 0x84 byte (expect 03).
-        A timeout or an unexpected byte before the body means the body is NOT sent; any failure puts the session
-        in the error state and raises DEVICE_ERROR. `record` (list) receives every byte read (None = timeout)."""
+        """One register read while an acquisition runs (DSWave QueryPercent 0x34af00): EP 0x84 byte (expect 01),
+        EP 0x84 byte (expect 02), the read, EP 0x84 byte (expect 03). A timeout or unexpected byte before the body
+        means the body is NOT sent. If the read fails the closing byte is not read either (QueryPercent returns at
+        once). Any failure puts the session in the error state and raises DEVICE_ERROR. `record` (list) receives
+        every byte read (None = timeout)."""
         with self.lock:
             if self._in_hs:
                 raise DscopeError('UNSAFE_OPERATION', 'nested EP 0x84 handshake')
-
-            def step(want):
-                v = self.ep84_byte(HS_TIMEOUT_MS)
-                if record is not None:
-                    record.append(v)
-                if self.log:
-                    self.log('EP84 -> %s' % ('timeout' if v is None else '%02X' % v))
-                if v != want:
-                    why = 'EP 0x84 handshake: expected %02X, got %s' % (want, 'timeout' if v is None else '%02X' % v)
-                    self.fail(why)
-                    raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN)
-
-            try:
-                step(1)
-                step(2)
-            except DscopeError:
-                raise
-            except BaseException:
-                self.fail('EP 0x84 handshake interrupted')
-                raise
+            self._hs_step(1, record)
+            self._hs_step(2, record)
             self._in_hs = True
             try:
                 yield
@@ -258,10 +294,35 @@ class Transport:
                     raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN) from e
                 raise
             self._in_hs = False
+            self._hs_step(3, record)
+
+    def handshake_writes(self, writes, record=None):
+        """Register writes while an acquisition runs (DSWave RegQueueThread 0x34b8c0): 01, 02, every write, 03.
+        As in DSWave a failed write does not abandon the handshake: the remaining writes are still sent and the
+        closing byte is still read; the session is failed afterwards (VendorWrite sets the device error)."""
+        with self.lock:
+            if self._in_hs:
+                raise DscopeError('UNSAFE_OPERATION', 'nested EP 0x84 handshake')
+            self._hs_step(1, record)
+            self._hs_step(2, record)
+            first_err = None
+            self._in_hs = True
             try:
-                step(3)
+                for addr, val in writes:
+                    try:
+                        self.write(addr, val)
+                    except DscopeError as e:
+                        first_err = first_err or e
+                        if self.log:
+                            self.log('queued write %02X=%04X failed: %s' % (addr, val, e.message))
+            finally:
+                self._in_hs = False
+            try:
+                self._hs_step(3, record)
             except DscopeError:
-                raise
-            except BaseException:
-                self.fail('EP 0x84 handshake interrupted')
-                raise
+                if first_err is None:
+                    raise
+            if first_err is not None:
+                why = 'register write inside the EP 0x84 handshake failed: %s' % first_err.message
+                self.fail(why)
+                raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN) from first_err

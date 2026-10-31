@@ -2,6 +2,10 @@
   A0 <- AWG output;  A1 (1x probe), A2 (10x probe), A3 (1x probe) <- ~2.8 Vpp 1 kHz calibration square;
   D0, D2, D5, D7 <- the same square;  D1, D3, D4, D6 floating.
 Each check returns {id, desc, pass, measured, expected, gating}. Run: python -m dscope selftest [--quick]
+
+Order = risk: device info, then one forced (untriggered) single-channel capture, then triggered captures. The first
+device-level failure (DEVICE_ERROR, USB_ERROR, TIMEOUT_DATA) ends the run: every later check is reported as skipped
+instead of talking to a device that is in an unknown state.
 """
 import time
 
@@ -11,6 +15,7 @@ from .scope import Settings
 ANALOG_SQ = ('A1', 'A2', 'A3')
 DIG_ON = ('D0', 'D2', 'D5', 'D7')
 DIG_OFF = ('D1', 'D3', 'D4', 'D6')
+FATAL = ('DEVICE_ERROR', 'USB_ERROR', 'TIMEOUT_DATA', 'TIMEOUT_WATCHDOG', 'PROTOCOL_ERROR', 'UNSUPPORTED')
 
 
 def _st(**kw):
@@ -43,13 +48,20 @@ def _t_of_first_edge_near_zero(cap, ch, rising=True):
 def run(scope, quick=False, awg=True):
     items = []
     t_all = time.time()
+    fatal = {}
 
     def check(cid, desc, fn, gating=True):
+        if fatal:
+            items.append({'id': cid, 'desc': desc, 'pass': False, 'gating': gating, 'skipped': True,
+                          'measured': {'skipped': 'device failed in %s' % fatal['id']}, 'expected': None, 'ms': 0})
+            return
         t0 = time.time()
         try:
             ok, measured, expected = fn()
         except DscopeError as e:
             ok, measured, expected = False, {'error': e.to_dict()}, None
+            if e.code in FATAL:
+                fatal.update(id=cid, error=e.to_dict())
         except Exception as e:
             ok, measured, expected = False, {'error': repr(e)}, None
         items.append({'id': cid, 'desc': desc, 'pass': bool(ok), 'gating': gating, 'measured': measured,
@@ -57,9 +69,21 @@ def run(scope, quick=False, awg=True):
 
     def v01():
         i = scope.info()['device']
-        ok = i['fpga_done'] and i['security_pass'] and int(i['fw_version'], 16) >= 0x3110
-        return ok, {k: i[k] for k in ('fw_version', 'fpga_bin_version', 'panel_version', 'security_pass', 'usb_speed')}, 'fw>=0x3110, security pass'
+        ok = i['fpga_done'] and i['security_pass'] and int(i['fw_version'], 16) >= 0x3110 and i['usb_speed'] == 'super'
+        return ok, {k: i[k] for k in ('fw_version', 'fpga_bin_version', 'panel_version', 'security_pass', 'usb_speed')}, \
+            'fw>=0x3110, security pass, USB 3 SuperSpeed link'
     check('V01', 'device info', v01)
+
+    def v00():
+        cap = scope.capture(_st(analog=['A1'], digital=[], trig_source=None, trig_mode='force', duration=2e-3,
+                                samples=20_000))
+        m = cap.measure('A1')
+        acq = cap.meta['acq']
+        ok = acq.get('stop') in ('normal', None) and acq.get('complete', True) and m['vpp_v'] is not None and m['vpp_v'] > 1.0
+        return ok, {'vpp_v': m['vpp_v'], 'stop': acq.get('stop'), 'handshakes': acq.get('handshakes'),
+                    'complete': acq.get('complete'), 'samples': acq.get('samples')}, \
+            'forced single-channel capture stops normally and shows the ~2.8 Vpp square on A1'
+    check('V00', 'smoke: forced capture on A1 (lowest-risk run)', v00)
 
     ref = {}
 
@@ -178,5 +202,9 @@ def run(scope, quick=False, awg=True):
     check('V11', 'repeated captures / latency', v11)
 
     passed = sum(1 for i in items if i['pass'])
-    return {'ok': all(i['pass'] for i in items if i['gating']), 'cmd': 'selftest', 'passed': passed,
-            'failed': len(items) - passed, 'seconds': round(time.time() - t_all, 1), 'items': items}
+    res = {'ok': all(i['pass'] for i in items if i['gating']), 'cmd': 'selftest', 'passed': passed,
+           'failed': len(items) - passed, 'seconds': round(time.time() - t_all, 1), 'items': items}
+    if fatal:
+        res['stopped_at'] = fatal['id']
+        res['device_error'] = fatal['error']
+    return res

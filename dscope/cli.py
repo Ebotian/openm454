@@ -15,11 +15,64 @@ from .errors import DscopeError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_OUT = os.path.join(ROOT, 'captures')
+STOP_REQUEST = os.path.join(ROOT, 'state', 'stop.request')
+STREAM_MIN_RATE = 100e3          # default stream rate floor (samples/s per channel) when --samples/--rate are not given
+_HEARTBEAT = [None]              # watch: called after every capture to re-arm the watchdog
+_IDLE = [None]                   # called when the device is idle again (host post-processing follows)
+_OUT = {'lock': threading.Lock(), 'owner': None}     # one output owner: main thread, or the watchdog once it fires
 
 
-def _emit(obj):
-    sys.stdout.write(json.dumps(obj, ensure_ascii=True, separators=(',', ':')) + '\n')
-    sys.stdout.flush()
+def stream_settings(args):
+    """Settings for 'stream': untriggered, 10 s by default, at least STREAM_MIN_RATE unless the user chose."""
+    from .scope import settings_from_args
+    st = settings_from_args(args)
+    if not (args.duration or args.timebase):
+        st.duration = 10.0
+    if not (args.samples or args.rate):
+        st.samples = max(st.samples, int(st.duration * STREAM_MIN_RATE))
+    st.trig_source, st.trig_mode = None, 'force'
+    return st
+
+
+def stop_requested():
+    """True once 'dscope stop' was run (watch/stream delete stale requests when they start)."""
+    return os.path.exists(STOP_REQUEST)
+
+
+def _clear_stop_request():
+    try:
+        os.remove(STOP_REQUEST)
+    except OSError:
+        pass
+
+
+def _throttled(fn, period=0.1):
+    last = [0.0, False]
+
+    def f():
+        now = time.time()
+        if now - last[0] >= period:
+            last[0], last[1] = now, fn()
+        return last[1]
+    return f
+
+
+def _emit(obj, owner=None):
+    """Print one JSON document/line. After the watchdog has taken over the output, the main thread prints nothing."""
+    with _OUT['lock']:
+        if _OUT['owner'] is not None and _OUT['owner'] != owner:
+            return
+        sys.stdout.write(json.dumps(obj, ensure_ascii=True, separators=(',', ':')) + '\n')
+        sys.stdout.flush()
+
+
+def _idle(n_values=0):
+    if _IDLE[0]:
+        _IDLE[0](n_values)
+
+
+def _n_values(cap):
+    return sum(len(v) for v in cap.analog.values()) + sum(len(v) for v in cap.digital.values())
 
 
 def _fwd(p):
@@ -67,7 +120,8 @@ def _capture_args(p):
 
 def build_parser():
     ap = argparse.ArgumentParser(prog='dscope', description='DSCope M454 oscilloscope / logic analyzer / AWG for agents')
-    ap.add_argument('--max-wall', default='60s', help='watchdog: abort and release the device after this time')
+    ap.add_argument('--max-wall', default=None,
+                    help='watchdog: stop and release the device after this time (default: computed from the command)')
     ap.add_argument('--verbose', action='store_true', help='wire log on stderr')
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('info', help='device, firmware, calibration, limits')
@@ -102,6 +156,8 @@ def build_parser():
     st = sub.add_parser('selftest', help='verify driver + bench fixture')
     st.add_argument('--quick', action='store_true'); st.add_argument('--no-awg', action='store_true')
     sub.add_parser('release', help='make sure the device is idle and released')
+    sub.add_parser('stop', help='ask a running watch/stream (e.g. started in the background) to stop cleanly; '
+                                'never kill those processes')
     d = sub.add_parser('debug', help='maintenance only (not for experiments)')
     dsub = d.add_subparsers(dest='debug_cmd', required=True)
     r = dsub.add_parser('regs-read'); r.add_argument('addr'); r.add_argument('len', nargs='?', default='2'); r.add_argument('ext', nargs='?', default='0')
@@ -120,6 +176,7 @@ def cmd_capture(args, scope, emit=True):
     if args.awg:
         scope.awg_from_spec(args.awg)
     cap = scope.capture(st)
+    _idle(_n_values(cap))
     win = window(args.window)
     res = {'ok': True, 'cmd': 'capture', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
     if args.measure != 'none':
@@ -182,6 +239,8 @@ def cmd_watch(args, scope):
             if isinstance(flat.get(k), (int, float)) and not isinstance(flat.get(k), bool):
                 hist.setdefault(k, []).append(flat[k])
         _emit(line)
+        if _HEARTBEAT[0]:
+            _HEARTBEAT[0]()
         last = cap; i += 1
         if args.stop_when:
             env = {ch: m for grp in ('analog', 'digital') for ch, m in s[grp].items()}
@@ -190,6 +249,8 @@ def cmd_watch(args, scope):
                     stopped_by = 'stop_when'; break
             except Exception:
                 pass
+        if stop_requested():
+            stopped_by = 'stop_request'; _clear_stop_request(); break
         if args.count is not None and i >= args.count:
             stopped_by = 'count'; break
         if total is not None and time.time() - t0 >= total:
@@ -211,15 +272,22 @@ def cmd_watch(args, scope):
 
 
 def cmd_stream(args, scope):
-    from .scope import settings_from_args
     from .units import si
     from . import plot as plotmod
-    st = settings_from_args(args)
-    if not (args.duration or args.timebase):
-        st.duration = 10.0
+    st = stream_settings(args)
     if args.awg:
         scope.awg_from_spec(args.awg)
-    cap = scope.stream(st, every=si(args.every, 's', '--every'), emit=_emit)
+    try:
+        cap = scope.stream(st, every=si(args.every, 's', '--every'), emit=_emit, stop_flag=_throttled(stop_requested))
+    except DscopeError as e:
+        if e.code != 'STOPPED':
+            raise
+        _clear_stop_request()
+        _emit({'ok': True, 'cmd': 'stream', 'stopped_by': 'stop_request', 'samples': 0, 'note': e.message})
+        return
+    _idle(_n_values(cap))
+    if stop_requested():
+        _clear_stop_request()
     res = {'ok': True, 'cmd': 'stream', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
     res.update(cap.summary())
     files = {}
@@ -231,6 +299,7 @@ def cmd_stream(args, scope):
             files['png'] = _fwd(plotmod.plot(cap, stem + '.png', title=_title(cap)))
     res['files'] = files
     res['hints'] = cap.meta.get('hints', [])
+    res['warnings'] = cap.meta.get('warnings', [])
     _emit(res)
 
 
@@ -273,6 +342,36 @@ def cmd_offline(args):
         _emit(res)
 
 
+def _budget(args):
+    """-> (seconds, per_iteration or None). The watchdog only has to catch hangs, so this is a generous upper
+    bound; for watch it bounds each capture (re-armed after every capture) instead of the whole loop.
+    Compiling the settings offline here also rejects out-of-range settings before the device is opened."""
+    from .scope import Scope, settings_from_args
+    from .units import si
+    if args.cmd == 'selftest':
+        return 1200.0, None
+    if args.cmd not in ('capture', 'watch', 'stream'):
+        return 60.0, None
+    st = stream_settings(args) if args.cmd == 'stream' else settings_from_args(args)
+    geom = Scope().plan(st)['geometry']
+    rec = geom['record_s']
+    collect = max(10.0, 1.5 * rec + 2.0)
+    if args.cmd == 'stream':
+        return 5.0 + 2.5 * rec + 5.0 + 60.0, None
+    wait = st.timeout if st.trig_mode == 'normal' else (st.auto_after if st.trig_mode == 'auto' else 2.0)
+    per = wait + rec + 0.5 + collect + 5.0
+    if st.trig_mode == 'auto' and st.trig_source:      # forced fallback run: validate it too
+        import copy
+        fb = copy.copy(st)
+        fb.trig_mode = 'force'
+        rec2 = Scope().plan(fb)['geometry']['record_s']
+        per += 2.5 + rec2 + max(10.0, 1.5 * rec2 + 2.0)
+    if args.cmd == 'capture':
+        return max(60.0, per + 30.0), None
+    per_iter = per + si(args.every, 's', '--every') + 30.0
+    return per_iter, per_iter
+
+
 def main(argv=None):
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -288,35 +387,63 @@ def main(argv=None):
             _emit({'ok': False, 'cmd': args.cmd, 'error': e.to_dict()}); return e.exit_code
         except Exception as e:
             _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERNAL', 'message': repr(e)}}); return 1
+    if args.cmd == 'stop':
+        os.makedirs(os.path.dirname(STOP_REQUEST), exist_ok=True)
+        with open(STOP_REQUEST, 'w') as f:
+            f.write(str(time.time()))
+        _emit({'ok': True, 'cmd': 'stop', 'note': 'a running watch/stream stops after its current capture or block'})
+        return 0
     from .units import si
     from .scope import Scope
-    max_wall = si(args.max_wall, 's', '--max-wall')
-    if args.cmd == 'watch' and args.duration_total:
-        max_wall = max(max_wall, si(args.duration_total, 's', '--for') + 30)
-    if args.cmd in ('capture', 'watch', 'stream'):
-        dur = si(args.duration, 's', '--duration') if args.duration else (
-            10 * si(args.timebase, 's', '--timebase') if args.timebase else 0)
-        if args.cmd == 'stream' and not dur:
-            dur = 10.0
-        max_wall = max(max_wall, 2 * dur + 30)
-    scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
-    done = threading.Event()
-
-    def watchdog():
-        if not done.wait(max_wall):
-            sys.stdout.write(json.dumps({'ok': False, 'cmd': args.cmd, 'error': {
-                'code': 'TIMEOUT_WATCHDOG', 'message': 'command exceeded --max-wall %.0fs; device released' % max_wall}}) + '\n')
-            sys.stdout.flush()
-            try:
-                scope.emergency_stop()
-            finally:
-                os._exit(6)
-    threading.Thread(target=watchdog, daemon=True).start()
-    try:
+    try:                                     # everything here is offline: nothing has been sent to the scope yet
         if args.cmd == 'debug' and args.debug_cmd == 'plan':
             from .scope import settings_from_args
-            _emit({'ok': True, 'cmd': 'plan', **scope.plan(settings_from_args(args))})
+            _emit({'ok': True, 'cmd': 'plan', **Scope().plan(settings_from_args(args))})
             return 0
+        max_wall, per_iter = _budget(args)
+        if args.max_wall:                    # an explicit value extends the computed budget, never shortens it
+            given = si(args.max_wall, 's', '--max-wall')
+            max_wall = max(max_wall, given)
+            per_iter = max(per_iter, given) if per_iter else None
+    except DscopeError as e:
+        _emit({'ok': False, 'cmd': args.cmd, 'error': e.to_dict()})
+        return e.exit_code
+    except Exception as e:
+        _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERNAL', 'message': repr(e),
+                                                         'trace': traceback.format_exc().splitlines()[-6:]}})
+        return 1
+    if args.cmd in ('watch', 'stream'):
+        _clear_stop_request()                # a request left from an earlier run must not stop this one
+    scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
+    done = threading.Event()
+    deadline = [time.time() + max_wall]
+    if per_iter:
+        _HEARTBEAT[0] = lambda: deadline.__setitem__(0, time.time() + per_iter)
+    _IDLE[0] = lambda n: deadline.__setitem__(0, max(deadline[0], time.time() + 120.0 + 1e-6 * n))
+
+    def watchdog():
+        while True:
+            left = deadline[0] - time.time()
+            if left <= 0:
+                break
+            if done.wait(min(left, 1.0)):
+                return
+        with _OUT['lock']:
+            if done.is_set():
+                return
+            _OUT['owner'] = 'watchdog'
+        _emit({'ok': False, 'cmd': args.cmd, 'error': {
+            'code': 'TIMEOUT_WATCHDOG', 'message': 'command exceeded its time budget (%.0f s, --max-wall); capture '
+                                                   'stopped and device released' % max_wall}}, owner='watchdog')
+        helper = threading.Thread(target=scope.emergency_stop, daemon=True)
+        helper.start()
+        helper.join(10.0)            # never wait for a hung close: the OS releases the handle at exit
+        os._exit(6)
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    code = 0
+    stale = False
+    try:
         scope.open()
         try:
             if args.cmd == 'info':
@@ -330,29 +457,37 @@ def main(argv=None):
             elif args.cmd == 'awg':
                 cmd_awg(args, scope)
             elif args.cmd == 'release':
-                _emit({'ok': True, 'cmd': 'release', 'note': 'device opened, idled and released'})
+                _emit({'ok': True, 'cmd': 'release', 'note': 'device opened, any left-over run stopped, idled and released'})
             elif args.cmd == 'selftest':
                 from .selftest import run as selftest
                 res = selftest(scope, quick=args.quick, awg=not args.no_awg)
                 _emit(res)
-                return 0 if res.get('ok') else 1
+                code = 0 if res.get('ok') else 1
             elif args.cmd == 'debug':
                 _emit({'ok': True, 'cmd': 'debug', **scope.debug(args)})
         finally:
+            dev = scope.dev
+            stale = dev is not None and dev.t.stale
             scope.close()
-        return 0
     except DscopeError as e:
         _emit({'ok': False, 'cmd': args.cmd, 'error': e.to_dict()})
-        return e.exit_code
+        code = e.exit_code
     except KeyboardInterrupt:
-        _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERRUPTED', 'message': 'interrupted'}})
-        return 1
+        _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERRUPTED', 'message': 'interrupted (any capture '
+                                                                                         'was stopped first)'}})
+        code = 1
     except Exception as e:
         _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERNAL', 'message': repr(e),
                                                          'trace': traceback.format_exc().splitlines()[-6:]}})
-        return 1
+        code = 1
     finally:
-        done.set()
+        with _OUT['lock']:
+            done.set()
+            watchdog_owns = _OUT['owner'] == 'watchdog'
+        if stale and not watchdog_owns:
+            sys.stdout.flush()
+            os._exit(code)           # libusb finalizers would wait for the stale transfers forever
+    return code
 
 
 if __name__ == '__main__':

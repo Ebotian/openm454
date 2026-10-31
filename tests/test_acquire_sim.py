@@ -339,3 +339,298 @@ def test_device_close_sends_nothing_after_failure():
     d.t.close = lambda: None
     d.close()
     assert len(sim.log) == n
+
+
+# ---------------------------------------------------------------------------------------------- review fixes
+import _thread
+import signal
+
+
+def test_ctrl_c_while_waiting_for_trigger_stops_normally():
+    sim, eng = engine(trigger=False)
+    before = signal.getsignal(signal.SIGINT)
+    threading.Timer(0.25, _thread.interrupt_main).start()
+    with pytest.raises(KeyboardInterrupt):
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=10.0)
+    assert sim.violations == [] and not sim.running and not sim.failed
+    assert writes(sim)[-4:] == [(regs.CTRL, 0), (regs.ACTION, 8), (regs.CTRL, 0), (regs.ACTION, 4)]
+    assert not eng.t.failed and not eng.t.running
+    assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_ctrl_c_while_collecting_stops_normally():
+    sim, eng = engine()
+
+    def slow(buf):
+        time.sleep(0.003)
+    threading.Timer(0.2, _thread.interrupt_main).start()
+    with pytest.raises(KeyboardInterrupt):
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=10_000 * PKT, n_transfers=4, trigger_timeout=1.0, on_chunk=slow)
+    assert sim.violations == [] and not sim.starved and not sim.running
+    assert writes(sim)[-2:] == [(regs.CTRL, 0), (regs.ACTION, 4)]
+
+
+def test_error_after_record_complete_gets_handshake_stop_but_no_final_writes():
+    sim, eng = engine(zlp_at=3)            # transfers 3.. are zero-length, in the batch that completes the record
+    with pytest.raises(DscopeError) as ei:
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=4, trigger_timeout=1.0)
+    assert ei.value.code == 'DEVICE_ERROR' and 'zero-length' in ei.value.message
+    inside = [(e[1], e[2]) for e in sim.log if e[0] == 'W' and e[3]]
+    assert inside == [(regs.CTRL, 0), (regs.ACTION, 8)]         # DSWave: normal stop first ...
+    assert writes(sim)[-1] == (regs.ACTION, 8)                  # ... then the error: no ForceAcquire writes
+    assert not sim.running and sim.violations == [] and eng.t.failed
+    assert not any(tr.isSubmitted() for tr in eng._trs)
+
+
+class FailWriteHandle(FakeHandle):
+    def __init__(self, sim, fail):
+        super().__init__(sim)
+        self.fail = fail
+
+    def controlWrite(self, rt, req, v, i, data, timeout=0):
+        if req == REQ_WRITE and (data[0], data[1] | data[2] << 8) == self.fail and self.sim.hs == 2:
+            self.sim.log.append(('Wfail', data[0]))
+            raise usb1.USBErrorTimeout()
+        return super().controlWrite(rt, req, v, i, data, timeout)
+
+
+def test_failed_write_inside_stop_handshake_completes_the_handshake():
+    sim = Sim()
+    dev = FakeDevice(sim)
+    dev.t.h = FailWriteHandle(sim, (regs.CTRL, 0))
+    eng = Engine(dev)
+    with pytest.raises(DscopeError) as ei:
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=2 * PKT, n_transfers=2, trigger_timeout=1.0)
+    assert ei.value.code == 'DEVICE_ERROR'
+    tail = [e for e in sim.log if e[0] in ('W', 'Wfail', 'EP84')][-5:]
+    # 01, 02, failed W CTRL=0, W ACTION=8 still sent, 03 still read (RegQueueThread 0x34b8c0)
+    assert [e[0] for e in tail] == ['EP84', 'EP84', 'Wfail', 'W', 'EP84']
+    assert tail[3][1:3] == (regs.ACTION, 8)
+    assert not sim.running and sim.hs == 0 and eng.t.failed
+    assert writes(sim)[-1] == (regs.ACTION, 8)                  # no final writes after the failure
+
+
+class RaisingTransfer(FakeTransfer):
+    calls = 0
+
+    def getBuffer(self):
+        RaisingTransfer.calls += 1
+        if self._n != HEAD_BYTES and RaisingTransfer.calls == 2:
+            raise MemoryError('simulated')
+        return self._buf
+
+
+def test_exception_in_callback_is_an_error_stop_not_a_silent_loss():
+    sim = Sim()
+    dev = FakeDevice(sim)
+    RaisingTransfer.calls = 0
+    dev.t.h.getTransfer = lambda: RaisingTransfer(sim)
+    eng = Engine(dev)
+    with pytest.raises(DscopeError) as ei:
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=50 * PKT, n_transfers=4, trigger_timeout=1.0)
+    assert 'exception in the transfer callback' in ei.value.message
+    assert writes(sim)[-1] == (regs.CTRL, 1) and sim.violations == []
+    assert not any(tr.isSubmitted() for tr in eng._trs)
+
+
+def test_first_run_waits_100ms_after_the_last_register_write():
+    sim, eng = engine()
+    eng._t_end = 0.0
+    eng.t.write(0x10, 5)                    # e.g. the open's idle pair or an AWG write
+    t0 = time.time()
+    eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=1.0)
+    assert sim.t_run - t0 >= 0.100 + 0.050  # gap + submit-to-start
+
+
+def test_shutdown_is_sticky():
+    sim, eng = engine()
+    eng.shutdown()
+    with pytest.raises(DscopeError) as ei:
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT)
+    assert ei.value.code == 'TIMEOUT_WATCHDOG' and sim.log == []
+
+
+def test_close_abandons_handle_with_stale_transfers():
+    closed = []
+
+    class H:
+        def releaseInterface(self, i):
+            closed.append('release')
+
+        def close(self):
+            closed.append('close')
+    t = Transport()
+    t.h, t.ctx, t.stale = H(), None, True
+    t.close()
+    assert closed == [] and t.h is None
+
+
+class OpenHandle:
+    """Answers the open sequence: firmware/panel/bin versions, HW_STATUS, PASS already set, EEPROM reads."""
+    def __init__(self, done=True):
+        self.ops, self._read, self.done = [], None, done
+
+    def controlWrite(self, rt, req, v, i, data, timeout=0):
+        if req == REQ_WRITE:
+            self.ops.append(('W', data[0], data[1] | data[2] << 8, time.time()))
+        else:
+            self._read = data[0]
+            self.ops.append(('R', data[0], None, time.time()))
+        return len(data)
+
+    def controlRead(self, rt, req, v, i, n, timeout=0):
+        val = {0xF0: 0x3110, 0xF2: 0x3100, 0xF1: 0x3100, 0xFF: 0x0082 if self.done else 0x0002,
+               regs.CTRL: 0x0004}.get(self._read, 0x1111)
+        return (val.to_bytes(2, 'little') * 64)[:n]
+
+
+def test_open_stops_a_left_over_run_before_anything_else():
+    from dscope.device import Device
+    d = Device()
+    h = OpenHandle(done=True)
+
+    def fake_open():
+        d.t.h, d.t.speed = h, 4
+        return d.t
+    d.t.open = fake_open
+    d.open()
+    ops = h.ops
+    i_ff = next(i for i, o in enumerate(ops) if o[0] == 'R' and o[1] == 0xFF)
+    assert [o[:3] for o in ops[:i_ff + 1] if o[0] == 'W'] == []          # only reads before the status
+    assert [o[:3] for o in ops[i_ff + 1:i_ff + 3]] == [('W', regs.CTRL, 0), ('W', regs.ACTION, 4)]
+    assert ops[i_ff + 3][3] - ops[i_ff + 2][3] >= 0.095                 # 100 ms after the reset
+    assert [o[:3] for o in ops[-2:]] == [('W', regs.CTRL, 0), ('W', regs.ACTION, 8)]
+    n = len(ops)
+    d.close()
+    assert len(h.ops) == n                                               # close sends nothing
+
+
+def test_lock_excludes_a_second_holder(tmp_path, monkeypatch):
+    from dscope import lock
+    p = tmp_path / 'dscope.lock'
+    p.write_text('1234567890123')                  # longer than any pid: the old code locked the wrong byte
+    monkeypatch.setattr(lock, 'LOCK_PATH', str(p))
+    monkeypatch.setattr(lock, 'dswave_pids', lambda: [])
+    a = lock.DeviceLock().acquire()
+    with pytest.raises(DscopeError) as ei:
+        lock.DeviceLock().acquire()
+    assert ei.value.code == 'BUSY'
+    a.release()
+    b = lock.DeviceLock().acquire()
+    b.release()
+
+
+# ---------------------------------------------------------------------------------------------- second review
+def test_caller_error_in_on_chunk_gets_a_normal_stop_and_is_reraised():
+    sim, eng = engine()
+
+    def emit_like(buf):
+        if len(buf) == PKT:
+            raise DscopeError('UNSAFE_OPERATION', 'e.g. an AWG write from a stream callback')
+    with pytest.raises(DscopeError) as ei:
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=4 * PKT, n_transfers=4, trigger_timeout=1.0, on_chunk=emit_like)
+    assert ei.value.code == 'UNSAFE_OPERATION'                   # not turned into a device failure
+    assert writes(sim)[-4:] == [(regs.CTRL, 0), (regs.ACTION, 8), (regs.CTRL, 0), (regs.ACTION, 4)]
+    assert not sim.running and not eng.t.failed and sim.violations == []
+
+
+def test_caller_error_in_stop_flag_gets_a_normal_stop():
+    sim, eng = engine(trigger=False)
+
+    def flag():
+        raise DscopeError('DECODE_ERROR', 'caller bug')
+    with pytest.raises(DscopeError) as ei:
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=1.0, stop_flag=flag)
+    assert ei.value.code == 'DECODE_ERROR' and not sim.running and not eng.t.failed
+
+
+def test_stop_flag_marks_a_user_stop():
+    sim, eng = engine(trigger=False)
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=5.0, stop_flag=lambda: True)
+    assert cap.stopped and cap.aborted and cap.stop == 'normal'
+
+
+def test_bad_head_with_abort_pending_gets_the_handshake_stop():
+    class BadHeadSim(Sim):
+        def pump(self):
+            if self.streaming and not self.head_sent and eng_ref[0]._abort.is_set() is False:
+                eng_ref[0].abort()               # abort is pending when the malformed head arrives
+            super().pump()
+    sim = BadHeadSim()
+    dev = FakeDevice(sim)
+    eng = Engine(dev)
+    eng_ref = [eng]
+    orig = FakeTransfer._finish
+
+    def bad(self, status, n):
+        if n == HEAD_BYTES:
+            self._buf[:4] = b'\x00\x00\x00\x00'
+        orig(self, status, n)
+    FakeTransfer._finish = bad
+    try:
+        with pytest.raises(DscopeError) as ei:
+            eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=1.0)
+    finally:
+        FakeTransfer._finish = orig
+    assert 'bad head' in ei.value.message
+    inside = [(e[1], e[2]) for e in sim.log if e[0] == 'W' and e[3]]
+    assert inside == [(regs.CTRL, 0), (regs.ACTION, 8)] and not sim.running
+
+
+def test_second_run_on_a_busy_engine_is_refused():
+    sim, eng = engine()
+    seen = []
+
+    def reenter(buf):
+        if not seen:
+            with pytest.raises(DscopeError) as ei:
+                eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT)
+            seen.append(ei.value.code)
+    eng.run(SETUP, pkt_bytes=PKT, need_bytes=2 * PKT, n_transfers=2, trigger_timeout=1.0, on_chunk=reenter)
+    assert seen == ['BUSY'] and sim.violations == [] and not sim.running
+
+
+def test_abandon_detaches_libusb_finalizers():
+    detached = []
+
+    class Fin:
+        def __init__(self, name):
+            self.name = name
+
+        def detach(self):
+            detached.append(self.name)
+    t = Transport()
+    t.h = type('H', (), {})()
+    t.h.close = Fin('handle')
+    t.ctx = type('C', (), {})()
+    t.ctx._USBContext__close = Fin('context')
+    tr = type('T', (), {})()
+    tr._USBTransfer__close = Fin('transfer')
+    t.stale, t.stale_transfers = True, [tr]
+    t.close()
+    assert sorted(detached) == ['context', 'handle', 'transfer'] and t.h is None and t.ctx is None
+
+
+def test_cold_open_configures_the_fpga_first(monkeypatch):
+    from dscope import device as devmod
+    import dscope.firmware
+    monkeypatch.setattr(dscope.firmware, 'bitstream', lambda: b'\x00' * 1000)
+    d = devmod.Device()
+    h = OpenHandle(done=False)
+
+    def bulk_write(ep, data, timeout=0):
+        h.ops.append(('B', ep, len(data), time.time()))
+        h.done = True
+        return len(data)
+    h.bulkWrite = bulk_write
+
+    def fake_open():
+        d.t.h, d.t.speed = h, 4
+        return d.t
+    d.t.open = fake_open
+    d.open()
+    w = [o[:3] for o in h.ops if o[0] in 'WB']
+    assert w[0] == ('W', regs.PROG_B, 0xFFFE)                     # FPGA configuration is the first write
+    assert ('W', regs.ACTION, 4) not in w                         # no reset pair on a cold device
+    assert [o[:3] for o in h.ops[-2:]] == [('W', regs.CTRL, 0), ('W', regs.ACTION, 8)]
+    assert d.info['fpga_configured_now']

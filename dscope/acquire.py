@@ -3,20 +3,30 @@
 Mirrors DSWave 1.2.1 (UsbDevice_TransferThread 0x33f950, UsbBsp3x Setup/Start/StopAcquire and the UsbTransfer
 callbacks; evidence and RVAs in re/notes/acquisition_protocol.md):
 
-  1. >= 100 ms after the previous run: setup program (W 0x01=0, 1 ms, MSO writes ..., W 0x00 MODE, W 0xF9=0)
+  1. >= 100 ms after the previous run and after the last register write: setup program
+     (W 0x01=0, settle, MSO writes ..., W 0x00 MODE, W 0xF9=0)
   2. submit EP 0x86 reads: one 4096-byte head transfer + N data transfers (no timeout); wait 50 ms
-  3. start: W SYNC=sync, W ACTION=0, W CTRL=1; 1 ms.  From here until the stop handshake is done every register
-     access sits inside an EP 0x84 handshake (Transport.running / Transport.handshake)
-  4. collect: data transfers are resubmitted from their callback for the WHOLE run, also after the frame is
+  3. start: W SYNC=sync, W ACTION=0, W CTRL=1; settle.  From the moment W CTRL=1 is sent until the stop handshake is
+     done every register access sits inside an EP 0x84 handshake (Transport.running / handshake / handshake_writes)
+  4. collect: data transfers are resubmitted from their callback for the WHOLE run, also after the record is
      complete, because the device keeps streaming zero padding until it is stopped.  While the head has not
      arrived the progress register is polled like DSWave (handshake + R 0x02, every ~15 ms from 100 ms on)
   5. normal stop: handshake{W CTRL=0, W ACTION=8}; stop resubmitting; cancel every transfer and wait until all
      are back; W CTRL=0, 1 ms, W ACTION=4
      error stop (failed handshake or control transfer, bad head, transfer error, zero-length transfer,
      resubmit failure): nothing more is sent to the device; cancel, wait, mark the session failed and raise
-     DEVICE_ERROR.  The next open resets the acquisition state (device.open: W CTRL=0, 1 ms, W ACTION=4).
+     DEVICE_ERROR.  As in DSWave's transfer thread, a completed record or an abort is handled before an error that
+     arrived with it: such an error gets the normal stop handshake and drain, but not the final writes.
+
+Ctrl+C (SIGINT) during a run only requests the normal stop; KeyboardInterrupt is raised after the device has
+been stopped. Exceptions inside the libusb callback become an error stop instead of being lost. Exceptions from the
+caller's on_chunk / stop_flag are not device failures: the run is stopped normally and the exception re-raised.
+
+DSWave's "1 ms" sleeps last ~15 ms on the Windows timer tick (recorded 14-31 ms), so the settle times below use
+15 ms to stay inside the recorded envelope.
 """
 import collections
+import signal
 import struct
 import threading
 import time
@@ -30,12 +40,15 @@ from .transport import HINT_REOPEN
 HEAD_BYTES = 4096
 HEAD_MAGIC = b'\x55\x55\x55\x55'
 EP_DATA = 0x86
-GAP_BETWEEN_RUNS = 0.100       # FUN_14033f270: 100 ms after a stop before the next setup
-SETUP_SETTLE = 0.001           # SetupAcquire: 1 ms after W CTRL=0
+GAP_BETWEEN_RUNS = 0.100       # FUN_14033f270: 100 ms before every run
+SETUP_SETTLE = 0.015           # SetupAcquire: "1 ms" after W CTRL=0 (recorded 14-31 ms)
 SUBMIT_TO_START = 0.050        # TransferThread: 50 ms between submitting and the start writes
+START_SETTLE = 0.015           # StartAcquire: "1 ms" after W CTRL=1 (first EP 0x84 read >= 14.7 ms later)
+FINAL_GAP = 0.001              # ForceAcquire: W CTRL=0, 1 ms, W ACTION=4 (recorded 1.6-29 ms)
 POLL_AFTER = 0.100             # progress polling starts 100 ms after the start writes
 POLL_EVERY = 0.015
 DRAIN_TIMEOUT = 2.0            # cancelled transfers must be back within this time
+MAX_EVENTS_PER_PASS = 32       # events handled between two checks of abort / stop_flag / deadlines
 
 _STATUS = {usb1.TRANSFER_COMPLETED: 'COMPLETED', usb1.TRANSFER_ERROR: 'ERROR', usb1.TRANSFER_TIMED_OUT: 'TIMED_OUT',
            usb1.TRANSFER_CANCELLED: 'CANCELLED', usb1.TRANSFER_STALL: 'STALL', usb1.TRANSFER_NO_DEVICE: 'NO_DEVICE',
@@ -51,11 +64,12 @@ class RawCapture:
         self.t_head = None
         self.t_done = None
         self.timed_out = False
-        self.aborted = False
+        self.aborted = False      # ended early: abort() / shutdown() / SIGINT / stop_flag
+        self.stopped = False      # ... by the caller's stop_flag (a user stop request)
         self.ep84 = []            # every EP 0x84 handshake byte, in order (None = timeout)
         self.handshakes = []      # (ms after start, 'poll'|'stop', [bytes])
         self.progress = []        # raw R 0x02 values from the progress polls
-        self.stop = None          # 'normal' | 'error'
+        self.stop = None          # 'normal' | 'error' | None (never started)
         self.error = None
 
     @property
@@ -74,15 +88,24 @@ class Engine:
         self.t = device.t
         self.sync = 0
         self.active = False
-        self._t_end = 0.0
+        self._t_end = time.time()
         self._abort = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
+        self._state = threading.Lock()
+        self._shutdown = False
         self._stale = []          # transfers that never came back after a cancel (kept alive, never freed)
+        self._sigint = False
 
     # ------------------------------------------------------------------ cross-thread control
     def abort(self):
         """Ask a running capture to stop (thread-safe). The run loop performs the normal stop handshake."""
+        self._abort.set()
+
+    def shutdown(self):
+        """Sticky abort (watchdog): stop the current run and refuse every later one."""
+        with self._state:
+            self._shutdown = True
         self._abort.set()
 
     def wait_idle(self, timeout):
@@ -97,31 +120,39 @@ class Engine:
         return tr
 
     def _cb(self, tr):
-        """Runs inside libusb event handling (handleEventsTimeout and the synchronous EP 0x84 reads). Data
-        transfers are resubmitted here, like UsbTransfer_DataCallback, so EP 0x86 stays drained while the main
-        loop is busy (handshakes, on_chunk)."""
-        if self._stopping:
-            return
-        st = tr.getStatus()
-        n = tr.getActualLength()
-        if tr is self._head_tr:
-            if st == usb1.TRANSFER_COMPLETED:
-                self._events.append(('head', bytes(tr.getBuffer()[:n])))
-            else:
-                self._events.append(('error', 'head transfer ended with status %s' % _STATUS.get(st, st)))
-            return
-        if st != usb1.TRANSFER_COMPLETED:
-            self._events.append(('error', 'data transfer ended with status %s' % _STATUS.get(st, st)))
-            return
-        if n == 0:
-            self._events.append(('error', 'zero-length data transfer'))
-            return
-        if not self._full:
-            self._events.append(('data', bytes(tr.getBuffer()[:n])))
+        """Runs inside libusb event handling (handleEventsTimeout and every synchronous transfer, e.g. the EP 0x84
+        handshake reads). Data transfers are resubmitted here, like UsbTransfer_DataCallback, so the reads stay
+        queued during handshakes. An exception must not escape: ctypes would swallow it and the transfer would be
+        lost silently, so it becomes an error event."""
         try:
-            tr.submit()
-        except usb1.USBError as e:
-            self._events.append(('error', 'data transfer resubmit failed: %s' % e))
+            if self._stopping or self.t.failed:
+                return                  # DataCallback: stopping or device in error -> free, no resubmit
+            st = tr.getStatus()
+            n = tr.getActualLength()
+            if tr is self._head_tr:
+                if st != usb1.TRANSFER_COMPLETED:
+                    self._events.append(('error', 'head transfer ended with status %s' % _STATUS.get(st, st)))
+                    return
+                buf = bytes(memoryview(tr.getBuffer())[:n])
+                if len(buf) != HEAD_BYTES or buf[:4] != HEAD_MAGIC:
+                    self._events.append(('error', 'bad head packet (%d bytes, check id %s)' % (len(buf), buf[:4].hex())))
+                else:
+                    self._events.append(('head', buf))
+                return
+            if st != usb1.TRANSFER_COMPLETED:
+                self._events.append(('error', 'data transfer ended with status %s' % _STATUS.get(st, st)))
+                return
+            if n == 0:
+                self._events.append(('error', 'zero-length data transfer'))
+                return
+            if not self._full:
+                self._events.append(('data', bytes(memoryview(tr.getBuffer())[:n])))
+            try:
+                tr.submit()
+            except usb1.USBError as e:
+                self._events.append(('error', 'data transfer resubmit failed: %s' % e))
+        except BaseException as e:      # noqa: BLE001 - see docstring
+            self._events.append(('error', 'exception in the transfer callback: %r' % (e,)))
 
     def _cancel_and_wait(self):
         for tr in self._trs:
@@ -133,7 +164,10 @@ class Engine:
         end = time.time() + DRAIN_TIMEOUT
         while any(tr.isSubmitted() for tr in self._trs):
             if time.time() > end:
-                self._stale.extend(tr for tr in self._trs if tr.isSubmitted())
+                stale = [tr for tr in self._trs if tr.isSubmitted()]
+                self._stale.extend(stale)
+                self.t.stale = True
+                self.t.stale_transfers.extend(stale)
                 return False
             self.t.ctx.handleEventsTimeout(0.02)
         self._events.clear()
@@ -154,21 +188,44 @@ class Engine:
         Returns a RawCapture; cap.head is None when nothing arrived before trigger_timeout. Raises DEVICE_ERROR
         after an error stop (the session is then unusable until the device is reopened)."""
         t = self.t
-        if t.failed:
-            raise DscopeError('DEVICE_ERROR', 'device failed earlier in this session (%s)' % t.failed, HINT_REOPEN)
-        gap = self._t_end + GAP_BETWEEN_RUNS - time.time()
-        if gap > 0:
-            time.sleep(gap)
-        self._abort.clear()
-        self._idle.clear()
-        self.active = True
+        with self._state:
+            if self._shutdown:
+                raise DscopeError('TIMEOUT_WATCHDOG', 'the session is shutting down (watchdog)')
+            if self.active:
+                raise DscopeError('BUSY', 'a capture is already running on this engine')
+            self._abort.clear()
+            self._idle.clear()
+            self.active = True
+        self._sigint = False
+        restore = None
         try:
-            return self._run(setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
-                             repeat_frames, on_chunk, stop_flag, poll)
+            if threading.current_thread() is threading.main_thread():
+                def on_sigint(signum, frame):
+                    self._sigint = True
+                    self._abort.set()
+                try:
+                    restore = (signal.signal(signal.SIGINT, on_sigint),)
+                except (ValueError, OSError):
+                    restore = None
+            if t.failed:
+                raise DscopeError('DEVICE_ERROR', 'device failed earlier in this session (%s)' % t.failed, HINT_REOPEN)
+            gap = max(self._t_end, t.t_last_write) + GAP_BETWEEN_RUNS - time.time()
+            if gap > 0:
+                time.sleep(gap)
+            cap = self._run(setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
+                            repeat_frames, on_chunk, stop_flag, poll)
         finally:
             self._t_end = time.time()
             self.active = False
             self._idle.set()
+            if restore is not None:              # last: a SIGINT after this may raise right here
+                try:
+                    signal.signal(signal.SIGINT, restore[0] if restore[0] is not None else signal.default_int_handler)
+                except (ValueError, OSError):
+                    pass
+        if self._sigint:
+            raise KeyboardInterrupt
+        return cap
 
     def _run(self, setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
              repeat_frames, on_chunk, stop_flag, poll):
@@ -177,51 +234,67 @@ class Engine:
         self._events = collections.deque()
         self._stopping = False
         self._full = False
+        self._late_error = None
+        self._user_exc = None               # exception from on_chunk / stop_flag (caller code)
         self._trs = []
         self._head_tr = None
 
+        # the device is idle here: setup writes are direct control transfers
         for i, (addr, val) in enumerate(setup_writes):
             t.write(addr, val)
             if i == 0 and addr == regs.CTRL:
                 time.sleep(SETUP_SETTLE)
+        if self._abort.is_set():
+            cap.aborted = True              # stopped before the start: nothing to stop
+            return cap
         try:
             self._head_tr = self._submit(HEAD_BYTES)
             for _ in range(n_transfers):
                 self._submit(pkt_bytes)
         except usb1.USBError as e:
-            self._stopping = True          # nothing was started: just take the reads back
+            self._stopping = True           # nothing was started: just take the reads back
             self._cancel_and_wait()
             raise DscopeError('USB_ERROR', 'cannot queue EP 0x86 reads: %s' % e, HINT_REOPEN)
         time.sleep(SUBMIT_TO_START)
-        try:
-            t.write(regs.SYNC, self.sync)
-            t.write(regs.ACTION, 0x0000)
-            t.write(regs.CTRL, 0x0001)
-        except DscopeError as e:
-            why = 'start write failed: %s' % e.message
-            self._stop_error(cap, why)
-            raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN) from e
-        t.running = True
-        time.sleep(0.001)
-        cap.t_start = time.time()
 
+        error = None
         try:
-            error = self._collect(cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk,
-                                  stop_flag, poll)
-        except DscopeError as e:           # a failed progress-poll handshake (the session is already failed)
-            error = e.message
-        except BaseException:              # KeyboardInterrupt, a bug in on_chunk: stop cleanly, then re-raise
-            self._stop_normal(cap)
-            cap.t_done = time.time()
-            raise
-        if error is None:
-            error = self._stop_normal(cap)
-        else:
-            self._stop_error(cap, error)
+            try:
+                with t.guarded('run'):
+                    t.write(regs.SYNC, self.sync)
+                    t.write(regs.ACTION, 0x0000)
+                    t.write(regs.CTRL, 0x0001)      # Transport.running is set as this is sent
+                time.sleep(START_SETTLE)
+                cap.t_start = time.time()
+                error = self._collect(cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk,
+                                      stop_flag, poll)
+            except DscopeError as e:            # failed start write or progress-poll handshake
+                error = 'start write failed: %s' % e.message if not cap.t_start else e.message
+            except BaseException as exc:        # a bug in the engine loop: stop like a user stop, then re-raise
+                err = self._finish(cap, None)
+                if err:
+                    raise DscopeError('DEVICE_ERROR', err, HINT_REOPEN) from exc
+                raise
+            error = self._finish(cap, error)
+        finally:
+            if not self._stopping:              # something escaped before the reads were taken back
+                t.fail(t.failed or 'interrupted while stopping')
+                self._stopping = True
+                t.running = False
+                self._cancel_and_wait()
         cap.t_done = time.time()
         if error:
-            raise DscopeError('DEVICE_ERROR', error, HINT_REOPEN)
+            raise DscopeError('DEVICE_ERROR', error, HINT_REOPEN) from self._user_exc
+        if self._user_exc is not None:          # caller code failed: the device was stopped normally first
+            raise self._user_exc
         return cap
+
+    def _finish(self, cap, error):
+        """Normal stop when possible, error stop otherwise. Returns the error that remains (None = clean)."""
+        if error is None and self.t.running and not self.t.failed:
+            return self._stop_normal(cap)
+        self._stop_error(cap, error or self.t.failed or 'run ended in an unknown state')
+        return cap.error
 
     def _collect(self, cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk, stop_flag,
                  poll):
@@ -235,14 +308,17 @@ class Engine:
         polling = poll and not repeat_frames
         while True:
             ctx.handleEventsTimeout(0.005)
-            while self._events:
-                ev = self._events.popleft()
-                kind, buf = ev
+            budget = MAX_EVENTS_PER_PASS        # bounded, so stop requests and deadlines are always checked
+            while self._events and budget > 0:
+                budget -= 1
+                kind, buf = self._events.popleft()
                 if kind == 'error':
+                    if self._full or self._abort.is_set():
+                        # TransferThread checks 'frame over' / abort before error: stop normally first
+                        self._late_error = self._late_error or buf
+                        continue
                     return buf
                 if kind == 'head':
-                    if len(buf) != HEAD_BYTES or buf[:4] != HEAD_MAGIC:
-                        return 'bad head packet (%d bytes, check id %s)' % (len(buf), buf[:4].hex())
                     cap.head = buf
                     cap.t_head = time.time()
                     deadline = cap.t_head + collect_timeout
@@ -253,14 +329,28 @@ class Engine:
                 else:
                     cap.data += buf
                 if on_chunk is not None:
-                    on_chunk(buf)
+                    try:
+                        on_chunk(buf)
+                    except BaseException as e:  # caller code: normal stop, re-raised by _run
+                        self._user_exc = e
+                        return None
                 if self._enough(cap, need_bytes, repeat_frames):
                     self._full = True
+                ctx.handleEventsTimeout(0)  # keep resubmitting while a backlog is processed
             if self._full:
                 return None
-            if self._abort.is_set() or (stop_flag is not None and stop_flag()):
+            if self._abort.is_set():
                 cap.aborted = True
                 return None
+            if stop_flag is not None:
+                try:
+                    stop = stop_flag()
+                except BaseException as e:      # caller code: normal stop, re-raised by _run
+                    self._user_exc = e
+                    return None
+                if stop:
+                    cap.aborted = cap.stopped = True
+                    return None
             now = time.time()
             if cap.head is None:
                 if now > deadline_head:
@@ -288,15 +378,12 @@ class Engine:
 
     # ------------------------------------------------------------------ stop
     def _stop_normal(self, cap):
-        """DSWave StopAcquire + Drain + ForceAcquire. Returns None, or the reason it had to fall back to the
-        error stop."""
+        """DSWave StopAcquire + Drain + ForceAcquire. Returns None, or the reason the run ended in the error state."""
         t = self.t
         rec = []
         t_rel = round((time.time() - cap.t_start) * 1000, 1) if cap.t_start else None
         try:
-            with t.handshake(rec):
-                t.write(regs.CTRL, 0x0000)
-                t.write(regs.ACTION, 0x0008)
+            t.handshake_writes([(regs.CTRL, 0x0000), (regs.ACTION, 0x0008)], rec)
         except DscopeError as e:
             cap.ep84 += rec
             cap.handshakes.append((t_rel, 'stop', rec))
@@ -304,6 +391,8 @@ class Engine:
             return cap.error
         cap.ep84 += rec
         cap.handshakes.append((t_rel, 'stop', rec))
+        if self._late_error is None:            # data-path errors that arrived during the handshake
+            self._late_error = next((b for k, b in self._events if k == 'error'), None)
         self._stopping = True
         t.running = False
         if not self._cancel_and_wait():
@@ -311,9 +400,13 @@ class Engine:
             t.fail(why)
             cap.stop, cap.error = 'error', why
             return why
+        if self._late_error:                    # DSWave: error stop after the normal one -> ForceAcquire refused
+            t.fail(self._late_error)
+            cap.stop, cap.error = 'error', self._late_error
+            return cap.error
         try:
             t.write(regs.CTRL, 0x0000)
-            time.sleep(0.001)
+            time.sleep(FINAL_GAP)
             t.write(regs.ACTION, 0x0004)
         except DscopeError as e:
             why = 'final stop write failed: %s' % e.message

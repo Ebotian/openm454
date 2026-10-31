@@ -33,6 +33,7 @@ class DeviceLock:
         import msvcrt
         os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
         self.fh = open(LOCK_PATH, 'a+')
+        self.fh.seek(0)              # 'a+' starts at the end of the file: always lock byte 0 (release unlocks byte 0)
         try:
             msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError:
@@ -45,7 +46,11 @@ class DeviceLock:
             self.release()
             raise DscopeError('BUSY', 'DSWave is running (pid %s) and owns the scope' % ','.join(map(str, pids)),
                               'close DSWave, then retry')
-        self.fh.seek(0); self.fh.truncate(); self.fh.write(str(os.getpid())); self.fh.flush()
+        try:
+            self.fh.seek(0); self.fh.truncate(); self.fh.write(str(os.getpid())); self.fh.flush()
+        except OSError:
+            self.release()
+            raise DscopeError('BUSY', 'another dscope process is using the scope', 'wait for it, then retry')
         return self
 
     def release(self):
