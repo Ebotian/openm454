@@ -634,3 +634,66 @@ def test_cold_open_configures_the_fpga_first(monkeypatch):
     assert ('W', regs.ACTION, 4) not in w                         # no reset pair on a cold device
     assert [o[:3] for o in h.ops[-2:]] == [('W', regs.CTRL, 0), ('W', regs.ACTION, 8)]
     assert d.info['fpga_configured_now']
+
+
+def test_register_access_after_a_stop_waits_like_dswave():
+    """DSWave sleeps 100 ms after every stop. On hardware, writes sent within ~10 ms of the stop that ends a run
+    without a trigger were acknowledged but dropped (an AWG program was lost)."""
+    sim, eng = engine(trigger=False)
+    eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=0.2)
+    t_stop = time.time()
+    eng.t.write(0x08, 3)                                # e.g. the first AWG write right after the capture
+    assert time.time() - t_stop >= 0.08
+    assert writes(sim)[-3:] == [(regs.CTRL, 0), (regs.ACTION, 4), (0x08, 3)]
+
+
+def _open_with(monkeypatch, done, **kw):
+    from dscope import device as devmod
+    import dscope.firmware
+    monkeypatch.setattr(dscope.firmware, 'bitstream', lambda: b'\x00' * 1000)
+    d = devmod.Device()
+    h = OpenHandle(done=done)
+
+    def bulk_write(ep, data, timeout=0):
+        h.ops.append(('B', ep, len(data), time.time()))
+        h.done = True
+        return len(data)
+    h.bulkWrite = bulk_write
+
+    def fake_open():
+        d.t.h, d.t.speed = h, 4
+        return d.t
+    d.t.open = fake_open
+    d.open(**kw)
+    return d, [o[:3] for o in h.ops if o[0] in 'WB']
+
+
+def test_recover_reloads_a_configured_fpga_as_the_first_write(monkeypatch):
+    d, w = _open_with(monkeypatch, done=True, reload_fpga=True)
+    assert w[:2] == [('W', regs.PROG_B, 0xFFFE), ('W', regs.PROG_B, 0x0001)]
+    assert ('B', 0x02, 1000) in w and ('W', regs.ACTION, 4) not in w
+    assert d.info['fpga_configured_now'] and d.info['fpga_was_done']
+
+
+def test_warm_open_never_touches_prog_b(monkeypatch):
+    d, w = _open_with(monkeypatch, done=True)
+    assert not any(o[1] in (regs.PROG_B, regs.BULK_LO, regs.BULK_HI) for o in w if o[0] == 'W')
+    assert not any(o[0] == 'B' for o in w) and not d.info['fpga_configured_now']
+
+
+def test_silent_mcu_gets_the_recover_then_replug_hint():
+    from dscope.device import Device
+    d = Device()
+
+    class Dead(OpenHandle):
+        def controlRead(self, *a, **k):
+            raise usb1.USBErrorTimeout()
+
+    def fake_open():
+        d.t.h, d.t.speed = Dead(), 4
+        return d.t
+    d.t.open = fake_open
+    d.t.close = lambda: None
+    with pytest.raises(DscopeError) as ei:
+        d.open()
+    assert ei.value.code == 'USB_ERROR' and 'recover' in ei.value.hint and 'replug' in ei.value.hint

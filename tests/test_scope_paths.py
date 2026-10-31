@@ -145,3 +145,14 @@ def test_explicit_max_wall_only_extends_the_budget():
     a = cli.build_parser().parse_args(['--max-wall', '5s', 'capture', '-c', 'A1'])
     computed, _ = cli._budget(a)
     assert computed >= 60.0                          # capture keeps a 60 s floor; main() uses max(given, computed)
+
+
+def test_window_is_kept_when_the_rate_snaps_down():
+    """1 analog channel runs at 4 x the table rates, so 100 MSa/s does not exist: 5 ms with 500k samples becomes
+    80 MSa/s and 400k samples (a 5 ms window), not 500k samples over 6.25 ms (seen on hardware 2026-10-31)."""
+    for an, samples, want_rate in ((['A1'], 500_000, 80e6), (['A1', 'A3'], 500_000, 100e6), (['A1'], 2_000_000, 400e6),
+                                   (['A0', 'A1', 'A2', 'A3'], 500_000, 100e6), (['A1'], 5_000, 800e3)):
+        st = st_a1(analog=an, samples=samples, duration=5e-3)
+        geom = scopemod.Scope().plan(st)['geometry']
+        assert geom['analog_rate'] == want_rate
+        assert abs(geom['record_s'] - 5e-3) / 5e-3 < 0.03, (an, samples, geom['record_s'])   # 64-sample blocks

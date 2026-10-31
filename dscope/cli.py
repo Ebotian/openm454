@@ -156,6 +156,8 @@ def build_parser():
     st = sub.add_parser('selftest', help='verify driver + bench fixture')
     st.add_argument('--quick', action='store_true'); st.add_argument('--no-awg', action='store_true')
     sub.add_parser('release', help='make sure the device is idle and released')
+    sub.add_parser('recover', help='reset and reload the FPGA (like a power-up) when the scope hangs; a scope '
+                                   'that does not answer register reads still needs a replug')
     sub.add_parser('stop', help='ask a running watch/stream (e.g. started in the background) to stop cleanly; '
                                 'never kill those processes')
     d = sub.add_parser('debug', help='maintenance only (not for experiments)')
@@ -444,7 +446,7 @@ def main(argv=None):
     code = 0
     stale = False
     try:
-        scope.open()
+        scope.open(reload_fpga=args.cmd == 'recover')
         try:
             if args.cmd == 'info':
                 _emit({'ok': True, 'cmd': 'info', **scope.info()})
@@ -458,6 +460,9 @@ def main(argv=None):
                 cmd_awg(args, scope)
             elif args.cmd == 'release':
                 _emit({'ok': True, 'cmd': 'release', 'note': 'device opened, any left-over run stopped, idled and released'})
+            elif args.cmd == 'recover':
+                _emit({'ok': True, 'cmd': 'recover', 'device': scope.info()['device'],
+                       'note': 'FPGA reset and reloaded; the signal generator is not reset by this (use awg off)'})
             elif args.cmd == 'selftest':
                 from .selftest import run as selftest
                 res = selftest(scope, quick=args.quick, awg=not args.no_awg)

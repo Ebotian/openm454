@@ -11,6 +11,7 @@ verified by loopback on A0:
   RSLOPE/FSLOPE (12/13) = floor(68.75 / duty), floor(68.75 / (1 - duty))
   WAVE (0): 0 sine, 1 triangle, 2 square, 3 noise;  MODE (1): 0 basic
   SWITCH (2) = 1 ... 0 brackets mode/wave/frequency updates; ENABLE (3): 2 = armed, 3 = output running
+Stopped (ENABLE 2), the output holds the LOW level; awg_off also writes LOW = 0 so "off" means 0 V.
 """
 import math
 
@@ -61,6 +62,9 @@ def program(wave='sine', freq=1000.0, high=3.0, low=0.0, duty=50.0, phase=0.0):
 
 START = [(A_SWITCH, 1), (A_ENABLE, 0x0003), (A_SWITCH, 0)]
 STOP = [(A_ENABLE, 0x0002)]
+#: after STOP the output holds the programmed LOW level (measured 2026-10-31); LOW = 0 parks it at 0 V. The next
+#: program() rewrites LOW.
+PARK = [(A_LOW, 0)]
 
 
 def apply(transport, writes):

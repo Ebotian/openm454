@@ -24,16 +24,28 @@ class Device:
         self.opened = False
 
     # ------------------------------------------------------------------ open
-    def open(self):
+    def open(self, reload_fpga=False):
         """UsbDevice_Open order, with UsbDevice_Reopen's ForceAcquire(0) moved to the earliest safe point: right
         after HW_STATUS shows a configured FPGA, the device may still be running a capture that an earlier session
         left behind (error stop, killed process), so it is stopped before anything else is sent. An unconfigured
-        FPGA cannot be running, and its configuration must stay the first write of the session."""
+        FPGA cannot be running, and its configuration must stay the first write of the session.
+
+        reload_fpga=True (`dscope recover`, approved by the owner 2026-10-31): reset and reconfigure the FPGA even
+        when it reports DONE, as the first write of the session: PROG_B low clears it exactly like a power-up, then
+        the verified bitstream is loaded. It cannot help when the MCU no longer answers register reads."""
         t0 = time.time()
         t = self.t.open()
         info = self.info
         info['usb_speed'] = {3: 'high', 4: 'super', 5: 'super+'}.get(t.speed, str(t.speed))
-        fw = t.read16(regs.FW_VERSION)
+        try:
+            fw = t.read16(regs.FW_VERSION)
+        except DscopeError as e:
+            if e.code != 'USB_ERROR':
+                raise
+            t.close()
+            raise DscopeError('USB_ERROR', 'the scope does not answer register reads (%s)' % e.message,
+                              'run "python -m dscope recover" once; if that fails the same way, ask the owner to '
+                              'unplug and replug the scope')
         panel = t.read16(regs.PANEL_VERSION)
         info['fw_version'], info['panel_version'] = '0x%04X' % fw, '0x%04X' % panel
         if fw < FW_MIN or panel < PANEL_MIN:
@@ -42,7 +54,11 @@ class Device:
                               'let the official DSWave update the device once; this driver never flashes firmware')
         status = t.read16(regs.HW_STATUS)
         info['fpga_configured_now'] = False
-        if status & 0x80:
+        if reload_fpga:
+            info['fpga_was_done'] = bool(status & 0x80)
+            self.fpga_config()
+            info['fpga_configured_now'] = True
+        elif status & 0x80:
             self.reset_acquisition()
         else:
             self.fpga_config()
@@ -65,7 +81,7 @@ class Device:
         return self
 
     def fpga_config(self):
-        """Configure the FPGA (only called when HW_STATUS reports not-done). Mirrors UsbBsp3x::FpgaConfig."""
+        """Configure the FPGA (HW_STATUS not-done, or `recover`). Mirrors UsbBsp3x::FpgaConfig."""
         from .firmware import bitstream
         raw = bitstream()
         t = self.t
@@ -125,6 +141,7 @@ class Device:
         self.t.write(regs.CTRL, 0x0000)
         time.sleep(0.001)
         self.t.write(regs.ACTION, 0x0004)
+        self.t.hold(0.1)
 
     def idle(self):
         """Stop state as left by DSWave after open: CTRL=0, ACTION=8 (flow pause)."""

@@ -309,15 +309,19 @@ def hori_depth(cfg: MsoConfig) -> int:
     return cfg.storage_depth // STORAGE_DIV
 
 
-def _snap_rate(cfg: MsoConfig) -> int:
-    """FUN_140350f50: largest table rate <= (1e12 / m_hori_time) * m_hori_depth."""
-    t = (1000000000000.0 / float(cfg.sample_time_ps)) * float(hori_depth(cfg))
-    t = int(t)
+def snap_table_rate(t_hz: float) -> int:
+    """Largest SAMPLERATES entry <= t_hz (0 if none)."""
+    t = int(t_hz)
     best = 0
     for r in SAMPLERATES:
         if best < r <= t:
             best = r
     return best
+
+
+def _snap_rate(cfg: MsoConfig) -> int:
+    """FUN_140350f50: largest table rate <= (1e12 / m_hori_time) * m_hori_depth."""
+    return snap_table_rate((1000000000000.0 / float(cfg.sample_time_ps)) * float(hori_depth(cfg)))
 
 
 def rates_and_depths(cfg: MsoConfig) -> Tuple[int, int, int, int]:

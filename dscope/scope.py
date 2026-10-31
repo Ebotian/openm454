@@ -4,7 +4,10 @@ User-level conventions (also used by the CLI):
   * vdiv / offset / trigger level are in volts at the probe tip; probe factor (1x/10x) divides them down
     to the BNC input, where the hardware range is 1 mV/div .. 5 V/div (8 vertical divisions, 235 ADC codes).
   * offset = the voltage displayed at the vertical centre (DSWave 'Offset' code = position of 0 V).
-  * the window is `duration` long, `samples` per channel; the device picks the next lower 1-2-5 rate.
+  * the window is `duration` long with at most `samples` per channel (or `rate` x `duration`). Available rates are
+    fold x {1, 2, 5} x 10^n with fold 4 / 2 / 1 for 1 / 2 / 3-4 analog channels (digital: 1-2 / 3-4 / 5-8), up to
+    400 MSa/s; the highest one that fits is used and the sample count follows it (e.g. 1 channel, 5 ms, 500k ->
+    80 MSa/s, 400k samples).
   * auto trigger = wait `auto_after` for a real trigger, then capture untriggered (like DSView's auto).
 """
 import json
@@ -15,6 +18,7 @@ from dataclasses import dataclass, field, asdict
 
 import numpy as np
 
+from . import mso
 from .errors import DscopeError
 from .capture import Capture, CODES_PER_DIV, CODE_MIN, CODE_MAX
 
@@ -164,6 +168,11 @@ def hal_config(st):
         warnings.append('samples capped at %d' % MAX_SAMPLES)
         samples = MAX_SAMPLES
     samples = max(samples, 1024)
+    # DSWave's auto rate is fold x the largest 1-2-5 table rate <= samples / fold / duration. When that is below
+    # samples / duration, keep the requested window and record fewer samples (else the window grows up to 2.5x).
+    rate = lead_fold * mso.snap_table_rate(samples / lead_fold / st.duration)
+    if rate:
+        samples = max(min(samples, int(round(rate * st.duration))), 1024)
     storage = int(4 * math.ceil(samples / lead_fold / 64) * 64)
     trig = {'enable': int(bool(st.trig_source) and st.trig_mode != 'force'),
             'mode': 1, 'ch_type': 0, 'ch_index': 0, 'type': EDGES.get(st.trig_edge, 0),
@@ -195,14 +204,15 @@ class Scope:
         self._close_lock = threading.Lock()
 
     # ------------------------------------------------------------ lifecycle
-    def open(self):
+    def open(self, reload_fpga=False):
+        """reload_fpga: reset and reconfigure the FPGA first (`dscope recover`, see Device.open)."""
         from .lock import DeviceLock
         from .device import Device
         from .acquire import Engine
         self.lock = DeviceLock().acquire()
         dev = Device(log=self.log)
         try:
-            dev.open()
+            dev.open(reload_fpga=reload_fpga)
         except BaseException:
             dev.close()
             self.lock.release()
@@ -299,8 +309,8 @@ class Scope:
 
     def awg_off(self):
         from . import awg
-        awg.apply(self.dev.t, awg.STOP)
-        st = dict(self.awg_status() or {}, enabled=False)
+        awg.apply(self.dev.t, awg.STOP + awg.PARK)
+        st = dict(self.awg_status() or {}, enabled=False, output_v=0.0)
         self._save_awg(st)
         return st
 

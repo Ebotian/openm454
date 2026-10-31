@@ -161,12 +161,45 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
     return res
 
 
+def _deglitch(b):
+    """Collapse comparator chatter on slow edges at high sample rates (calibration square at 400 MSa/s: 3-5
+    transitions within 20 ns of each rising edge) into one transition. A group of consecutive runs shorter than 0.2 %
+    of the signal's time-weighted median run is merged only when the levels before and after it differ (an edge);
+    with the same level on both sides it is a pulse or spike and is kept. Fast clocks have no short runs by this
+    measure. Returns (bits, transitions removed)."""
+    idx = np.flatnonzero(np.diff(b)) + 1
+    if idx.size < 2:
+        return b, 0
+    starts = np.concatenate(([0], idx))
+    lens = np.diff(np.concatenate((starts, [b.size])))
+    srt = np.sort(lens)
+    cum = np.cumsum(srt)
+    g = 0.002 * srt[np.searchsorted(cum, cum[-1] / 2)]
+    short = lens < g
+    short[0] = short[-1] = False
+    if not short.any():
+        return b, 0
+    k = np.arange(lens.size)
+    prev = np.maximum.accumulate(np.where(~short, k, 0))
+    nxt = np.minimum.accumulate(np.where(~short, k, lens.size - 1)[::-1])[::-1]
+    v = b[starts]
+    merge = short & (v[prev] != v[nxt])
+    if not merge.any():
+        return b, 0
+    vals = np.where(merge, v[prev], v)
+    out = np.repeat(vals, lens)
+    return out, int(idx.size - np.count_nonzero(np.diff(out)))
+
+
 def digital(bits, rate, edges_n=0):
     b = np.asarray(bits, dtype=np.int8)
     n = b.size
     res = {'samples': int(n)}
     if n == 0:
         return res
+    b, glitches = _deglitch(b)
+    if glitches:
+        res['glitch_edges'] = glitches          # chatter transitions ignored by the measurements below
     d = np.diff(b)
     rises = np.nonzero(d > 0)[0] + 1
     falls = np.nonzero(d < 0)[0] + 1

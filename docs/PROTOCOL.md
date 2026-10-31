@@ -73,6 +73,9 @@ PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. F
    running): W 0xFE=0xFFFE, ~10 ms, W 0xFE=1, poll R 0xFF bit1 (<= 11x),
    W 0xFC = len & 0xFFFF, W 0xFD = len >> 16, EP2 OUT the raw bitstream (466,408 bytes) in one transfer,
    poll R 0xFF bit7 (<= 11 x 50 ms). DSWave takes ~110 ms for this.
+   Recovery (`dscope recover`, approved by the owner 2026-10-31): the same configuration with DONE = 1, still as the
+   first write of the session. The PROG_B pulse clears the FPGA as at power-up. Verified on hardware: open
+   0.86 s, security passes again, selftest passes after it. The AWG output is **not** reset by it.
 4. Wait 100 ms, R 0xF1 (>= 0x3100).
 5. Security handshake (§5).
 6. R 0xFA ext 0..3 (probe ratio), read calibration: 8 x (W 0xFB = 0x40·i, R 0xFB 64 bytes) = EEPROM 0x000-0x1FF.
@@ -109,7 +112,9 @@ against the recorded runs). Key facts:
   VERT_DEN0 = digital enable mask, VERT_DFOLD likewise with digital fold x4 / x2 / x1 for 1-2 / 3-4 / 5-8 channels.
 * **Rates and depth**: S = STORAGEdepth. Base rate = min(100 MHz, S/4 / window) snapped down to 1-2-5
   (1 kHz .. 100 MHz); analog rate = base x afold (max 400 MSa/s), analog depth = S/4 x afold;
-  digital likewise with dfold. HORI_ADIV/DDIV = rate dividers (100 MHz / base).
+  digital likewise with dfold. HORI_ADIV/DDIV = rate dividers (100 MHz / base). So one analog channel offers
+  4 x {1, 2, 5} x 10^n (80 and 200 MSa/s, never 100). With a fixed S a snapped-down rate lengthens the window
+  (up to 2.5x); the driver instead lowers S to rate x window so the requested window is kept (`scope.hal_config`).
 * **Vertical**: ANAn_VERT = calibrated gain code for the V/div (bit15 = attenuation relay, set from 200 mV/div up;
   the only relay click across the range), ANAn_VOFF = offset code (ADC code of 0 V, 128 = centre),
   ANAn_VPWM = offset DAC value from calibration and offset. 235 ADC codes = 8 divisions.
@@ -176,7 +181,11 @@ Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implemen
    likely cause of the 2026-10-31 wedge.
 7. Normal stop (frame complete, timeout, or user stop): a handshake around W 0x01 = 0, W 0x02 = 8. Then stop
    resubmitting, cancel every outstanding read (head included) and wait until all are back. Then
-   W 0x01 = 0, 1 ms, W 0x02 = 4.
+   W 0x01 = 0, 1 ms, W 0x02 = 4. Then nothing for 100 ms (FUN_14033f270 sleeps 100 ms before anything else).
+   **(hardware, 2026-10-31)** After the stop that ends a run without a trigger, register writes sent within
+   ~10 ms are acknowledged on USB but dropped by the device (an AWG program right after a normal-mode timeout was
+   lost in 3 of 3 rounds; with 10-50 ms of delay it applied every time; after triggered or forced runs it always
+   applied). The driver holds every register access for 100 ms after the stop (`Transport.hold`).
 8. Error stop (failed handshake step, failed control transfer, bad head, transfer status other than
    COMPLETED/CANCELLED, zero-length data transfer, failed resubmit): send **nothing** more, not even EP 0x84 reads.
    Cancel the reads, wait for them, and leave the device until it is reopened. DSWave's close sends nothing either.
@@ -187,7 +196,12 @@ Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implemen
    (non-roll) head arrives only after the whole record has been acquired, so trigger waits must include the record
    time.
 9. If the controller stops answering 0xB2 reads, nothing on the host recovers it: pipe resets and device resets
-   don't help, and DSWave has no reset path. Recovery is a power cycle (replug).
+   don't help, and DSWave has no reset path. Recovery is a power cycle (replug). `dscope recover` (§4) needs
+   working register reads, so it can only help when the FPGA side is stuck but the controller still answers; it
+   has not yet been tried on a hung device.
+10. **(hardware, 2026-10-31)** With the rules above, the driver ran the configuration that wedged the old engine
+   (A1 + D0 at 400 MSa/s each, normal trigger, including runs without a trigger) without a problem, as well as
+   12/12 selftest checks, 11 hardware tests, watch, stream and stop requests.
 
 ## 8. Data stream
 
@@ -208,7 +222,7 @@ Indirect: W 0x08 = awg register, W 0x07 = value. `dscope/awg.py` matches all 13 
 | 0 WAVE | 0 sine, 1 triangle, 2 square, 3 noise |
 | 1 MODE | 0 basic (others: modulation, sweep, burst; not implemented) |
 | 2 SWITCH | 1 ... 0 brackets mode / wave / frequency updates |
-| 3 ENABLE | 2 = armed, 3 = output running (start = SWITCH 1, ENABLE 3, SWITCH 0; stop = ENABLE 2) |
+| 3 ENABLE | 2 = armed, 3 = output running (start = SWITCH 1, ENABLE 3, SWITCH 0; stop = ENABLE 2). Stopped, the output holds the LOW level; the driver's `awg off` also writes LOW = 0 so the output sits at 0 V (hardware, 2026-10-31) |
 | 4/5 FCW | floor(f_Hz x 40) |
 | 6/7 PHASE | degrees / 360 x 4e9 |
 | 8/9 HIGH/LOW | volts x 156 |

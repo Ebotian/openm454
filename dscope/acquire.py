@@ -408,6 +408,7 @@ class Engine:
             t.write(regs.CTRL, 0x0000)
             time.sleep(FINAL_GAP)
             t.write(regs.ACTION, 0x0004)
+            t.hold(GAP_BETWEEN_RUNS)            # writes right after this can be dropped (run without trigger)
         except DscopeError as e:
             why = 'final stop write failed: %s' % e.message
             t.fail(why)

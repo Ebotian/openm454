@@ -107,7 +107,7 @@ def run(scope, quick=False, awg=True):
                                     offset={'A0': 0, 'A1': off, 'A2': 0, 'A3': 0}))
             tops['%gV/div' % vd] = cap.measure('A1')['vtop_v']
         r = ref.get('top', 2.8)
-        return all(_near(v, r, rel=0.06) for v in tops.values()), tops, 'vtop within 6% of %.3g V at every V/div' % r
+        return all(_near(v, r, rel=0.06) for v in tops.values()), tops, 'vtop within 6%% of %.3g V at every V/div' % r
     check('V03', 'V/div consistency (A1 at 0.5/1/2 V/div)', v03)
 
     def v04():
@@ -116,7 +116,7 @@ def run(scope, quick=False, awg=True):
         if not quick:
             cases += [('A1@1M', ['A1'], [], 1e6), ('A1@10M', ['A1'], [], 10e6)]
         for name, an, dg, rate in cases:
-            st = _st(analog=an, digital=dg, rate=rate, duration=2e-3 if rate >= 100e6 else 5e-3)
+            st = _st(analog=an, digital=dg, rate=rate)          # 5 ms = 5 periods: >= 2 rising edges at any phase
             cap = scope.capture(st)
             out[name] = {'rate': cap.meta['acq']['analog_rate_hz'], 'freq_hz': cap.measure('A1')['freq_hz']}
         f = ref.get('freq', 1000)
@@ -188,9 +188,9 @@ def run(scope, quick=False, awg=True):
             ok = ok and _near(m['freq_hz'], 5e3, rel=0.002) and _near(m['duty_pct'], 25, abs_=2)
             scope.awg_off()
             cap = scope.capture(_st(analog=['A0'], digital=[], trig_source=None, trig_mode='force'))
-            m = cap.measure('A0'); res['off'] = {'vpp_v': m.get('vpp_v')}
-            ok = ok and m['vpp_v'] < 0.15
-            return ok, res, 'sine 10 kHz 2 Vpp mean 1 V; square 5 kHz 25 %; off = flat'
+            m = cap.measure('A0'); res['off'] = {'vpp_v': m.get('vpp_v'), 'vmean_v': m.get('vmean_v')}
+            ok = ok and m['vpp_v'] < 0.15 and abs(m['vmean_v']) < 0.15
+            return ok, res, 'sine 10 kHz 2 Vpp mean 1 V; square 5 kHz 25 %; off = flat at 0 V'
         check('V10', 'AWG loopback on A0', v10)
 
     def v11():

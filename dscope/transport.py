@@ -56,6 +56,7 @@ class Transport:
         self.stale = False               # EP 0x86 reads that never came back: libusb close would hang
         self.stale_transfers = []        # those transfers (their finalizers are detached when abandoned)
         self.t_last_write = 0.0          # time of the last register write (run spacing)
+        self.quiet_until = 0.0           # no register access before this time (set after a stop, see hold())
         self._in_hs = False              # inside an EP 0x84 handshake
 
     # ---------------------------------------------------------------- open / close
@@ -183,7 +184,19 @@ class Transport:
             if self.log:
                 self.log('DEVICE ERROR: %s' % reason)
 
+    def hold(self, seconds):
+        """Keep the register interface quiet for `seconds` (DSWave sleeps 100 ms after every stop before anything
+        else, FUN_14033f270). Measured 2026-10-31: writes sent within ~10 ms of the stop that ends a run without a
+        trigger are acknowledged on USB but silently dropped by the device."""
+        self.quiet_until = max(self.quiet_until, time.time() + seconds)
+
+    def _wait_quiet(self):
+        wait = self.quiet_until - time.time()
+        if wait > 0 and not self._in_hs:
+            time.sleep(wait)
+
     def write(self, addr, value):
+        self._wait_quiet()
         with self.lock:
             self._check_state('register write 0x%02X' % addr)
             self._check_write(addr, value)
@@ -200,6 +213,7 @@ class Transport:
     def read(self, addr, n=2, ext=0):
         if not 1 <= n < 128:
             raise DscopeError('INVALID_ARG', 'register read length must be 1..127')
+        self._wait_quiet()
         with self.lock:
             self._check_state('register read 0x%02X' % addr)
             self._ctrl_out(REQ_READ_SETUP, [addr, n, ext])
