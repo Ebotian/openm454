@@ -169,12 +169,25 @@ def hal_config(st):
         warnings.append('samples capped at %d' % MAX_SAMPLES)
         samples = MAX_SAMPLES
     samples = max(samples, 1024)
+    duration = st.duration
     # DSWave's auto rate is fold x the largest 1-2-5 table rate <= samples / fold / duration. When that is below
     # samples / duration, keep the requested window and record fewer samples (else the window grows up to 2.5x).
-    rate = lead_fold * mso.snap_table_rate(samples / lead_fold / st.duration)
+    # The tolerance keeps float results like 99,999,999.99 Hz from dropping a whole step.
+    want = (st.rate if st.rate else samples / duration) / lead_fold
+    rate = lead_fold * mso.snap_table_rate(want * (1 + 1e-9))
     if rate:
-        samples = max(min(samples, int(round(rate * st.duration))), 1024)
+        if st.rate and rate * duration < 1024:      # explicit rate: keep it, the window grows to 1024 samples
+            duration = 1024.0 / rate
+            warnings.append('window lengthened to %.3g s (1024 samples minimum at %.3g Sa/s)' % (duration, rate))
+        samples = max(min(samples, int(round(rate * duration))), 1024)
     storage = int(4 * math.ceil(samples / lead_fold / 64) * 64)
+    time_ps = int(round(duration * 1e12))
+    # DSWave truncates (1e12 / time) * (storage / 4) before snapping (mso._snap_rate): add a block when float
+    # rounding would still land just below the intended rate
+    for _ in range(4):
+        if not rate or mso.snap_table_rate(1e12 / float(time_ps) * float(storage // 4)) * lead_fold >= rate:
+            break
+        storage += 4 * 64
     trig = {'enable': int(bool(st.trig_source) and st.trig_mode != 'force'),
             'mode': 1, 'ch_type': 0, 'ch_index': 0, 'type': EDGES.get(st.trig_edge, 0),
             'pulse_ps': int(round(st.trig_pulse * 1e12)), 'margin': int(min(max(st.sensitivity, 0), 15)),
@@ -188,7 +201,7 @@ def hal_config(st):
         trig['ch_type'], trig['ch_index'] = 0, int(st.digital[0][1:])
     hal = {'analog': ana, 'digital': [int('D%d' % i in st.digital) for i in range(8)],
            'threshold_uv': int(round(min(max(st.threshold, 0.0), 5.0) * 1e6)),
-           'sample_time_ps': int(round(st.duration * 1e12)), 'storage_depth': storage, 'auto_rate': 1,
+           'sample_time_ps': time_ps, 'storage_depth': storage, 'auto_rate': 1,
            'trigger': trig, 'repeat': 0, 'roll': 0}
     return hal, scale, warnings, hints
 
