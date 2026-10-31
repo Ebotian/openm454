@@ -1,0 +1,18 @@
+# runtime data
+captures/
+state/
+firmware/
+*.npz
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# vendor material: never redistribute (the application and its bitstream, datasheets)
+DSWave/
+*.pdf
