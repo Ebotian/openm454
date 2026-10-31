@@ -53,6 +53,7 @@ class Device:
         info['probe_ratio_raw'] = [t.read16(regs.RATIO_INFO, ext=i) for i in range(4)]
         self.zero_info = b''.join(t.nvm_read(ZERO_INFO_ADDR + ZERO_INFO_BLOCK * i, ZERO_INFO_BLOCK)
                                   for i in range(ZERO_INFO_BLOCKS))
+        self.reset_acquisition()
         self.idle()
         self.opened = True
         info['open_ms'] = round((time.time() - t0) * 1000)
@@ -112,6 +113,13 @@ class Device:
             key = None
             return bool(t.read16(regs.CTRL) & ST_PASS)
 
+    def reset_acquisition(self):
+        """End any acquisition a previous session left behind (DSWave UsbDevice_Reopen -> ForceAcquire(0)):
+        W CTRL=0, 1 ms, W ACTION=4. DSWave sends the same pair after every capture, so it is harmless when idle."""
+        self.t.write(regs.CTRL, 0x0000)
+        time.sleep(0.001)
+        self.t.write(regs.ACTION, 0x0004)
+
     def idle(self):
         """Stop state as left by DSWave after open: CTRL=0, ACTION=8 (flow pause)."""
         self.t.write(regs.CTRL, 0x0000)
@@ -119,7 +127,8 @@ class Device:
 
     # ------------------------------------------------------------------ close
     def close(self):
-        if self.t.h is not None and self.opened:
+        # DSWave's Close sends nothing; CTRL=0 is only written from a healthy, idle session
+        if self.t.h is not None and self.opened and not self.t.failed and not self.t.running:
             try:
                 self.t.write(regs.CTRL, 0x0000)
             except Exception:

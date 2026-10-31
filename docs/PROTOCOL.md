@@ -71,7 +71,9 @@ PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. F
 4. Wait 100 ms, R 0xF1 (>= 0x3100).
 5. Security handshake (§5).
 6. R 0xFA ext 0..3 (probe ratio), read calibration: 8 x (W 0xFB = 0x40·i, R 0xFB 64 bytes) = EEPROM 0x000-0x1FF.
-7. Idle: W 0x01 = 0, W 0x02 = 8.
+7. Reset a run a previous session may have left behind (DSWave UsbDevice_Reopen -> ForceAcquire(0)):
+   W 0x01 = 0, 1 ms, W 0x02 = 4. DSWave's fresh open skips this; it sends the same pair after every capture.
+8. Idle: W 0x01 = 0, W 0x02 = 8.
 
 Warm open takes ~0.6 s (dominated by the 10 ms read delay).
 
@@ -145,13 +147,33 @@ up to 64 queued transfers; repeat mode (MODE 1) delivers one frame (data + 4 KiB
 
 ## 7. Run / stop
 
-1. Setup program (starts with W 0x01 = 0, ends with W 0x00 = MODE, W 0xF9 = 0).
-2. Queue bulk reads on EP 0x86 **before** starting: one 4096-byte head, then 16 data transfers of `pkt_bytes`
-   (1,048,320 = 1 MiB - 256 for most single captures; other sizes for slow/stream/repeat modes).
-3. Start: W 0x03 = sync (0), W 0x02 = 0, W 0x01 = 1.
-4. The head arrives when the capture triggers (normal mode waits forever if nothing triggers), followed by data.
-5. Stop (also used to abort a capture that never triggered): read 1 byte from EP 0x84 twice (values 1, 2),
-   W 0x01 = 0, W 0x02 = 8, read 1 byte from EP 0x84 (3); cancel the outstanding reads; W 0x01 = 0, W 0x02 = 4.
+Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implementation: `dscope/acquire.py`.
+
+1. At least 100 ms after the previous stop. Setup program: W 0x01 = 0, 1 ms, MSO writes, W 0x00 = MODE,
+   W 0xF9 = 0. All of these are direct control transfers.
+2. Queue bulk reads on EP 0x86 **before** starting: one 4096-byte head, then N data transfers of `pkt_bytes`
+   (N = 16 on USB3, 2 in repeat mode, up to 64 in roll mode; `pkt_bytes` = 1,048,320 for most single
+   captures). There is no timeout on these reads. Wait 50 ms.
+3. Start: W 0x03 = sync (0), W 0x02 = 0, W 0x01 = 1, 1 ms.
+4. **While running** (from W 0x01 = 1 until the stop handshake has completed), every control transfer must be
+   inside an **EP 0x84 handshake**. Read 1 byte from EP 0x84 and expect 01. Read another and expect 02. Then send
+   the control transfers. Read one more and expect 03. Each read has a 1000 ms timeout. DSWave never sends a
+   control transfer while running outside this pattern (1800 EP 0x84 bytes in the corpus, all 01/02/03 triples).
+5. While the head has not arrived (not in repeat mode), poll progress from 100 ms after the start, about every
+   15 ms. Each poll is a handshake around R 0x02. The value v gives n = (v & 0xFFFE) << 13 samples
+   (v & 1: hw_depth - n). Normal mode waits until the user stops; auto mode delivers the head after ~15 ms.
+6. The head arrives when the capture triggers, followed by the data. **Every completed data transfer is
+   resubmitted for the whole run**, even after the record is complete: the device streams zero padding until
+   stopped. Stopping the reads early back-pressures the MCU, and the stop handshake then hangs. That is the
+   likely cause of the 2026-10-31 wedge.
+7. Normal stop (frame complete, timeout, or user stop): a handshake around W 0x01 = 0, W 0x02 = 8. Then stop
+   resubmitting, cancel every outstanding read (head included) and wait until all are back. Then
+   W 0x01 = 0, 1 ms, W 0x02 = 4.
+8. Error stop (failed handshake step, failed control transfer, bad head, transfer status other than
+   COMPLETED/CANCELLED, zero-length data transfer, failed resubmit): send **nothing** more, not even EP 0x84 reads.
+   Cancel the reads, wait for them, and leave the device until it is reopened. DSWave's close sends nothing either.
+9. If the controller stops answering 0xB2 reads, nothing on the host recovers it: pipe resets and device resets
+   don't help, and DSWave has no reset path. Recovery is a power cycle (replug).
 
 ## 8. Data stream
 

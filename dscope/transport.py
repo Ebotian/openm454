@@ -12,6 +12,12 @@ Safety (do not relax without the owner's explicit approval):
   * writes to MCU registers 0xF0-0xFF are refused except FLUSH_DATA, HARDWARE_INDEX(0), and the
     FPGA-config / EEPROM-read registers inside their guarded contexts
   * EP 0x02 OUT is only reachable from fpga_config() and only while the FPGA reports not-configured
+
+Acquisition rules (DSWave UsbBsp3x, re/notes/acquisition_protocol.md):
+  * while an acquisition runs (`running`: from the W CTRL=1 start write until the stop handshake is done) every
+    register access must sit inside an EP 0x84 handshake (handshake()); plain write()/read() are refused
+  * after any failed handshake or failed control transfer while running the session is `failed` (DSWave
+    "not ready"): nothing at all is sent to the device any more until it is reopened
 """
 import contextlib
 import threading
@@ -28,6 +34,9 @@ _ALLOWED_REQUESTS = (REQ_WRITE, REQ_READ_SETUP, REQ_READ)
 EP_OUT, EP_CTRL_IN, EP_DATA_IN = 0x02, 0x84, 0x86
 READ_DELAY = 0.010
 TIMEOUT_MS = 1000
+HS_TIMEOUT_MS = 1000             # UsbBsp3x_RegBulkIn timeout
+HINT_REOPEN = ('run the command again (the next open resets the acquisition state); '
+               'if that fails with USB_ERROR, unplug and replug the scope')
 
 
 class Transport:
@@ -41,6 +50,9 @@ class Transport:
         self._wrote_anything = False
         self.lock = threading.RLock()
         self.log = None                  # optional callable(str) for a wire log
+        self.running = False             # acquisition started and its stop handshake not yet done
+        self.failed = None               # reason once the device failed (no further I/O until reopened)
+        self._in_hs = False              # inside an EP 0x84 handshake
 
     # ---------------------------------------------------------------- open / close
     def open(self):
@@ -123,8 +135,24 @@ class Transport:
             return
         raise DscopeError('UNSAFE_OPERATION', 'refused write to MCU register 0x%02X (%s)' % (addr, regs.name(addr)))
 
+    def _check_state(self, what):
+        if self.failed:
+            raise DscopeError('DEVICE_ERROR', '%s refused: the device failed earlier in this session (%s)'
+                              % (what, self.failed), HINT_REOPEN)
+        if self.running and not self._in_hs:
+            raise DscopeError('UNSAFE_OPERATION', '%s while an acquisition is running (only allowed inside an '
+                              'EP 0x84 handshake)' % what)
+
+    def fail(self, reason):
+        """Enter the error state (DSWave SetReady(0)): from now on no control transfer and no EP 0x84 read."""
+        if not self.failed:
+            self.failed = reason
+            if self.log:
+                self.log('DEVICE ERROR: %s' % reason)
+
     def write(self, addr, value):
         with self.lock:
+            self._check_state('register write 0x%02X' % addr)
             self._check_write(addr, value)
             if addr == regs.EEPROM_ADDR:
                 self._fb_written = True
@@ -137,6 +165,7 @@ class Transport:
         if not 1 <= n < 128:
             raise DscopeError('INVALID_ARG', 'register read length must be 1..127')
         with self.lock:
+            self._check_state('register read 0x%02X' % addr)
             self._ctrl_out(REQ_READ_SETUP, [addr, n, ext])
             time.sleep(READ_DELAY)
             d = self._ctrl_in(REQ_READ, n)
@@ -178,6 +207,9 @@ class Transport:
 
     # ---------------------------------------------------------------- bulk IN
     def ep84_byte(self, timeout_ms=TIMEOUT_MS):
+        if self.failed:
+            raise DscopeError('DEVICE_ERROR', 'EP 0x84 read refused: the device failed earlier (%s)' % self.failed,
+                              HINT_REOPEN)
         try:
             d = self.h.bulkRead(EP_CTRL_IN, 1, timeout=timeout_ms)
         except usb1.USBErrorTimeout:
@@ -185,3 +217,51 @@ class Transport:
         except usb1.USBError as e:
             raise DscopeError('USB_ERROR', 'EP 0x84 read failed: %s' % e)
         return d[0] if d else None
+
+    @contextlib.contextmanager
+    def handshake(self, record=None):
+        """Register access while an acquisition runs (DSWave RegQueueThread / QueryPercent):
+        EP 0x84 byte (expect 01), EP 0x84 byte (expect 02), the control transfers, EP 0x84 byte (expect 03).
+        A timeout or an unexpected byte before the body means the body is NOT sent; any failure puts the session
+        in the error state and raises DEVICE_ERROR. `record` (list) receives every byte read (None = timeout)."""
+        with self.lock:
+            if self._in_hs:
+                raise DscopeError('UNSAFE_OPERATION', 'nested EP 0x84 handshake')
+
+            def step(want):
+                v = self.ep84_byte(HS_TIMEOUT_MS)
+                if record is not None:
+                    record.append(v)
+                if self.log:
+                    self.log('EP84 -> %s' % ('timeout' if v is None else '%02X' % v))
+                if v != want:
+                    why = 'EP 0x84 handshake: expected %02X, got %s' % (want, 'timeout' if v is None else '%02X' % v)
+                    self.fail(why)
+                    raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN)
+
+            try:
+                step(1)
+                step(2)
+            except DscopeError:
+                raise
+            except BaseException:
+                self.fail('EP 0x84 handshake interrupted')
+                raise
+            self._in_hs = True
+            try:
+                yield
+            except BaseException as e:
+                self._in_hs = False
+                why = 'control transfer inside the EP 0x84 handshake failed: %s' % getattr(e, 'message', e)
+                self.fail(why)
+                if isinstance(e, DscopeError):
+                    raise DscopeError('DEVICE_ERROR', why, HINT_REOPEN) from e
+                raise
+            self._in_hs = False
+            try:
+                step(3)
+            except DscopeError:
+                raise
+            except BaseException:
+                self.fail('EP 0x84 handshake interrupted')
+                raise

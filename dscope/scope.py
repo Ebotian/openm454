@@ -208,14 +208,21 @@ class Scope:
             self.lock.release()
             self.lock = None
 
-    def emergency_stop(self):
+    def emergency_stop(self, wait=5.0):
+        """Called from the watchdog thread. A running capture is asked to stop through its own loop (normal stop
+        handshake); registers are never written from here. If the capture does not stop in time, nothing is
+        sent and the process exit releases the handle."""
+        eng = self.engine
+        if eng is not None and eng.active:
+            eng.abort()
+            if not eng.wait_idle(wait):
+                return
+        if self.dev is not None and self.dev.t.running:
+            return
         try:
-            if self.dev and self.dev.t.h:
-                self.dev.t.write(0x01, 0)
-                self.dev.t.write(0x02, 0x0004)
+            self.close()
         except Exception:
             pass
-        self.close()
 
     def __enter__(self):
         return self.open()
@@ -414,6 +421,7 @@ class Scope:
         acq = {'analog_rate_hz': geom.get('analog_rate'), 'digital_rate_hz': geom.get('digital_rate'),
                'samples': n, 'duration_s': n / (geom.get('analog_rate') or geom.get('digital_rate')),
                'triggered': bool(raw.triggered), 'attempts': attempts,
+               'stop': getattr(raw, 'stop', None), 'handshakes': len(getattr(raw, 'handshakes', [])),
                'elapsed_ms': round((time.time() - t_begin) * 1000)}
         return {'version': 1, 'device': 'DSCope M454', 'time': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'applied': applied, 'acq': acq, 'channels': ch_scale,

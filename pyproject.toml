@@ -22,3 +22,4 @@ packages = ["dscope"]
 
 [tool.pytest.ini_options]
 markers = ["hw: needs the DSCope M454 connected and DSWave closed"]
+addopts = "-m 'not hw'"   # hardware tests only on request: pytest -m hw tests/hw
