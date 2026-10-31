@@ -186,6 +186,10 @@ Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implemen
    ~10 ms are acknowledged on USB but dropped by the device (an AWG program right after a normal-mode timeout was
    lost in 3 of 3 rounds; with 10-50 ms of delay it applied every time; after triggered or forced runs it always
    applied). The driver holds every register access for 100 ms after the stop (`Transport.hold`).
+   Front-end settling (hardware, not protocol): after a run that saturated an analog input (or ended without
+   data) the next run waits 0.3 s after its setup writes (1500 div of overdrive at 1 mV/div needed ~215 ms to
+   settle within 0.5 LSB); the first analog run after a run without analog channels (or of a session) waits
+   0.15 s (the inputs start 8-14 codes high and settle in ~80 ms). `Engine.run(settle=...)`.
 8. Error stop (failed handshake step, failed control transfer, bad head, transfer status other than
    COMPLETED/CANCELLED, zero-length data transfer, failed resubmit): send **nothing** more, not even EP 0x84 reads.
    Cancel the reads, wait for them, and leave the device until it is reopened. DSWave's close sends nothing either.
@@ -223,14 +227,33 @@ Indirect: W 0x08 = awg register, W 0x07 = value. `dscope/awg.py` matches all 13 
 | 1 MODE | 0 basic (others: modulation, sweep, burst; not implemented) |
 | 2 SWITCH | 1 ... 0 brackets mode / wave / frequency updates |
 | 3 ENABLE | 2 = armed, 3 = output running (start = SWITCH 1, ENABLE 3, SWITCH 0; stop = ENABLE 2). Stopped, the output holds the LOW level; the driver's `awg off` also writes LOW = 0 so the output sits at 0 V (hardware, 2026-10-31) |
-| 4/5 FCW | floor(f_Hz x 40) |
-| 6/7 PHASE | degrees / 360 x 4e9 |
-| 8/9 HIGH/LOW | volts x 156 |
+| 4/5 FCW | trunc(f_Hz x 40) (f from the micro-Hz SCPI value) |
+| 6/7 PHASE | trunc(whole_degrees / 360 x 4e9) (DSWave drops the fraction); relative to the restart of the generator at each program |
+| 8/9 HIGH/LOW | trunc(uV / 6e6 x 0.91525 x 1023) (~156.05 codes per volt) |
 | 10/11 DUTY | fraction x 4e9 |
-| 12/13 RSLOPE/FSLOPE | floor(68.75 / duty), floor(68.75 / (1 - duty)) |
-| 14-17 RPAR/FPAR | int(3846153.2 / f_Hz + 0.5) |
+| 12/13 RSLOPE/FSLOPE | DUTY32 = trunc(duty x 4e9); RSLOPE = trunc(65472 / ((DUTY32 >> 22) & 0x3ff)), FSLOPE = trunc(65472 / ((4e9 - DUTY32) >> 22)) |
+| 14-17 RPAR/FPAR | trunc(3846153.0 / f_Hz + 0.5); 4 in sweep mode |
 
 Register names 0x00-0x66 (modulation, sweep, burst, trigger) are listed in `re/notes/recon_dswave_binary.md`.
+The formulas above are DSWave's exact ones (`dscope/awg_modes.DswaveAwgHal` replays its AWG command handler and
+reproduces every recorded program write for write).
+
+Measured output behaviour (2026-10-31, A0 loopback): stopped (ENABLE 2) the output holds LOW, so `awg off` writes
+LOW = 0 and `awg dc` writes LOW = level; edges ~155 ns 10-90 %; the generator runs from the scope's clock (< 0.07 ppm
+apart); its 0 V reads +5 mV; noise mode is Gaussian-like around (low+high)/2 with sigma ~2.8 % of (high-low), flat to
+~2.5 MHz (frequency ignored).
+
+### 9.1 Modulation, sweep, burst (MODE 1 / 2 / 3)
+Register programs derived from the decompiled HAL (`re/notes/awg_mod.md`, `awg_sweep.md`, `awg_burst.md`) and
+confirmed against DSWave for the 73 scenarios of `re/scenarios/corpus5.json` (`tests/test_awg_modes_golden.py`,
+fixture `tests/fixtures/awg_modes_programs.json`). Implementation: `dscope/awg_modes.py` (`program_modulation`,
+`program_sweep`, `program_burst`), started with the basic START. Verified on A0:
+* Sweep: linear 1 -> 10 kHz in 10 ms ramps at 0.9 MHz/s and restarts every 10 ms; log 1 -> 100 kHz in 100 ms has
+  d(ln f)/dt = 46.05 /s as programmed. Steps every TINC x 20 ns.
+* Burst (internal trigger): N carrier cycles every period (3 x 10 kHz every 1.000 ms).
+* AM: DSWave's depth D = (Amax - Amin) / Amax (classical index D / (2 - D)); FM: the deviation is the peak
+  deviation (2 kHz -> 8..12 kHz); FSK: the hop frequency is absolute (alternates 10 / 20 kHz), keyed at the
+  modulation frequency. PM, ASK, PSK exist in the HAL only (the GUI offers AM, FM, FSK) and are unverified.
 
 ## 10. Calibration ("zero info")
 
