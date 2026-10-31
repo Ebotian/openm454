@@ -135,7 +135,7 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
         x = v - v.mean()
         sp = np.abs(np.fft.rfft(x * np.hanning(n)))
         k = int(np.argmax(sp[1:]) + 1)
-        if sp[k] > 10 * (np.median(sp[1:]) + 1e-12) and 1 <= k < len(sp) - 1:
+        if sp[k] > 10 * (np.median(sp[1:]) + 1e-12) and 3 <= k < len(sp) - 1:     # >= 3 cycles in the window
             a, b, c = np.log(sp[k - 1] + 1e-30), np.log(sp[k] + 1e-30), np.log(sp[k + 1] + 1e-30)
             dk = 0.5 * (a - c) / (a - 2 * b + c) if (a - 2 * b + c) != 0 else 0
             freq = (k + dk) * rate / n

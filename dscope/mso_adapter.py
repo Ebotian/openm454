@@ -71,7 +71,7 @@ def decode(raw, geom, hal):
     layout = packet.layout_from_regs(regs, rates=rates, trig_domain=geom['trig_domain'])
     head = packet.parse_head(raw.head)
     data = bytes(raw.data)
-    dec = packet.decode(data, layout)
+    dec = packet.decode(data, layout, fill_stale=True)
     an_names = ['A%d' % i for i, a in enumerate(hal['analog']) if a['enable']]
     dg_names = ['D%d' % i for i, d in enumerate(hal['digital']) if d]
     out = {'analog': {}, 'digital': {}, 't0_analog': 0.0, 't0_digital': 0.0}

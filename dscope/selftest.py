@@ -88,17 +88,11 @@ def run(scope, quick=False, awg=True):
 
     def v04():
         out = {}
-        cases = [('A1', ['A1'], []), ('A1,A3', ['A1', 'A3'], []), ('A0-A3', ['A0', 'A1', 'A2', 'A3'], [])]
+        cases = [('A1', ['A1'], [], 400e6), ('A1,A3', ['A1', 'A3'], [], 200e6), ('A0-A3', ['A0', 'A1', 'A2', 'A3'], [], 100e6)]
         if not quick:
             cases += [('A1@1M', ['A1'], [], 1e6), ('A1@10M', ['A1'], [], 10e6)]
-        for case in cases:
-            name, an, dg = case[:3]
-            kw = dict(analog=an, digital=dg)
-            if len(case) > 3:
-                kw.update(rate=case[3], samples=None)
-            st = _st(**kw)
-            if len(case) > 3:
-                st.rate = case[3]
+        for name, an, dg, rate in cases:
+            st = _st(analog=an, digital=dg, rate=rate, duration=2e-3 if rate >= 100e6 else 5e-3)
             cap = scope.capture(st)
             out[name] = {'rate': cap.meta['acq']['analog_rate_hz'], 'freq_hz': cap.measure('A1')['freq_hz']}
         f = ref.get('freq', 1000)

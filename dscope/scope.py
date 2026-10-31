@@ -356,6 +356,9 @@ def _hints(cap):
             out.append('%s clips at the top: increase --vdiv or lower --offset' % ch)
         if lo > 0.001:
             out.append('%s clips at the bottom: increase --vdiv or raise --offset' % ch)
+        m = cap.measure(ch)
+        if m.get('freq_hz') is None and (m.get('edges_rise', 0) + m.get('edges_fall', 0)) >= 1:
+            out.append('%s: fewer than 2 periods in the window; use a longer --duration/--timebase to measure frequency' % ch)
         if span < 2 * CODES_PER_DIV and not hi and not lo and span > 3:
             out.append('%s uses only %.1f of 8 divisions: a smaller --vdiv gives more resolution' % (ch, span / CODES_PER_DIV))
     return out
