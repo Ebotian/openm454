@@ -105,7 +105,10 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
         vtop, vbase = vmax, vmin
     vamp = vtop - vbase
     res.update(vtop_v=_r(vtop), vbase_v=_r(vbase), vamp_v=_r(vamp))
-    noise = float(np.std(np.diff(v[: min(n, 200000)]))) / np.sqrt(2) if n > 2 else 0.0
+    # noise from the median absolute sample-to-sample difference: edges are outliers to it, so a square with only
+    # a few samples per period still gets a small noise figure (the plain std of the differences did not)
+    d = np.diff(v[: min(n, 200000)]) if n > 2 else np.zeros(1)
+    noise = float(1.4826 * np.median(np.abs(d - np.median(d)))) / np.sqrt(2)
     hyst = max(0.2 * vamp, 4 * noise, 2.5 * lsb)
     freq = period = duty = None
     rises = falls = np.array([])
