@@ -111,7 +111,31 @@ against the recorded runs). Key facts:
   VERT_ABRH_INV = per-channel invert mask XOR the hardware's own inversion (0x0F).
   ANAn_CROSS = 0xFFFF followed by a 256-entry table per channel (interleave correction); **must be rewritten
   whenever the enabled-channel set changes** (stale tables corrupt levels).
-* **Digital threshold**: VERT_DTHR ~ volts x 155 (0..5 V).
+* **Digital threshold**: VERT_DTHR = int(1023 x (volts / 5) x 25/33).
+
+Exact per-register formulas (verified write-for-write against 123 DSWave runs; full derivation with RVAs in
+`re/notes/mso_formulas.md`, implementation in `dscope/mso.py`):
+
+| Register | Formula |
+|---|---|
+| ANAn_BASE | enable \| 4·(DC) \| 8·bw20 (written for all 4 channels, enabled or not) |
+| ANAn_VERT | ((v32 >> 16) << 15) + (v32 & 0x7FFF), v32 = gain \| relay << 16 from the channel's calibrated VGA entry |
+| ANAn_VOFF | offset code |
+| ANAn_VPWM | int(((corr + v) / 255) · pwm_scale) + pwm_offset[vdiv]; v = voff, or 255 - voff if the channel is inverted (hardware inverts all four, XOR user invert); corr = 0 except with exactly one analog channel (ADC trim) |
+| VERT_ACROSS | table indexed by the enabled-analog mask: {0:F,1:F,2:F,3:A,4:F,5:5,6:5,7:0,8:F,9:5,10:A,11:0,12:A,13:0,14:0,15:0} |
+| HORI_xDIVL/H | div = ceil(fold_factor · 100 MHz / rate); L = div & 0xFFFF, H = div >> 16 |
+| HORI_BASE | 2·analog_primary + 8·small_packets + (trigger on analog) + 4·!((nD and analog_primary) or nA == 0) |
+| HORI_SLOWCNT | (4096 - block_bytes) >> 2 |
+| HORI_DEPTH0/1 | hw_depth >> 6 (lo/hi), hw_depth = roundup4096(fold_trig · hori_depth + trig_block) |
+| HORI_RWORDS0/1 | rd_bytes / 4 - 1 (lo/hi) |
+| TRIG_BASE | 2·auto + 4·pulse_type + enable |
+| TRIG_PRES / PREW | pretrig = B · (SAMPLEindex // B + 1), B = 64 · mtxs of the trigger kind; PREW = B · count / 8 |
+| TRIG_HOLD | holdoff / 10 ns |
+| ANAn_CROSS | 0xFFFF, then 256 entries clamp(int(j + base + j·k + 0.5)) from the zero-info cross pair (a, b): k = (b - a) / (225 · 5), base = a / 5 - 15 k |
+
+Geometry: block = primary kind's 64·mtxs samples + secondary kind's samples; packet sizes 1,048,320 (1 MiB - 256,
+whole blocks) for fast captures; slow data rates (< 102,400 kB/s) use "roll" packets of ~20 ms of data, MODE 2, and
+up to 64 queued transfers; repeat mode (MODE 1) delivers one frame (data + 4 KiB tail) per transfer.
 * **Trigger**: TRIG_BASE bit0 = enable, bit1 = auto (free-run; normal mode clears it), bit2 = pulse trigger.
   Source and edge go into the trigger memory: TRIG_INDEX = 0x8000 | probe; then indirect words
   0x000 (level mask = ~(1 << bit)), 0x010 = 0xFFFF, 0x100 (polarity: bit set for rising), 0x200 (edge mask = 1 << bit),
