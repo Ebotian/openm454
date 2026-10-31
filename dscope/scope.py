@@ -364,7 +364,7 @@ class Scope:
         attempts = []
         mode = st.trig_mode
         triggered_wanted = bool(st.trig_source) and mode != 'force'
-        wait = st.auto_after if mode == 'auto' else st.timeout
+        wait = (st.auto_after if mode == 'auto' else st.timeout) + max(st.holdoff, 0.0)   # holdoff delays the first trigger
         hal['trigger']['enable'] = int(triggered_wanted)
         prog, geom = self._compile_ok(hal, warnings)
         collect = max(10.0, 1.5 * geom['record_s'] + 2.0)

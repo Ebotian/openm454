@@ -365,7 +365,7 @@ def _budget(args):
     collect = max(10.0, 1.5 * rec + 2.0)
     if args.cmd == 'stream':
         return 5.0 + 2.5 * rec + 5.0 + 60.0, None
-    wait = st.timeout if st.trig_mode == 'normal' else (st.auto_after if st.trig_mode == 'auto' else 2.0)
+    wait = (st.timeout if st.trig_mode == 'normal' else (st.auto_after if st.trig_mode == 'auto' else 2.0)) + max(st.holdoff, 0.0)
     per = wait + rec + 0.5 + collect + 5.0
     if st.trig_mode == 'auto' and st.trig_source:      # forced fallback run: validate it too
         import copy

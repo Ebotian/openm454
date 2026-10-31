@@ -41,7 +41,7 @@ def program(wave='sine', freq=1000.0, high=3.0, low=0.0, duty=50.0, phase=0.0):
         raise DscopeError('INVALID_ARG', 'duty must be 0.1 .. 99.9 %')
     if wave == 'square':
         period = 1.0 / freq
-        if min(duty, 100 - duty) / 100 * period < MIN_PULSE_S:
+        if min(duty, 100 - duty) / 100 * period < MIN_PULSE_S * (1 - 1e-9):     # 380 ns itself is allowed
             raise DscopeError('INVALID_ARG', 'pulse narrower than 380 ns at this frequency/duty')
     d = duty / 100.0
     fcw = int(math.floor(freq * 40))
