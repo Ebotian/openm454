@@ -177,6 +177,30 @@ def test_watchdog_exits_although_stdout_is_blocked(monkeypatch):
         cli._OUT['owner'] = None
 
 
+def test_watch_measures_only_the_channels_its_output_needs(capsys):
+    """Deep records measure at ~4 s per 100M-sample channel: with --fields, watch measures only the named channels
+    (plus those in --stop-when)."""
+    from dscope import cli
+    asked = []
+
+    class Cap:
+        meta = {'acq': {'triggered': True}}
+
+        def summary(self, channels=None):
+            asked.append(channels)
+            return {'analog': {'A1': {'vpp_v': 2.9}}, 'digital': {'D0': {'edges': 4}}}
+
+    scope = types.SimpleNamespace(capture=lambda st: Cap())
+    args = cli.build_parser().parse_args(['watch', '-c', 'A0-A3,D0', '--fields', 'A1.vpp_v', '--count', '1',
+                                          '--stop-when', "D0['edges'] > 0"])
+    cli.cmd_watch(args, scope)
+    assert asked == [{'A1', 'D0'}]
+    args = cli.build_parser().parse_args(['watch', '-c', 'A1', '--count', '1'])
+    cli.cmd_watch(args, scope)
+    assert asked[-1] is None                         # default fields: every channel
+    capsys.readouterr()
+
+
 def test_explicit_max_wall_only_extends_the_budget():
     from dscope import cli
     a = cli.build_parser().parse_args(['--max-wall', '5s', 'capture', '-c', 'A1'])

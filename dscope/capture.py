@@ -86,12 +86,16 @@ class Capture:
     def channels(self):
         return sorted(self.analog) + sorted(self.digital, key=lambda c: int(c[1:]))
 
-    def summary(self, edges_n=0, window=None):
+    def summary(self, edges_n=0, window=None, channels=None):
+        """channels: optional collection of channel names; the others are not measured (deep records measure
+        slowly, ~4 s per 100M-sample channel)."""
         out = {'analog': {}, 'digital': {}}
         for ch in sorted(self.analog):
-            out['analog'][ch] = self.measure(ch, edges_n, window)
+            if channels is None or ch in channels:
+                out['analog'][ch] = self.measure(ch, edges_n, window)
         for ch in sorted(self.digital, key=lambda c: int(c[1:])):
-            out['digital'][ch] = self.measure(ch, edges_n, window)
+            if channels is None or ch in channels:
+                out['digital'][ch] = self.measure(ch, edges_n, window)
         return out
 
     def dump(self, ch, points=200, window=None):

@@ -244,12 +244,18 @@ def cmd_watch(args, scope):
     every = si(args.every, 's', '--every')
     total = si(args.duration_total, 's', '--for') if args.duration_total else None
     fields = args.fields.split(',') if args.fields else None
+    need = None                              # with --fields, measure only the channels the output names
+    if fields:
+        import re
+        need = {f.split('.')[0] for f in fields}
+        if args.stop_when:
+            need |= set(re.findall(r'\b[AD][0-7]\b', args.stop_when))
     t0 = time.time(); i = 0; hist = {}; stopped_by = 'count'
     last = None
     while True:
         t_it = time.time()
         cap = scope.capture(st)
-        s = cap.summary()
+        s = cap.summary(channels=need)
         flat = {}
         for grp in ('analog', 'digital'):
             for ch, m in s[grp].items():
