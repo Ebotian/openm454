@@ -50,3 +50,26 @@ def test_digital_isolated_pulse_and_fast_clock_are_kept():
     clk = np.tile(np.array([0, 0, 1, 1], np.uint8), 10000)     # 100 MHz at 400 MSa/s
     m = measure.digital(clk, 400e6)
     assert abs(m['freq_hz'] - 100e6) < 1 and 'glitch_edges' not in m
+
+
+def test_noise_has_no_frequency():
+    lsb = 8 / 235
+    rng = np.random.default_rng(1)
+    for sig in (0.5, 1, 2, 4):
+        v = np.round(rng.normal(0, sig, 100000)) * lsb + 1.0
+        assert measure.analog(v, 1e6, lsb=lsb)['freq_hz'] is None
+
+
+def test_fast_sine_uses_the_fft():
+    """10 samples per period at an exact ratio: the histogram levels miss the peaks (hardware, 2026-10-31)."""
+    lsb = 8 / 235
+    t = np.arange(5056) / 100e3
+    v = np.round((1 + np.sin(2 * np.pi * 10e3 * t)) / lsb) * lsb
+    m = measure.analog(v, 100e3, lsb=lsb)
+    assert abs(m['freq_hz'] - 10e3) < 5 and m['freq_method'] == 'fft'
+
+
+def test_narrow_pwm_keeps_its_frequency():
+    t = np.arange(200000) / 1e6
+    m = measure.analog((np.mod(t * 1000, 1) < 0.01) * 2.8, 1e6, lsb=8 / 235)
+    assert abs(m['freq_hz'] - 1000) < 0.5 and abs(m['duty_pct'] - 1.0) < 0.2 and not m.get('noise_like')

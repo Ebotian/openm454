@@ -112,8 +112,11 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
     if vamp > max(4 * noise, 3 * lsb) and vamp > 0:
         mid = (vtop + vbase) / 2
         rises, falls = crossings(v, mid - hyst / 2, mid + hyst / 2)
-        if len(rises) >= 2:
-            iv = np.diff(rises)
+        iv = np.diff(rises) if len(rises) >= 2 else np.array([])
+        if len(iv) >= 8 and np.std(iv) > 0.6 * np.mean(iv):
+            res['period_irregular'] = True          # crossings of noise, not a periodic signal: no frequency
+            res['noise_like'] = True
+        elif len(rises) >= 2:
             med = float(np.median(iv))
             if len(iv) >= 3 and np.max(np.abs(iv - med)) > 0.1 * med:      # glitches: use the median period
                 period_s = med / rate
@@ -131,7 +134,9 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
                     highs.append(fs[0] - rises[k])
             if highs:
                 duty = float(np.mean(highs)) / (period_s * rate) * 100
-    if freq is None and n >= 64 and (vmax - vmin) > max(4 * lsb, 8 * noise):
+    # the spectral peak test below rejects noise; a noise term here would block fast sines (few samples per period
+    # inflate the difference-based noise estimate)
+    if freq is None and n >= 64 and (vmax - vmin) > 4 * lsb:
         x = v - v.mean()
         sp = np.abs(np.fft.rfft(x * np.hanning(n)))
         k = int(np.argmax(sp[1:]) + 1)

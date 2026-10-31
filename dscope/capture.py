@@ -21,6 +21,7 @@ class Capture:
         self.meta = meta                   # dict (JSON-serialisable)
         self.analog = analog or {}         # 'A1' -> uint8 codes
         self.digital = digital or {}       # 'D0' -> uint8 0/1
+        self._measured = {}                # (ch, edges_n, window) -> result (the data never changes)
 
     # ---------------------------------------------------------------- scaling / time
     def scale(self, ch):
@@ -42,6 +43,12 @@ class Capture:
 
     # ---------------------------------------------------------------- measurements
     def measure(self, ch, edges_n=0, window=None):
+        key = (ch, edges_n, tuple(window) if window else None)
+        if key not in self._measured:
+            self._measured[key] = self._measure(ch, edges_n, window)
+        return dict(self._measured[key])
+
+    def _measure(self, ch, edges_n=0, window=None):
         if ch.startswith('A'):
             v = self.volts(ch)
             s = self.scale(ch)

@@ -146,6 +146,8 @@ def build_parser():
     s.add_argument('--high', default=None); s.add_argument('--low', default=None)
     s.add_argument('--vpp', default=None); s.add_argument('--dc', default=None, help='centre voltage (with --vpp)')
     s.add_argument('--duty', default='50%'); s.add_argument('--phase', default='0')
+    dcp = asub.add_parser('dc', help='steady DC level (0..3 V, 6.4 mV steps)')
+    dcp.add_argument('--level', required=True)
     asub.add_parser('off'); asub.add_parser('status')
     pl = sub.add_parser('plot', help='render a saved capture (.npz) to PNG (no device)')
     pl.add_argument('file'); pl.add_argument('--window', default=None); pl.add_argument('--channels', default=None)
@@ -309,6 +311,9 @@ def cmd_awg(args, scope):
     from .units import si
     if args.awg_cmd == 'off':
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_off()}); return
+    if args.awg_cmd == 'dc':
+        _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_dc(si(args.level, 'V', '--level')), 'persists_after_exit': True})
+        return
     if args.awg_cmd == 'status':
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_status(), 'note': 'last state set by dscope (device is write-only)'}); return
     if args.vpp is not None:
@@ -368,6 +373,7 @@ def _budget(args):
         fb.trig_mode = 'force'
         rec2 = Scope().plan(fb)['geometry']['record_s']
         per += 2.5 + rec2 + max(10.0, 1.5 * rec2 + 2.0)
+    per += 2e-7 * geom.get('acqu_bytes', 0)            # decoding and the hint checks of deep records
     if args.cmd == 'capture':
         return max(60.0, per + 30.0), None
     per_iter = per + si(args.every, 's', '--every') + 30.0

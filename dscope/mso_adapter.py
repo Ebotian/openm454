@@ -56,6 +56,10 @@ def compile(hal, zero_info, include_cross=True):
         g = mso.geometry(cfg)
         prog = mso.setup_program(cfg, zero_info, include_cross=include_cross)
     except ValueError as e:
+        if 'hw_depth' in str(e):
+            raise DscopeError('INVALID_ARG', 'the record does not fit the 4 Gbit sample memory (about 400M samples on '
+                              '1 analog channel, 100M each on 4, 400M each on 8 digital channels at 100 MSa/s)',
+                              'use fewer --samples, a lower --rate or a shorter --duration, or fewer channels') from e
         raise DscopeError('INVALID_ARG', 'settings out of the hardware range: %s' % e,
                           'shorten --duration/--timebase or raise --samples/--rate; shorten --holdoff or the pulse width') from e
     for addr, val in prog:

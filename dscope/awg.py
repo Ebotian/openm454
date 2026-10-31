@@ -67,6 +67,13 @@ STOP = [(A_ENABLE, 0x0002)]
 PARK = [(A_LOW, 0)]
 
 
+def dc(level):
+    """Writes for a steady DC output: stopped, the generator holds LOW (not a DSWave feature; measured)."""
+    if not 0.0 <= level <= V_MAX + 1e-9:
+        raise DscopeError('INVALID_ARG', 'DC level must be 0 .. 3.0 V')
+    return STOP + [(A_LOW, int(round(level * 156)))]
+
+
 def apply(transport, writes):
     for addr, val in writes:
         transport.write(REG_ADDR, addr)

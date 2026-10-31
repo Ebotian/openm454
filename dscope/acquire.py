@@ -180,11 +180,12 @@ class Engine:
 
     # ------------------------------------------------------------------ run
     def run(self, setup_writes, pkt_bytes, need_bytes, n_transfers=16, trigger_timeout=5.0,
-            collect_timeout=10.0, repeat_frames=0, on_chunk=None, stop_flag=None, poll=True):
+            collect_timeout=10.0, repeat_frames=0, on_chunk=None, stop_flag=None, poll=True, settle=0.0):
         """Execute one capture. need_bytes = data bytes (after the head) to collect.
         repeat_frames > 0: repeat mode; after the head every data transfer is one frame (data + 4 KiB tail);
         collect that many frames. on_chunk(bytes) is called for the head and for every data chunk as it arrives
         (live streaming). stop_flag(): optional callable; the capture stops when it returns True.
+        settle: extra seconds between the setup writes and the start (front end recovering from overdrive).
         Returns a RawCapture; cap.head is None when nothing arrived before trigger_timeout. Raises DEVICE_ERROR
         after an error stop (the session is then unusable until the device is reopened)."""
         t = self.t
@@ -213,7 +214,7 @@ class Engine:
             if gap > 0:
                 time.sleep(gap)
             cap = self._run(setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
-                            repeat_frames, on_chunk, stop_flag, poll)
+                            repeat_frames, on_chunk, stop_flag, poll, settle)
         finally:
             self._t_end = time.time()
             self.active = False
@@ -228,7 +229,7 @@ class Engine:
         return cap
 
     def _run(self, setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
-             repeat_frames, on_chunk, stop_flag, poll):
+             repeat_frames, on_chunk, stop_flag, poll, settle=0.0):
         t = self.t
         cap = RawCapture()
         self._events = collections.deque()
@@ -244,6 +245,8 @@ class Engine:
             t.write(addr, val)
             if i == 0 and addr == regs.CTRL:
                 time.sleep(SETUP_SETTLE)
+        if settle > 0:
+            self._abort.wait(settle)        # idle device: nothing is queued yet
         if self._abort.is_set():
             cap.aborted = True              # stopped before the start: nothing to stop
             return cap

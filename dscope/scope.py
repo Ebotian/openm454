@@ -29,7 +29,8 @@ RATES = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000,
          10000000, 20000000, 50000000, 100000000]
 EDGES = {'rise': 0, 'rising': 0, 'fall': 1, 'falling': 1, 'any': 2, 'both': 2,
          'pulse>': 3, 'pulse<': 4, 'npulse>': 5, 'npulse<': 6}
-MAX_SAMPLES = 50_000_000
+OVERDRIVE_SETTLE = 0.3           # measured: 1500 div of overdrive at 1 mV/div needs ~215 ms to settle within 0.5 LSB
+MAX_SAMPLES = 400_000_000     # per channel; the 4 Gbit sample memory is the real bound (checked by mso)
 
 
 @dataclass
@@ -200,6 +201,7 @@ class Scope:
         self.engine = None
         self.lock = None
         self._last_cross = None      # CROSS tables written earlier in this session
+        self._overdriven = False     # last capture saturated an analog input: let the front end recover first
         import threading
         self._close_lock = threading.Lock()
 
@@ -314,6 +316,14 @@ class Scope:
         self._save_awg(st)
         return st
 
+    def awg_dc(self, level):
+        """Steady DC level on the AWG output (0..3 V, steps of 1/156 V)."""
+        from . import awg
+        awg.apply(self.dev.t, awg.dc(level))
+        st = {'wave': 'dc', 'level_v': round(int(round(level * 156)) / 156, 4), 'enabled': True}
+        self._save_awg(st)
+        return st
+
     def awg_from_spec(self, spec):
         from .units import si
         p = spec.split(',')
@@ -380,6 +390,7 @@ class Scope:
                 len(raw.data), geom['need_bytes'], 'aborted' if raw.aborted else 'data stopped arriving'),
                 'retry once; if it repeats, check the USB 3 connection')
         frame = _decode(raw, geom, hal)
+        self._overdriven = _saturated(frame)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin)
         cap = Capture(meta, frame['analog'], frame['digital'])
         cap.meta['hints'] = _hints(cap) + hints
@@ -393,9 +404,10 @@ class Scope:
         if cross and cross == self._last_cross:
             send = [w for w in prog if w[0] not in CROSS_REGS]
         self._last_cross = None
+        settle, self._overdriven = (OVERDRIVE_SETTLE if self._overdriven else 0.0), False
         raw = self.engine.run(send, pkt_bytes=geom['pkt_bytes'], need_bytes=geom['need_bytes'],
                               n_transfers=geom.get('transfer_count', 16), trigger_timeout=trigger_timeout,
-                              collect_timeout=collect_timeout, **kw)
+                              collect_timeout=collect_timeout, settle=settle, **kw)
         if cross:
             self._last_cross = cross
         return raw
@@ -483,6 +495,7 @@ class Scope:
                 len(raw.data), geom['need_bytes'], 'stopped on request' if raw.stopped else
                 'aborted' if raw.aborted else 'data stopped arriving'))
         frame = _decode(raw, geom, hal)
+        self._overdriven = _saturated(frame)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, ['stream'], t0)
         meta['acq']['mode'] = 'roll' if geom.get('roll') else 'single'
         cap = Capture(meta, frame['analog'], frame['digital'])
@@ -536,6 +549,17 @@ class Scope:
 CROSS_REGS = (0x44, 0x54, 0x64, 0x74)
 
 
+def _saturated(frame):
+    """True when an analog input sat at the ADC limits for > 1 % of the record (heavy overdrive). The front end
+    then needs up to ~0.2 s to recover (measured 2026-10-31: 2.8 V into 100 mV/div, then 1 V/div read +0.24 V for the
+    first 20 ms), so the next run waits OVERDRIVE_SETTLE after its setup writes."""
+    for codes in frame['analog'].values():
+        n = codes.size
+        if n and (np.count_nonzero(codes >= 252) + np.count_nonzero(codes <= 3)) > 0.01 * n:
+            return True
+    return False
+
+
 def _hints(cap):
     out = []
     for ch in cap.analog:
@@ -548,7 +572,7 @@ def _hints(cap):
             out.append('%s clips at the top: increase --vdiv or lower --offset' % ch)
         if lo > 0.001:
             out.append('%s clips at the bottom: increase --vdiv or raise --offset' % ch)
-        m = cap.measure(ch)
+        m = cap.measure(ch) if codes.size <= 20_000_000 else {}      # measured (and cached) once for the summary
         if m.get('freq_hz') is None and (m.get('edges_rise', 0) + m.get('edges_fall', 0)) >= 1:
             out.append('%s: fewer than 2 periods in the window; use a longer --duration/--timebase to measure frequency' % ch)
         if span < 2 * CODES_PER_DIV and not hi and not lo and span > 3:
