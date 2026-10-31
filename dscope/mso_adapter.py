@@ -1,0 +1,99 @@
+"""Glue between scope.py (user-level settings) and the protocol modules mso.py (register compiler) and
+packet.py (stream decoder)."""
+import numpy as np
+
+from . import mso
+from .errors import DscopeError
+
+
+def to_mso(hal):
+    cfg = mso.MsoConfig()
+    for i, a in enumerate(hal['analog']):
+        ch = cfg.analog[i]
+        ch.enable = bool(a['enable'])
+        ch.coupling = a['coupling']
+        ch.bw20 = bool(a['bw20'])
+        ch.invert = bool(a['invert'])
+        ch.vdiv_uv = int(a['vdiv_uv'])
+        ch.voff_code = int(a['voff_code'])
+        ch.trig_level_code = int(a['trig_level_code'])
+    cfg.digital = [bool(x) for x in hal['digital']]
+    cfg.threshold_uv = int(hal['threshold_uv'])
+    cfg.sample_time_ps = int(hal['sample_time_ps'])
+    cfg.storage_depth = int(hal['storage_depth'])
+    cfg.auto_rate = True
+    t = hal['trigger']
+    cfg.trig_enable = bool(t['enable'])
+    cfg.trig_mode = 1                       # normal: the host implements 'auto' (timeout -> forced capture)
+    cfg.trig_channel = int(t['ch_index'])
+    cfg.trig_channel_type = int(t['ch_type'])
+    cfg.trig_type = int(t['type'])
+    cfg.trig_pulse_ps = int(t['pulse_ps'])
+    cfg.trig_margin = int(t['margin'])
+    cfg.trig_hold_ps = int(t['hold_ps'])
+    cfg.repeat_mode = bool(hal.get('repeat'))
+    cfg.loop_mode = False
+    ar, ad, dr, dd = mso.rates_and_depths(cfg)
+    depth = ad if cfg.trig_channel_type == 1 and any(a.enable for a in cfg.analog) else dd
+    cfg.trig_sample_index = int(round(t['pos_pct'] / 100.0 * depth))
+    if not cfg.trig_enable:
+        cfg.trig_mode = 0                   # free-running (DSWave 'auto' with no trigger enabled)
+    return cfg
+
+
+def compile(hal, zero_info, include_cross=True):
+    cfg = to_mso(hal)
+    g = mso.geometry(cfg)
+    prog = mso.setup_program(cfg, zero_info, include_cross=include_cross)
+    for addr, val in prog:
+        if addr >= 0xF0 and addr not in (0xF9, 0xF4):
+            raise DscopeError('UNSAFE_OPERATION', 'compiler produced MCU register write %02X' % addr)
+    geom = {
+        'analog_rate': g.analog_rate if g.n_analog else None,
+        'digital_rate': g.digital_rate if g.n_digital else None,
+        'analog_depth': g.analog_depth if g.n_analog else 0,
+        'digital_depth': g.digital_depth if g.n_digital else 0,
+        'pkt_bytes': g.transfer_size, 'transfer_count': g.transfer_count, 'need_bytes': g.acqu_bytes,
+        'hw_mode': g.hw_mode, 'pretrig': g.pretrig, 'sample_index': cfg.trig_sample_index,
+        'trig_domain': 'analog' if cfg.trig_channel_type == 1 and g.n_analog else 'digital',
+        'afold_log2': g.afold_log2, 'dfold_log2': g.dfold_log2, 'send_samples': g.send_samples,
+        'blk_bytes': g.blk_bytes, 'repeat': bool(cfg.repeat_mode), 'roll': bool(g.roll),
+        '_regs': {a: v for a, v in prog},
+    }
+    return prog, geom
+
+
+def decode(raw, geom, hal):
+    """Raw capture -> per-channel arrays cropped to [trigger - pretrigger, + depth), times relative to the trigger."""
+    from . import packet
+    regs = geom['_regs']
+    rates = {'analog': geom['analog_rate'], 'digital': geom['digital_rate']}
+    layout = packet.layout_from_regs(regs, rates=rates, trig_domain=geom['trig_domain'])
+    head = packet.parse_head(raw.head)
+    data = bytes(raw.data)
+    dec = packet.decode(data, layout)
+    an_names = ['A%d' % i for i, a in enumerate(hal['analog']) if a['enable']]
+    dg_names = ['D%d' % i for i, d in enumerate(hal['digital']) if d]
+    out = {'analog': {}, 'digital': {}, 't0_analog': 0.0, 't0_digital': 0.0}
+    dom = geom['trig_domain']
+    trig = packet.trigger_index(head, layout) if head.get('triggered') else None
+    for kind, names, depth in (('analog', an_names, geom['analog_depth']), ('digital', dg_names, geom['digital_depth'])):
+        if not names:
+            continue
+        rate = geom[kind + '_rate']
+        arrs = dec[kind]
+        # trigger position in this domain's samples
+        if trig is not None:
+            dom_rate = geom[dom + '_rate']
+            t_idx = trig * rate / dom_rate
+            pre = geom['sample_index'] * rate / dom_rate
+        else:
+            t_idx = depth / 2.0
+            pre = depth / 2.0
+        start = int(round(t_idx - pre))
+        start = max(0, start)
+        for n in names:
+            a = np.asarray(arrs[n] if n in arrs else arrs[int(n[1:])])
+            out[kind][n] = np.ascontiguousarray(a[start:start + depth])
+        out['t0_' + kind] = (start - t_idx) / rate
+    return out
