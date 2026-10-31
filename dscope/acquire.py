@@ -67,9 +67,11 @@ class Engine:
                 self._done.append(tr)
 
     def run(self, setup_writes, pkt_bytes, need_bytes, n_transfers=16, trigger_timeout=5.0,
-            collect_timeout=10.0, start_extra=None, repeat_frames=0):
+            collect_timeout=10.0, start_extra=None, repeat_frames=0, on_chunk=None, stop_flag=None):
         """Execute one capture. need_bytes = data bytes (after the head) to collect.
-        repeat_frames > 0: repeat mode (each transfer = head+data frame); collect that many frames."""
+        repeat_frames > 0: repeat mode; after the head every data transfer is one frame (data + 4 KiB tail);
+        collect that many frames. on_chunk(bytes) is called for the head and for every data chunk as it
+        arrives (live streaming). stop_flag(): optional callable; the capture stops when it returns True."""
         t = self.t
         cap = RawCapture()
         self._done, self._errors, self._dead = [], [], set()
@@ -77,11 +79,9 @@ class Engine:
             t.write(addr, val)
         trs = []
         try:
-            if not repeat_frames:
-                trs.append(self._submit(HEAD_BYTES))
+            trs.append(self._submit(HEAD_BYTES))
             for _ in range(n_transfers):
                 trs.append(self._submit(pkt_bytes))
-            self.sync = (self.sync + 1) & 0xFFFF if self.sync else 0
             t.write(regs.SYNC, self.sync)
             t.write(regs.ACTION, 0x0000)
             t.write(regs.CTRL, 0x0001)
@@ -95,27 +95,28 @@ class Engine:
                     tr = self._done.pop(0)
                     n = tr.getActualLength()
                     buf = bytes(tr.getBuffer()[:n])
-                    if repeat_frames:
-                        cap.frames.append(buf)
-                    elif cap.head is None and n == HEAD_BYTES and tr is trs[0]:
+                    if cap.head is None and n == HEAD_BYTES and tr is trs[0]:
                         cap.head = buf
                         cap.t_head = time.time()
                         deadline = cap.t_head + collect_timeout
                         if buf[:4] != b'\x55\x55\x55\x55':
                             raise DscopeError('PROTOCOL_ERROR', 'bad head packet check id %s' % buf[:4].hex())
+                    elif repeat_frames:
+                        cap.frames.append(buf)
                     else:
                         cap.data += buf
-                    if tr.getStatus() == usb1.TRANSFER_COMPLETED and id(tr) not in self._dead and not self._enough(cap, need_bytes, repeat_frames):
-                        if tr is not trs[0] or repeat_frames:
-                            tr.setBulk(EP_DATA, pkt_bytes, callback=self._cb, timeout=0)
-                            tr.submit()
+                    if on_chunk is not None:
+                        on_chunk(buf)
+                    if tr.getStatus() == usb1.TRANSFER_COMPLETED and id(tr) not in self._dead \
+                            and tr is not trs[0] and not self._enough(cap, need_bytes, repeat_frames):
+                        tr.setBulk(EP_DATA, pkt_bytes, callback=self._cb, timeout=0)
+                        tr.submit()
                 if self._errors:
                     raise DscopeError('USB_ERROR', 'bulk transfer error status %s' % self._errors)
-                if self._enough(cap, need_bytes, repeat_frames):
+                if self._enough(cap, need_bytes, repeat_frames) or (stop_flag is not None and stop_flag()):
                     break
                 now = time.time()
-                if (cap.head is None and not repeat_frames and now > deadline_head) or (deadline and now > deadline) \
-                        or (repeat_frames and now > deadline_head + collect_timeout):
+                if (cap.head is None and now > deadline_head) or (deadline and now > deadline):
                     cap.timed_out = True
                     break
         finally:
@@ -127,7 +128,7 @@ class Engine:
     def _enough(cap, need_bytes, repeat_frames):
         if repeat_frames:
             return len(cap.frames) >= repeat_frames
-        return cap.head is not None and len(cap.data) >= need_bytes
+        return cap.head is not None and need_bytes is not None and len(cap.data) >= need_bytes
 
     def _stop(self, trs, cap):
         t = self.t

@@ -81,6 +81,9 @@ def build_parser():
     w.add_argument('--fields', default=None, help='comma list like A1.freq_hz,A1.vpp_v,D0.state (default: key stats)')
     w.add_argument('--stop-when', default=None, help="python expression over fields, e.g. \"A1['vpp_v'] < 1\"")
     w.add_argument('--save-last', action='store_true')
+    sm = sub.add_parser('stream', help='long untriggered recording with live JSON statistics (data logger)')
+    _capture_args(sm)
+    sm.add_argument('--every', default='1s', help='signal time per live statistics line')
     a = sub.add_parser('awg', help='signal generator on the MCX output (0..3 V)')
     asub = a.add_subparsers(dest='awg_cmd', required=True)
     s = asub.add_parser('set')
@@ -207,6 +210,30 @@ def cmd_watch(args, scope):
     _emit(out)
 
 
+def cmd_stream(args, scope):
+    from .scope import settings_from_args
+    from .units import si
+    from . import plot as plotmod
+    st = settings_from_args(args)
+    if not (args.duration or args.timebase):
+        st.duration = 10.0
+    if args.awg:
+        scope.awg_from_spec(args.awg)
+    cap = scope.stream(st, every=si(args.every, 's', '--every'), emit=_emit)
+    res = {'ok': True, 'cmd': 'stream', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
+    res.update(cap.summary())
+    files = {}
+    if not args.no_save:
+        from .capture import new_path
+        stem = new_path(args.out, args.tag if args.tag != 'cap' else 'stream')
+        files['npz'] = _fwd(cap.save(stem + '.npz'))
+        if not args.no_plot:
+            files['png'] = _fwd(plotmod.plot(cap, stem + '.png', title=_title(cap)))
+    res['files'] = files
+    res['hints'] = cap.meta.get('hints', [])
+    _emit(res)
+
+
 def cmd_awg(args, scope):
     from .units import si
     if args.awg_cmd == 'off':
@@ -266,6 +293,12 @@ def main(argv=None):
     max_wall = si(args.max_wall, 's', '--max-wall')
     if args.cmd == 'watch' and args.duration_total:
         max_wall = max(max_wall, si(args.duration_total, 's', '--for') + 30)
+    if args.cmd in ('capture', 'watch', 'stream'):
+        dur = si(args.duration, 's', '--duration') if args.duration else (
+            10 * si(args.timebase, 's', '--timebase') if args.timebase else 0)
+        if args.cmd == 'stream' and not dur:
+            dur = 10.0
+        max_wall = max(max_wall, 2 * dur + 30)
     scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
     done = threading.Event()
 
@@ -292,6 +325,8 @@ def main(argv=None):
                 cmd_capture(args, scope)
             elif args.cmd == 'watch':
                 cmd_watch(args, scope)
+            elif args.cmd == 'stream':
+                cmd_stream(args, scope)
             elif args.cmd == 'awg':
                 cmd_awg(args, scope)
             elif args.cmd == 'release':

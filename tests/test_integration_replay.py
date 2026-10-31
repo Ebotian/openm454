@@ -40,6 +40,13 @@ class FakeEngine:
         self.programs.append(prog)
         r, raw, rec = recorded(self.name)
         self.recorded_program = rec
+        cb = kw.get('on_chunk')
+        if cb:
+            cb(raw.head)
+            pk = sorted([b for b in r['bulk_in'] if b['pipe'] == 0x86 and b['actual']], key=lambda b: b['seq'])[1:]
+            off = 0
+            for b in pk:
+                cb(bytes(raw.data[off:off + b['actual']])); off += b['actual']
         return raw
 
 
@@ -111,3 +118,20 @@ def test_awg_loopback_recordings(name, freq, lo, hi):
     assert abs(m['freq_hz'] - freq) / freq < 0.005
     assert abs(m['vmax_v'] - hi) < 0.25 and abs(m['vmin_v'] - lo) < 0.25
     assert abs(len(cap.analog['A0']) - cap.meta['acq']['samples']) == 0
+
+
+def test_stream_roll_mode_live_lines():
+    sc = {x['name']: x for x in json.load(open(os.path.join(ROOT, 're', 'scenarios', 'corpus4.json')))}
+    st = scopemod.Settings()
+    st.duration, st.samples = 2.0, 100_000
+    st.offset = {c: 0.0 for c in ('A0', 'A1', 'A2', 'A3')}
+    s = scopemod.Scope(); s.dev = FakeDev(); s.engine = FakeEngine('roll_mode')
+    lines = []
+    cap = s.stream(st, every=0.5, emit=lines.append)
+    assert len(lines) >= 3 and lines[-1].get('final')
+    mid = lines[1]
+    assert 'A1' in mid and mid['A1']['vmax_v'] > 2.0 and abs(mid['A1']['vmin_v']) < 0.3
+    assert 0.3 < mid['D0']['high_frac'] < 0.7 and mid['D0']['edges'] > 100
+    m = cap.measure('A1')
+    assert abs(m['freq_hz'] - 998.75) < 5
+    assert cap.measure('D1')['state'] == 'low'

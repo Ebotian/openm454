@@ -184,6 +184,7 @@ class Scope:
         self.dev = None
         self.engine = None
         self.lock = None
+        self._last_cross = None      # CROSS tables written earlier in this session
 
     # ------------------------------------------------------------ lifecycle
     def open(self):
@@ -285,8 +286,8 @@ class Scope:
         wait = st.auto_after if mode == 'auto' else st.timeout
         hal['trigger']['enable'] = int(triggered_wanted)
         prog, geom = _compile(hal, self.dev.zero_info)
-        raw = self.engine.run(prog, pkt_bytes=geom['pkt_bytes'], need_bytes=geom['need_bytes'],
-                              n_transfers=geom.get('transfer_count', 16), trigger_timeout=wait)
+        collect = max(10.0, 1.5 * st.duration + 2.0)
+        raw = self._run(prog, geom, wait, collect)
         attempts.append('triggered' if raw.head else 'no-trigger')
         if raw.head is None:
             if mode == 'normal':
@@ -294,14 +295,102 @@ class Scope:
                                   'check the trigger level/edge or use --trig-mode auto')
             hal['trigger']['enable'] = 0
             prog, geom = _compile(hal, self.dev.zero_info)
-            raw = self.engine.run(prog, pkt_bytes=geom['pkt_bytes'], need_bytes=geom['need_bytes'],
-                                  n_transfers=geom.get('transfer_count', 16), trigger_timeout=2.0)
+            raw = self._run(prog, geom, 2.0, collect)
             attempts.append('forced')
             if raw.head is None:
                 raise DscopeError('PROTOCOL_ERROR', 'device returned no data even for a forced capture',
                                   'run "dscope release"; if it persists replug the scope')
         frame = _decode(raw, geom, hal)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin)
+        cap = Capture(meta, frame['analog'], frame['digital'])
+        cap.meta['hints'] = _hints(cap) + hints
+        return cap
+
+    def _run(self, prog, geom, trigger_timeout, collect_timeout, **kw):
+        """Engine run with CROSS-table caching: the 4 x 257 CROSS writes are skipped when identical to the
+        ones written earlier in this session (the first capture of every session always writes them)."""
+        cross = [w for w in prog if w[0] in CROSS_REGS]
+        send = prog
+        if cross and cross == self._last_cross:
+            send = [w for w in prog if w[0] not in CROSS_REGS]
+        self._last_cross = None
+        raw = self.engine.run(send, pkt_bytes=geom['pkt_bytes'], need_bytes=geom['need_bytes'],
+                              n_transfers=geom.get('transfer_count', 16), trigger_timeout=trigger_timeout,
+                              collect_timeout=collect_timeout, **kw)
+        if cross:
+            self._last_cross = cross
+        return raw
+
+    def stream(self, st, every=1.0, emit=None):
+        """Long untriggered recording with live statistics: the device streams the record while it is
+        acquired (roll mode for data rates below ~100 MB/s). emit(dict) receives one line per `every` seconds
+        of signal time. Returns the full Capture at the end."""
+        from . import packet
+        st.trig_source, st.trig_mode = None, 'force'
+        hal, scale, warnings, hints = hal_config(st)
+        hal['trigger']['enable'] = 0
+        prog, geom = _compile(hal, self.dev.zero_info)
+        layout = packet.layout_from_regs(geom['_regs'], rates={'analog': geom['analog_rate'], 'digital': geom['digital_rate']},
+                                         trig_domain=geom['trig_domain'])
+        asm = packet.StreamAssembler(layout)
+        an, dg = list(st.analog), list(st.digital)
+        acc = {c: [] for c in an + dg}
+        state = {'t_sig': 0.0, 'next': every, 'i': 0}
+        prate = geom['analog_rate'] if an else geom['digital_rate']
+        t0 = time.time()
+
+        def pick(d, c):
+            if c in d:
+                return d[c]
+            return d.get(int(c[1:]))
+
+        def report(final=False):
+            line = {'i': state['i'], 't_signal_s': round(state['t_sig'], 4), 't_wall_s': round(time.time() - t0, 3)}
+            for c in an:
+                if acc[c]:
+                    codes = np.concatenate(acc[c]).astype(np.float32)
+                    s_ = scale[c]
+                    v = (codes - s_['zero_code']) * s_['volts_per_code'] * s_['probe']
+                    line[c] = {'vmin_v': round(float(v.min()), 4), 'vmax_v': round(float(v.max()), 4),
+                               'vmean_v': round(float(v.mean()), 4), 'n': int(v.size)}
+            for c in dg:
+                if acc[c]:
+                    b = np.concatenate(acc[c])
+                    line[c] = {'high_frac': round(float(b.mean()), 4),
+                               'edges': int(np.count_nonzero(np.diff(b.astype(np.int8))))}
+            for c in acc:
+                acc[c] = []
+            state['i'] += 1
+            if final:
+                line['final'] = True
+            if emit:
+                emit(line)
+
+        def on_chunk(buf):
+            for ev in asm.feed(buf):
+                if ev['kind'] != 'samples':
+                    continue
+                for c in an:
+                    arr = pick(ev['analog'], c)
+                    if arr is not None:
+                        acc[c].append(np.asarray(arr))
+                for c in dg:
+                    arr = pick(ev['digital'], c)
+                    if arr is not None:
+                        acc[c].append(np.asarray(arr))
+                n = ev['nblocks'] * (layout.analog_block_samples if an else layout.digital_block_samples)
+                state['t_sig'] += n / prate
+                if state['t_sig'] >= state['next']:
+                    report()
+                    state['next'] += every
+
+        raw = self._run(prog, geom, 5.0, 1.5 * st.duration + 5.0, on_chunk=on_chunk)
+        report(final=True)
+        if raw.head is None:
+            raise DscopeError('PROTOCOL_ERROR', 'no data from the device')
+        frame = _decode(raw, geom, hal)
+        meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, ['stream'], t0)
+        meta['acq']['mode'] = 'roll' if geom.get('roll') else 'single'
         cap = Capture(meta, frame['analog'], frame['digital'])
         cap.meta['hints'] = _hints(cap) + hints
         return cap
@@ -342,6 +431,9 @@ class Scope:
             t.write(int(args.addr, 0), int(args.value, 0))
             return {'written': [args.addr, args.value]}
         return {}
+
+
+CROSS_REGS = (0x44, 0x54, 0x64, 0x74)
 
 
 def _hints(cap):
