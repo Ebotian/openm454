@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dscope"
+version = "0.1.0"
+description = "Driver and agent-friendly CLI for the DreamSourceLab DSCope M454 USB oscilloscope (v3 protocol)"
+license = "GPL-3.0-only"
+requires-python = ">=3.10"
+dependencies = ["libusb1>=3.1", "numpy>=1.24", "matplotlib>=3.7", "lz4>=4.0"]
+
+[project.optional-dependencies]
+re = ["frida>=17.25", "frida-tools", "uiautomation"]
+test = ["pytest"]
+
+[project.scripts]
+dscope = "dscope.cli:main"
+
+[tool.setuptools]
+packages = ["dscope"]
+
+[tool.pytest.ini_options]
+markers = ["hw: needs the DSCope M454 connected and DSWave closed"]

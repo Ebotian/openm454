@@ -99,7 +99,7 @@ class Device:
                 return True          # already unlocked in this power cycle
             t.write(regs.SEC_DATA, 0)
             t.write(regs.SEC_CTRL, SECU_START)
-            for k in key:
+            for k in reversed(key):        # words are sent last-first (DSWave/DSView order)
                 for _ in range(8):
                     st = t.read16(regs.CTRL)
                     if st & ST_PASS:
