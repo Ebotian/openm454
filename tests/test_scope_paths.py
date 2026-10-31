@@ -140,6 +140,43 @@ def test_cli_output_has_one_owner_after_the_watchdog_fires(capsys):
     assert out == ['{"a":1}', '{"c":3}']
 
 
+def test_watchdog_exits_although_stdout_is_blocked(monkeypatch):
+    """A reader that stops draining stdout leaves the main thread inside _emit holding the output lock; the
+    watchdog must still stop the scope and exit (hot-unplug test, 2026-10-31)."""
+    import threading
+    import time
+    from dscope import cli
+    exited, stopped = threading.Event(), threading.Event()
+
+    class ExitCalled(BaseException):
+        pass
+
+    def fake_exit(code):
+        exited.code = code
+        exited.set()
+        raise ExitCalled
+
+    def fire():
+        try:
+            cli._watchdog_fire('stream', 10.0, types.SimpleNamespace(emergency_stop=stopped.set),
+                               threading.Event(), wait=0.2)
+        except ExitCalled:
+            pass
+
+    monkeypatch.setattr(cli.os, '_exit', fake_exit)
+    cli._OUT['lock'].acquire()                       # the stuck main thread
+    try:
+        t0 = time.time()
+        th = threading.Thread(target=fire, daemon=True)
+        th.start()
+        assert exited.wait(5.0) and exited.code == 6 and stopped.is_set()
+        assert time.time() - t0 < 2.0
+    finally:
+        cli._OUT['lock'].release()
+        th.join(2.0)
+        cli._OUT['owner'] = None
+
+
 def test_explicit_max_wall_only_extends_the_budget():
     from dscope import cli
     a = cli.build_parser().parse_args(['--max-wall', '5s', 'capture', '-c', 'A1'])

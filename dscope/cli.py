@@ -93,7 +93,8 @@ def _capture_args(p):
     g = p.add_argument_group('timing')
     g.add_argument('--timebase', default=None, help='time/div; window = 10 divisions (e.g. 500us)')
     g.add_argument('--duration', default=None, help='window length (e.g. 10ms); default 10 x timebase or 5ms')
-    g.add_argument('--samples', default=None, help='samples per channel (default 100k; max ~50M)')
+    g.add_argument('--samples', default=None, help='samples per channel (default 100k; up to 400M on one channel, fewer with more '
+                   'channels: 4 Gbit memory)')
     g.add_argument('--rate', default=None, help='requested sample rate (e.g. 10M); overrides --samples')
     g = p.add_argument_group('trigger')
     g.add_argument('--trig', default=None,
@@ -413,6 +414,31 @@ def _budget(args):
     return per_iter, per_iter
 
 
+def _watchdog_fire(cmd, max_wall, scope, done, wait=5.0):
+    """Take over the output, report, stop and exit. Nothing here may block for long: a reader that stopped draining
+    stdout leaves the main thread stuck inside _emit (holding the output lock) and a pipe that accepts no more
+    writes, and the device must be released anyway (found by the hot-unplug test, 2026-10-31)."""
+    if _OUT['lock'].acquire(timeout=wait):
+        try:
+            if done.is_set():
+                return
+            _OUT['owner'] = 'watchdog'
+        finally:
+            _OUT['lock'].release()
+    else:
+        _OUT['owner'] = 'watchdog'
+    msg = {'ok': False, 'cmd': cmd, 'error': {
+        'code': 'TIMEOUT_WATCHDOG', 'message': 'command exceeded its time budget (%.0f s, --max-wall); capture '
+                                               'stopped and device released' % max_wall}}
+    out = threading.Thread(target=_emit, args=(msg,), kwargs={'owner': 'watchdog'}, daemon=True)
+    out.start()
+    out.join(wait)
+    helper = threading.Thread(target=scope.emergency_stop, daemon=True)
+    helper.start()
+    helper.join(10.0)            # never wait for a hung close: the OS releases the handle at exit
+    os._exit(6)
+
+
 def main(argv=None):
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -469,17 +495,7 @@ def main(argv=None):
                 break
             if done.wait(min(left, 1.0)):
                 return
-        with _OUT['lock']:
-            if done.is_set():
-                return
-            _OUT['owner'] = 'watchdog'
-        _emit({'ok': False, 'cmd': args.cmd, 'error': {
-            'code': 'TIMEOUT_WATCHDOG', 'message': 'command exceeded its time budget (%.0f s, --max-wall); capture '
-                                                   'stopped and device released' % max_wall}}, owner='watchdog')
-        helper = threading.Thread(target=scope.emergency_stop, daemon=True)
-        helper.start()
-        helper.join(10.0)            # never wait for a hung close: the OS releases the handle at exit
-        os._exit(6)
+        _watchdog_fire(args.cmd, max_wall, scope, done)
     threading.Thread(target=watchdog, daemon=True).start()
 
     code = 0
