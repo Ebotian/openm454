@@ -1,12 +1,12 @@
 """AWG modulation, sweep and burst modes (DSWave 1.2.1 HAL replayed from static analysis; NOT yet recorded).
 
-Status 2026-10-31: every formula below comes from the decompiled HAL (`re/decomp/hal/0x34db10_Awg_ScpiWrite.c`,
+Status 2026-10-31: every formula below comes from the decompiled HAL (`Awg_ScpiWrite`, RVA 0x34db10,
 cited as "SW:L<line>", and the helpers named by RVA) cross-checked in the disassembly by the derivation notes
-`re/notes/awg_mod.md`, `awg_sweep.md`, `awg_burst.md`. GUI limits come from DSWave.exe's tables: static ranges
+and its helpers. GUI limits come from DSWave.exe's tables: static ranges
 `{id, min, max, step}` at RVA 0xBAB9E0, the parameter table with the SCPI paths at 0xBABBC0 and the dynamic ranges
 in `awgparamprovider` FUN_140306300 ("GUI:case <id-7000>"). The basic-mode part of the same HAL replay reproduces
 all 14 corpus3 recordings write for write. The mode registers themselves are confirmed by nothing yet: the
-recording plan is `re/scenarios/corpus5.json` and `tests/test_awg_modes_golden.py` compares once it is recorded.
+recording plan is `tests/fixtures/scenarios/corpus5.json` and `tests/test_awg_modes_golden.py` compares once it is recorded.
 
 Confidence tags: [H] decompiled + disassembly checked, [M] code, but depends on GUI/HAL state or an inference,
 [L] what the FPGA does with the value (only an A0 capture can tell). `TODO(recording)` marks every constant or
@@ -713,7 +713,7 @@ def _mode_block(mode):
 def modulation_scpi(kind='am', wave='sine', freq=10e3, high=3.0, low=0.0, duty=50.0, phase=0.0, mod_wave='sine',
                     mod_freq=100.0, depth=50.0, deviation=None, hop=None, phase_dev=None, psk_inverted=False,
                     source='internal'):
-    """Canonical SCPI order for a modulation setup (re/notes/awg_mod.md section 7): Mode and MODULATIONmode before the
+    """Canonical SCPI order for a modulation setup: Mode and MODULATIONmode before the
     levels, the type parameter (AMdepth) last, so the final state does not depend on earlier HAL state."""
     c = [':AWG:Enable 0,1', ':AWG:Mode 0,1', ':AWG:MODULATIONmode 0,%d' % MOD_KINDS[kind],
          ':AWG:WAVE 0,%d' % awg.WAVES[wave], ':AWG:FREQUENCY 0,%d' % micro(freq), ':AWG:PHASE 0,%d' % micro(phase),
@@ -810,7 +810,7 @@ def program_modulation(kind='am', wave='sine', freq=10e3, high=3.0, low=0.0, dut
 # ---- sweep ---------------------------------------------------------------------------------------------------------
 def sweep_scpi(start, end, time, sweep_type='linear', direction='up', mark=None, wave='sine', high=3.0, low=0.0,
                duty=50.0, phase=0.0, freq=None):
-    """Canonical SCPI order (re/notes/awg_sweep.md section 4): basic carrier in mode 0, SWEEPmode 0 (linear, never
+    """Canonical SCPI order: basic carrier in mode 0, SWEEPmode 0 (linear, never
     asserts), direction, start, end, time, [mark], SWEEPmode <type> (the final recompute), Mode 2 last."""
     c = [':AWG:Enable 0,1', ':AWG:Mode 0,0', ':AWG:WAVE 0,%d' % awg.WAVES[wave],
          ':AWG:FREQUENCY 0,%d' % micro(start if freq is None else freq), ':AWG:PHASE 0,%d' % micro(phase),

@@ -185,7 +185,7 @@ def cfg(run, ch):
 def awg_cfg(name):
     import json
     for f in ("corpus3.json", "corpus1.json", "corpus2.json", "corpus4.json"):
-        p = os.path.join(ROOT, "re", "scenarios", f)
+        p = os.path.join(ROOT, "tests", "fixtures", "scenarios", f)
         if os.path.exists(p):
             for it in json.load(open(p)):
                 if it["name"] == name and "awg" in it:

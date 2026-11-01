@@ -1,7 +1,7 @@
 """Built-in arbitrary waveform generator (MCX output, 0..3 V, sine/square up to 1 MHz, triangle up to 400 kHz).
 
 Register access is indirect: W 0x08 = AWG register address, then W 0x07 = value (DSWave's log labels these
-the other way round). Formulas fitted to DSWave 1.2.1's own register programs (re/scenarios/corpus3.json) and
+the other way round). Formulas fitted to DSWave 1.2.1's own register programs (tests/fixtures/scenarios/corpus3.json) and
 verified by loopback on A0:
   FCW (4/5)      = floor(f_Hz * 40)                       (32-bit, lo/hi)
   RPAR/FPAR      = int(3846153.2 / f_Hz + 0.5)           (14/15, 16/17; edge parameter, same for both)

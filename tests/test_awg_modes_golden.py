@@ -1,6 +1,6 @@
 """dscope.awg_modes (AWG modulation / sweep / burst) against DSWave 1.2.1.
 
-Golden part: compares re/scenarios/corpus5.json with DSWave's recorded register programs. The recorded programs come
+Golden part: compares tests/fixtures/scenarios/corpus5.json with DSWave's recorded register programs. The recorded programs come
 from tests/fixtures/awg_modes_programs.json (committed, like tests/fixtures/awg_programs.json for corpus3), made after
 the hal_run recording with
     python tests/test_awg_modes_golden.py --extract re/traces/<SESSION>
@@ -8,7 +8,7 @@ or, while that fixture does not exist, straight from $DSCOPE_CORPUS5_SESSION or 
 corpus5 results (git-ignored, local only). Until one of them exists the golden tests skip.
 
 Offline part (always runs): corpus sanity (DSWave's own SCPI spellings, no command that makes DSWave assert, stored
-predictions current), program_* == the HAL replay, pinned values from re/notes/awg_{mod,sweep,burst}.md and the
+predictions current), program_* == the HAL replay, pinned values from the decompiled HAL's tables and the
 argument validation.
 """
 import functools
@@ -28,13 +28,13 @@ if ROOT not in sys.path:
 from dscope import awg, awg_modes as M  # noqa: E402
 from dscope.errors import DscopeError  # noqa: E402
 
-CORPUS_PATH = os.path.join(ROOT, 're', 'scenarios', 'corpus5.json')
+CORPUS_PATH = os.path.join(ROOT, 'tests', 'fixtures', 'scenarios', 'corpus5.json')
 FIXTURE_PATH = os.path.join(ROOT, 'tests', 'fixtures', 'awg_modes_programs.json')
 CORPUS = json.load(open(CORPUS_PATH, encoding='utf-8'))
 NAMES = [s['name'] for s in CORPUS]
 BY_NAME = {s['name']: s for s in CORPUS}
 
-#: AWG SCPI tokens from DSWave.exe's token table (re/notes/recon_dswave_binary.md section 4), an independent source
+#: AWG SCPI tokens from DSWave.exe's token table, an independent source
 #: for the spellings in dscope.awg_modes.SCPI (which come from the GUI parameter table, RVA 0xBABBC0).
 DSWAVE_AWG_TOKENS = (
     'Enable TRIGGERdelay TRIGGERoutput TRIGGERedge TRIGGERsource BURSTperiod BURSTgatePolarity BURSTcounter '
@@ -51,7 +51,7 @@ PERTURBED = (
     dict(running=0, enabled=1, mode=1, mod_type=0, depth=80.0, high=0.2, low=0.15),
 )
 
-RECORD_HINT = ('corpus5 not recorded yet: record re/scenarios/corpus5.json with re/tools/hal_run.py in a traced '
+RECORD_HINT = ('corpus5 not recorded yet: record tests/fixtures/scenarios/corpus5.json in a traced '
                'DSWave-copy session, then run python tests/test_awg_modes_golden.py --extract re/traces/<SESSION>')
 
 
@@ -413,7 +413,7 @@ def test_am_levels_stay_inside_3v_for_gui_depths():
         assert 0 <= lv[M.A_LOW] <= lv[M.A_HIGH] <= M.CODE_3V, (high, low, depth, lv)
 
 
-# ---- offline: pinned values (re/notes/awg_{mod,sweep,burst}.md tables) ----------------------------------------------
+# ---- offline: pinned values (the decompiled HAL's tables) ------------------------------------------------------------
 def test_pinned_modulation_values():
     assert M.am_state_param(50) == (5120, 16400)
     assert M.am_state_param(0) == (6144, 0)
@@ -584,7 +584,7 @@ def test_limits_are_inclusive():
 def _extract_main(argv):
     import argparse
     ap = argparse.ArgumentParser(description='Write tests/fixtures/awg_modes_programs.json from a hal_run session '
-                                             'that recorded re/scenarios/corpus5.json.')
+                                             'that recorded tests/fixtures/scenarios/corpus5.json.')
     ap.add_argument('--extract', required=True, metavar='SESSION', help='e.g. re/traces/S02_awg_modes')
     ap.add_argument('--out', default=FIXTURE_PATH)
     a = ap.parse_args(argv)

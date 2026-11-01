@@ -1,10 +1,10 @@
 # DSCope M454 USB protocol ("v3", DSWave 1.2.1)
 
-Recovered on 2026-10-31 from DSWave 1.2.1 (closed source) by static analysis (Ghidra, `re/decomp/`),
-in-process SCPI injection (`re/tools/dswave_scpi.py`, `re/tools/hal_run.py`) and WinUSB tracing with Frida
-(`re/tools/dswave_usbtrace.py`). Evidence: `re/traces/S00_cold` (cold open), `re/traces/S01_warm` (warm open
-plus ~125 scripted runs, git-ignored because the traces contain the device security key), `re/scenarios/*.json`
-(what each run configured), `re/notes/*.md` (reconnaissance). This file is the authority for the driver in `dscope/`.
+Recovered on 2026-10-31 from DSWave 1.2.1 (closed source) by static analysis (Ghidra), in-process SCPI injection
+into DSWave's hardware layer and WinUSB tracing with Frida: a cold open, a warm open and ~125 scripted runs. The
+recordings (they contain the device's security key), the decompiled code and the working notes are not published;
+RVAs refer to DSWave.exe 1.2.1. What each recorded run configured is in `tests/fixtures/scenarios/*.json`. This file
+is the authority for the driver in `dscope/`.
 
 ## 1. Identification
 
@@ -45,7 +45,7 @@ plus ~125 scripted runs, git-ignored because the traces contain the device secur
 ### MSO (0x10-0x74)
 HORI 0x10-0x1B (BASE, DEPTH0/1, RWORDS0/1, ADIVL/H, DDIVL/H, AMTXS, DMTXS, SLOWCNT), VERT 0x20-0x2B (DFOLD, DTHR,
 DUP, DEN0-3, AFOLD, ACROSS, ABRH_INV, AWR), TRIG 0x30-0x3A (BASE, PRES0/1, PREW0/1, LEVEL, INDEX, MARGIN, HOLD0/1,
-PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. Formulas: §6 and `re/notes/mso_formulas.md`.
+PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. Formulas: §6.
 
 ### MCU (0xF0-0xFF)
 | Addr | Name | Access |
@@ -73,7 +73,7 @@ PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. F
    running): W 0xFE=0xFFFE, ~10 ms, W 0xFE=1, poll R 0xFF bit1 (<= 11x),
    W 0xFC = len & 0xFFFF, W 0xFD = len >> 16, EP2 OUT the raw bitstream (466,408 bytes) in one transfer,
    poll R 0xFF bit7 (<= 11 x 50 ms). DSWave takes ~110 ms for this.
-   Recovery (`dscope recover`, approved by the owner 2026-10-31): the same configuration with DONE = 1, still as the
+   Recovery (`dscope recover`): the same configuration with DONE = 1, still as the
    first write of the session. The PROG_B pulse clears the FPGA as at power-up. Verified on hardware: open
    0.86 s, security passes again, selftest passes after it. The AWG output is **not** reset by it.
 4. Wait 100 ms, R 0xF1 (>= 0x3100).
@@ -103,7 +103,7 @@ The raw image starts with 16 x 0xFF and the byte-swapped Spartan-6 sync word `55
 ## 6. Capture configuration
 
 DSWave's HAL is configured with SCPI-like commands (`:ANALOG:CHANNEL:Vdiv ch,uV`, `:SAMPLEtime ps`,
-`:STORAGEdepth S`, `:TRIGger:...`; full vocabulary in `re/notes/recon_dswave_binary.md`) and turns them into a
+`:STORAGEdepth S`, `:TRIGger:...`; the vocabulary is DSWave.exe's SCPI token table) and turns them into a
 register program at `:Work:RUN 0,0`. The driver reproduces that program (`dscope/mso.py`, golden-tested
 against the recorded runs). Key facts:
 
@@ -123,8 +123,8 @@ against the recorded runs). Key facts:
   whenever the enabled-channel set changes** (stale tables corrupt levels).
 * **Digital threshold**: VERT_DTHR = int(1023 x (volts / 5) x 25/33).
 
-Exact per-register formulas (verified write-for-write against 123 DSWave runs; full derivation with RVAs in
-`re/notes/mso_formulas.md`, implementation in `dscope/mso.py`):
+Exact per-register formulas (verified write-for-write against 123 DSWave runs; implementation, with the RVA of
+every ported function, in `dscope/mso.py`):
 
 | Register | Formula |
 |---|---|
@@ -155,7 +155,7 @@ up to 64 queued transfers; repeat mode (MODE 1) delivers one frame (data + 4 KiB
 
 ## 7. Run / stop
 
-Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implementation: `dscope/acquire.py`.
+Implementation (with the RVAs): `dscope/acquire.py`.
 
 1. At least 100 ms after the previous stop. Setup program: W 0x01 = 0, 1 ms, MSO writes, W 0x00 = MODE,
    W 0xF9 = 0. All of these are direct control transfers.
@@ -213,7 +213,7 @@ Full evidence (RVAs, trace counts): `re/notes/acquisition_protocol.md`. Implemen
   sample = (u32[2] & 0x3FFFFFFF) + pre-trigger offset (block-rounded `SAMPLEindex`).
 * **Single mode, 4 analog + 8 digital**: 320-byte blocks of 64 samples: 256 analog bytes = 8 groups of
   [A0 x8][A1 x8][A2 x8][A3 x8] (8-bit codes), then 64 digital bytes = 8 channels x u64 LE, bit i = sample i.
-  Other channel sets / folds: see `re/notes/packet_format.md` and `dscope/packet.py`.
+  Other channel sets / folds: see `dscope/packet.py`.
 * Only the first N samples (`MSO: send samples: N`) are valid; the device keeps streaming until stopped.
 * **Volts** = (code - VOFF) x V/div / 29.375 x probe factor; higher code = higher voltage.
 
@@ -234,7 +234,7 @@ Indirect: W 0x08 = awg register, W 0x07 = value. `dscope/awg.py` matches all 13 
 | 12/13 RSLOPE/FSLOPE | DUTY32 = trunc(duty x 4e9); RSLOPE = trunc(65472 / ((DUTY32 >> 22) & 0x3ff)), FSLOPE = trunc(65472 / ((4e9 - DUTY32) >> 22)) |
 | 14-17 RPAR/FPAR | trunc(3846153.0 / f_Hz + 0.5); 4 in sweep mode |
 
-Register names 0x00-0x66 (modulation, sweep, burst, trigger) are listed in `re/notes/recon_dswave_binary.md`.
+Register names 0x00-0x66 (modulation, sweep, burst, trigger) are listed in `dscope/awg_modes.py` (`REG_NAMES`).
 The formulas above are DSWave's exact ones (`dscope/awg_modes.DswaveAwgHal` replays its AWG command handler and
 reproduces every recorded program write for write).
 
@@ -244,8 +244,8 @@ apart); its 0 V reads +5 mV; noise mode is Gaussian-like around (low+high)/2 wit
 ~2.5 MHz (frequency ignored).
 
 ### 9.1 Modulation, sweep, burst (MODE 1 / 2 / 3)
-Register programs derived from the decompiled HAL (`re/notes/awg_mod.md`, `awg_sweep.md`, `awg_burst.md`) and
-confirmed against DSWave for the 73 scenarios of `re/scenarios/corpus5.json` (`tests/test_awg_modes_golden.py`,
+Register programs derived from the decompiled HAL and
+confirmed against DSWave for the 73 scenarios of `tests/fixtures/scenarios/corpus5.json` (`tests/test_awg_modes_golden.py`,
 fixture `tests/fixtures/awg_modes_programs.json`). Implementation: `dscope/awg_modes.py` (`program_modulation`,
 `program_sweep`, `program_burst`), started with the basic START. Verified on A0:
 * Sweep: linear 1 -> 10 kHz in 10 ms ramps at 0.9 MHz/s and restarts every 10 ms; log 1 -> 100 kHz in 100 ms has

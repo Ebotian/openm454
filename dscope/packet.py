@@ -1,6 +1,6 @@
 """Decoder for the DSCope M454 ("v3" protocol) capture stream on bulk IN EP 0x86.
 
-Stream structure (all acquisition modes, see re/notes/packet_format.md):
+Stream structure (all acquisition modes):
 
     [head 4096 B]  then, per frame:  [data: acq_bytes][tail 4096 B]  (+ zero padding after the last frame)
 

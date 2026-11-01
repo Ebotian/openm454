@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 dependencies = ["libusb1>=3.1", "numpy>=1.24", "matplotlib>=3.7", "lz4>=4.0"]
 
 [project.optional-dependencies]
-re = ["frida>=17.25", "frida-tools", "uiautomation"]
 test = ["pytest"]
 
 [project.scripts]
@@ -22,4 +21,4 @@ packages = ["dscope"]
 
 [tool.pytest.ini_options]
 markers = ["hw: needs the DSCope M454 connected and DSWave closed"]
-addopts = "-m 'not hw'"   # hardware tests only on request: pytest -m hw tests/hw
+addopts = "-m 'not hw'"   # tests marked hw need the scope; they run only on request (pytest -m hw)

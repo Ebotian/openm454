@@ -3,7 +3,7 @@
 program written before an acquisition.
 
 Everything here is pure computation (no USB).  The source of every formula is noted next to it as the
-RVA of the DSWave.exe function it was ported from (see re/notes/mso_formulas.md for the long version).
+RVA of the DSWave.exe 1.2.1 function it was ported from.
 
 Public API
 ----------

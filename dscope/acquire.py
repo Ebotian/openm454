@@ -1,7 +1,7 @@
 """Acquisition engine: run one register-programmed capture and collect the raw stream.
 
 Mirrors DSWave 1.2.1 (UsbDevice_TransferThread 0x33f950, UsbBsp3x Setup/Start/StopAcquire and the UsbTransfer
-callbacks; evidence and RVAs in re/notes/acquisition_protocol.md):
+callbacks; RVAs refer to DSWave.exe 1.2.1):
 
   1. >= 100 ms after the previous run and after the last register write: setup program
      (W 0x01=0, settle, MSO writes ..., W 0x00 MODE, W 0xF9=0)

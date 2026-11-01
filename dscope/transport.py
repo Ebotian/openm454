@@ -7,13 +7,13 @@ Wire protocol (recovered from DSWave 1.2.1, hal::UsbBsp3x):
   EP 0x84 bulk IN  : 1-byte handshake used while an acquisition is running
   EP 0x86 bulk IN  : capture data (4096-byte head packet, then data packets)
 
-Safety (do not relax without the owner's explicit approval):
+Safety (never relax these):
   * only bRequest 0xB0/0xB1/0xB2 are ever sent (0xB3 = firmware ISP is impossible here)
   * writes to MCU registers 0xF0-0xFF are refused except FLUSH_DATA, HARDWARE_INDEX(0), and the
     FPGA-config / EEPROM-read registers inside their guarded contexts
   * EP 0x02 OUT is only reachable from fpga_config() and only while the FPGA reports not-configured
 
-Acquisition rules (DSWave UsbBsp3x, re/notes/acquisition_protocol.md):
+Acquisition rules (DSWave UsbBsp3x):
   * while an acquisition runs (`running`: from the W CTRL=1 start write until the stop handshake is done) every
     register access must sit inside an EP 0x84 handshake (handshake()); plain write()/read() are refused
   * after any failed handshake or failed control transfer while running the session is `failed` (DSWave
@@ -36,7 +36,7 @@ READ_DELAY = 0.015             # RegRead asks for 10 ms, which lasts 13-31 ms on
 TIMEOUT_MS = 1000
 HS_TIMEOUT_MS = 1000             # UsbBsp3x_RegBulkIn timeout
 HINT_REOPEN = ('run the command once more: the next open first stops a run left behind (best effort). '
-               'If that fails too (USB_ERROR or DEVICE_ERROR), ask the owner to unplug and replug the scope')
+               'If that fails too (USB_ERROR or DEVICE_ERROR), unplug and replug the scope')
 _ABANDONED = []                  # libusb objects that must never be closed or finalized (see Transport.close)
 
 

@@ -15,7 +15,17 @@ RAW_SHA256 = 'f45a97ea44ffda110cffc659eaba250d191985f7e60fdfcbd153b57372e9cfa1'
 BIN_VERSION = 0x3100
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CANDIDATE_EXES = [os.path.join(ROOT, 'DSWave', 'DSWave.exe')]
+
+
+def candidate_exes():
+    """Where DSWave.exe may be: $DSCOPE_DSWAVE (the exe or its folder), then a copy in DSWave/ next to dscope/."""
+    out = []
+    env = os.environ.get('DSCOPE_DSWAVE')
+    if env:
+        out.append(env if env.lower().endswith('.exe') else os.path.join(env, 'DSWave.exe'))
+    out.append(os.path.join(ROOT, 'DSWave', 'DSWave.exe'))
+    return out
+
 CACHE = os.path.join(ROOT, 'firmware', 'm454_fpga_%04x.bin' % BIN_VERSION)
 
 
@@ -71,14 +81,15 @@ def bitstream():
         raw = open(CACHE, 'rb').read()
         if hashlib.sha256(raw).hexdigest() == RAW_SHA256:
             return raw
-    for exe in CANDIDATE_EXES:
+    for exe in candidate_exes():
         if os.path.exists(exe):
             raw = extract_from_exe(exe)
             os.makedirs(os.path.dirname(CACHE), exist_ok=True)
             open(CACHE, 'wb').write(raw)
             return raw
     raise DscopeError('FIRMWARE_SOURCE', 'DSWave 1.2.1 not found; needed once to extract the FPGA bitstream',
-                      'install DSWave 1.2.1 or copy its folder to DSWave/ next to the dscope package')
+                      'set DSCOPE_DSWAVE to DSWave.exe (or its folder), or copy the DSWave 1.2.1 folder to '
+                      'DSWave/ next to the dscope package')
 
 
 if __name__ == '__main__':

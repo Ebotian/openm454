@@ -78,7 +78,7 @@ def settings_for(cfg, trig_source, pos=50.0):
 
 
 def run_capture(name, trig_source):
-    sc = {s['name']: s for f in ('corpus2.json', 'corpus3.json') for s in json.load(open(os.path.join(ROOT, 're', 'scenarios', f)))}
+    sc = {s['name']: s for f in ('corpus2.json', 'corpus3.json') for s in json.load(open(os.path.join(ROOT, 'tests', 'fixtures', 'scenarios', f)))}
     cfg = sc[name]['cfg']
     s = scopemod.Scope()
     s.dev = FakeDev()
@@ -121,7 +121,7 @@ def test_awg_loopback_recordings(name, freq, lo, hi):
 
 
 def test_stream_roll_mode_live_lines():
-    sc = {x['name']: x for x in json.load(open(os.path.join(ROOT, 're', 'scenarios', 'corpus4.json')))}
+    sc = {x['name']: x for x in json.load(open(os.path.join(ROOT, 'tests', 'fixtures', 'scenarios', 'corpus4.json')))}
     st = scopemod.Settings()
     st.duration, st.samples = 2.0, 100_000
     st.offset = {c: 0.0 for c in ('A0', 'A1', 'A2', 'A3')}

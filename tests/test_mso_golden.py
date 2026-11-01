@@ -2,7 +2,7 @@
 
 The recorded runs live in re/traces/S01_warm/scen/*.json (git-ignored: they contain the device's
 security key) and the calibration blob in state/cache/zero_info_from_trace.bin; the tests skip when
-those are absent.  The runs are replayed in recording order (re/scenarios/corpus1..4.json, which is
+those are absent.  The runs are replayed in recording order (tests/fixtures/scenarios/corpus1..4.json, which is
 also the file-mtime order), accumulating the SCPI state exactly like DSWave's HAL does (e.g.
 :TRIGger:Enable 1 persists from corpus2 on, :REPEATModeEnable persists until modes_reset).
 
@@ -28,7 +28,7 @@ from dscope.regs import name as reg_name
 REPO = Path(__file__).resolve().parents[1]
 SCEN_DIR = REPO / 're' / 'traces' / 'S01_warm' / 'scen'
 ZERO_BIN = REPO / 'state' / 'cache' / 'zero_info_from_trace.bin'
-CORPORA = [REPO / 're' / 'scenarios' / ('corpus%d.json' % i) for i in range(1, 5)]
+CORPORA = [REPO / 'tests' / 'fixtures' / 'scenarios' / ('corpus%d.json' % i) for i in range(1, 5)]
 
 QUERY_INDEX = {':ANALOG:SAMPLE:Rate?': 0, ':ANALOG:SAMPLE:Depth?': 1,
                ':DIGITAL:SAMPLE:Rate?': 2, ':DIGITAL:SAMPLE:Depth?': 3}

@@ -1,6 +1,6 @@
 """Acquisition engine against a simulated M454 (no hardware).
 
-The simulator enforces the rules recovered from DSWave (re/notes/acquisition_protocol.md):
+The simulator enforces the rules recovered from DSWave (docs/PROTOCOL.md section 7):
   * while the device runs, control transfers are only legal between EP 0x84 bytes 02 and 03
   * the device streams until it is stopped; it must never find EP 0x86 without a pending read
   * after a failed handshake the host must not send anything
