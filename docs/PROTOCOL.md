@@ -34,7 +34,7 @@ is the authority for the driver in `dscope/`.
 ### HW / base (0x00-0x0F)
 | Addr | Name | Notes |
 |---|---|---|
-| 0x00 | HW_BASE_MODE | 0 = single block, 1 = repeat (real-time frames), 2 = stream (slow time bases, roll) |
+| 0x00 | HW_BASE_MODE | bit0 repeat, bit1 stream (sent while acquired), bit2 loop: 0 = single block, 1 = repeat (real-time frames), 2 = stream (one record, roll), 3 = repeat + stream, 6 = loop (endless stream, §8.1) |
 | 0x01 | HW_BASE_CTRL | write: 1 = run, 0 = stop. read: bit1 SEC_READY, bit2 SEC_PASS (bit5 seen set after DSWave sessions) |
 | 0x02 | HW_BASE_ACTION | 0 at start, 0x08 flow pause/stop, 0x10 resume, 0x04 abort/flush (after stop). read = progress |
 | 0x03 | HW_BASE_SYNC | sync word written at start (DSWave uses 0) |
@@ -216,6 +216,35 @@ Implementation (with the RVAs): `dscope/acquire.py`.
   Other channel sets / folds: see `dscope/packet.py`.
 * Only the first N samples (`MSO: send samples: N`) are valid; the device keeps streaming until stopped.
 * **Volts** = (code - VOFF) x V/div / 29.375 x probe factor; higher code = higher voltage.
+
+### 8.1 Stream (MODE 2) and loop (MODE 6) throughput (hardware, 2026-11-01)
+
+Measured with every input on a ~1 kHz square; a lost or overwritten packet shows as a phase step of the square.
+
+* **The 102,400 kB/s switch is a HAL policy** (M454 profile `hw+0x68`; 10,240 on USB 2), read only by the geometry
+  (0x3512f0). Below it DSWave streams in MODE 2 with packets of 20 ms of data and ~200 ms of reads queued; at or
+  above it, it records in MODE 0 and reads 1 MiB packets afterwards. Forced into MODE 2, 200 MB/s still streamed
+  in real time; at 400 MB/s the readout ran at 270-290 MB/s and the record arrived complete and continuous (the
+  DDR buffers one record). A finished MODE 0 record reads out at 250-265 MB/s. Every MODE 0/1/2 record is bounded
+  by `rd_bytes <= 512 MiB`; chaining MODE 2 records costs ~0.18 s per seam (stop, 100 ms quiet, setup, start).
+* **Loop mode** (`:LOOPModeEnable 1`; DSWave's Data Acquisition / 记录仪 mode) is an endless stream: the setup of
+  a MODE 2 run with trigger off and explicit rates (AUTORATE off; `:SAMPLEtime` is ignored), fold 0
+  (VERT_AFOLD / VERT_DFOLD = 0x100 x channels, so at most 100 MSa/s per channel), HORI_RWORDS = one packet - 1
+  word, HW_BASE_MODE = 6. After the 4096-byte head (u32[2] = 0xC00000nn) the device sends plain blocks until the
+  normal stop: no tails, no markers, every read full. Packets as in MODE 2 (20 ms of data, or floor(1 MiB / block)
+  blocks with 16 reads at >= 102,400 kB/s); the host may read in larger multiples.
+* Rates are 100 MHz / ADIV. ADIV 1, 2, 4, 5, 10, 20, 100, 2000, 5000 and 100000 were checked; ADIV 3 (nominally
+  33.3 MSa/s) samples at 25 MSa/s like ADIV 4.
+* **Small packets** (20 ms of data <= 1023 bytes, i.e. below ~51 kB/s; HORI_BASE bit 3): each 4096-byte read
+  carries one block (64 samples per channel) followed by 4032 bytes of filler; one read per block period.
+* **The 512 MiB DDR is a ring.** The host may fall behind by up to ~512 MiB without loss (host stalls of up to 10 s
+  at 50 MB/s were absorbed and caught up). Past that the device overwrites unread data without any flag, and the
+  stream stays misaligned until it is restarted. The host must track backlog = rate x (t - t_head) - bytes read.
+* **Sustained readout while acquiring: ~196 MB/s** (any read size from 1 to 8 MiB). Gap-free loop runs: 4 analog
+  + 8 digital at 50 kSa/s (60 s) and at 1-20 MSa/s (100 MB/s), 8 digital at 100 MSa/s, 2 analog + 8 digital at
+  50 MSa/s (150 MB/s for 180 s, 27 GB, host lag constant), 4 analog + 8 digital at 1 MSa/s for 10 min (3 GB,
+  599,361 periods, no step above 1.1 us). At 200 MB/s the backlog grows ~4 MB/s; at 250 MB/s the ring overflowed
+  after ~10 s.
 
 ## 9. AWG (MCX output 0..3 V)
 
