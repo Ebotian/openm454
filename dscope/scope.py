@@ -91,6 +91,8 @@ def settings_from_args(a):
         st.trig_source = parts[0].upper()
         if len(parts) > 1 and parts[1]:
             st.trig_edge = parts[1].lower()
+        if len(parts) == 3 and st.trig_source.startswith('D') and parts[2].strip().lower().endswith('s'):
+            parts = parts[:2] + ['', parts[2]]          # digital lines have no level: D4:npulse>:200us
         if len(parts) > 2 and parts[2]:
             st.trig_level = si(parts[2], 'V', 'trigger level')
         if len(parts) > 3 and parts[3]:

@@ -217,3 +217,11 @@ def test_window_is_kept_when_the_rate_snaps_down():
         geom = scopemod.Scope().plan(st)['geometry']
         assert geom['analog_rate'] == want_rate
         assert abs(geom['record_s'] - 5e-3) / 5e-3 < 0.03, (an, samples, geom['record_s'])   # 64-sample blocks
+
+
+def test_digital_pulse_trigger_needs_no_level():
+    from dscope import cli
+    from dscope.scope import settings_from_args
+    st = settings_from_args(cli.build_parser().parse_args(['capture', '-c', 'D4', '--trig', 'D4:npulse>:200us']))
+    assert (st.trig_source, st.trig_edge, st.trig_level) == ('D4', 'npulse>', None)
+    assert abs(st.trig_pulse - 200e-6) < 1e-12

@@ -2,6 +2,8 @@
   A0 <- AWG output;  A1 (1x probe), A2 (10x probe), A3 (1x probe) <- ~2.8 Vpp 1 kHz calibration square;
   D0, D2, D5, D7 <- the same square;  D1, D3, D4, D6 floating.
 Each check returns {id, desc, pass, measured, expected, gating}. Run: python -m dscope selftest [--quick]
+When state/fixture.json says the digital leads are wired to something else (dscope.fixture), the checks that need
+the square on D0-D7 are reported as skipped.
 
 Order = risk: device info, then one forced (untriggered) single-channel capture, then triggered captures. The first
 device-level failure (DEVICE_ERROR, USB_ERROR, TIMEOUT_DATA) ends the run: every later check is reported as skipped
@@ -9,6 +11,7 @@ instead of talking to a device that is in an unknown state.
 """
 import time
 
+from . import fixture
 from .errors import DscopeError
 from .scope import Settings
 
@@ -49,8 +52,14 @@ def run(scope, quick=False, awg=True):
     items = []
     t_all = time.time()
     fatal = {}
+    fx = fixture.load()
 
-    def check(cid, desc, fn, gating=True):
+    def check(cid, desc, fn, gating=True, needs=None):
+        if needs and fx.get(needs) != 'standard':
+            items.append({'id': cid, 'desc': desc, 'pass': None, 'gating': False, 'skipped': True,
+                          'measured': {'skipped': '%s leads are not on the standard fixture (state/fixture.json)'
+                                                  % needs}, 'expected': None, 'ms': 0})
+            return
         if fatal:
             items.append({'id': cid, 'desc': desc, 'pass': False, 'gating': gating, 'skipped': True,
                           'measured': {'skipped': 'device failed in %s' % fatal['id']}, 'expected': None, 'ms': 0})
@@ -83,7 +92,7 @@ def run(scope, quick=False, awg=True):
         return ok, {'vpp_v': m['vpp_v'], 'stop': acq.get('stop'), 'handshakes': acq.get('handshakes'),
                     'complete': acq.get('complete'), 'samples': acq.get('samples')}, \
             'forced single-channel capture stops normally and shows the ~2.8 Vpp square on A1'
-    check('V00', 'smoke: forced capture on A1 (lowest-risk run)', v00)
+    check('V00', 'smoke: forced capture on A1 (lowest-risk run)', v00, needs='analog')
 
     ref = {}
 
@@ -98,7 +107,7 @@ def run(scope, quick=False, awg=True):
         return ok, {c: {k: m[c].get(k) for k in ('freq_hz', 'vtop_v', 'vbase_v', 'duty_pct')} for c in ANALOG_SQ} | \
             {'triggered': cap.meta['acq']['triggered'], 'rate': cap.meta['acq']['analog_rate_hz']}, \
             'A1-A3 ~1 kHz +-2%, top 2.8 V +-12%, base 0 +-0.15 V, duty 50+-3%, channels agree (A2 via 10x)'
-    check('V02', 'analog calibration square on A1-A3', v02)
+    check('V02', 'analog calibration square on A1-A3', v02, needs='analog')
 
     def v03():
         tops = {}
@@ -108,7 +117,7 @@ def run(scope, quick=False, awg=True):
             tops['%gV/div' % vd] = cap.measure('A1')['vtop_v']
         r = ref.get('top', 2.8)
         return all(_near(v, r, rel=0.06) for v in tops.values()), tops, 'vtop within 6%% of %.3g V at every V/div' % r
-    check('V03', 'V/div consistency (A1 at 0.5/1/2 V/div)', v03)
+    check('V03', 'V/div consistency (A1 at 0.5/1/2 V/div)', v03, needs='analog')
 
     def v04():
         out = {}
@@ -123,7 +132,7 @@ def run(scope, quick=False, awg=True):
         ok = all(_near(v['freq_hz'], f, rel=0.005) for v in out.values())
         ok = ok and out['A1']['rate'] == 400e6 and out['A1,A3']['rate'] == 200e6
         return ok, out, 'freq within 0.5%% of %.6g Hz at every rate; 1 ch = 400 MSa/s, 2 ch = 200 MSa/s' % f
-    check('V04', 'sample-rate consistency incl. fold modes', v04)
+    check('V04', 'sample-rate consistency incl. fold modes', v04, needs='analog')
 
     def v05():
         cap = scope.capture(_st(analog=['A1'], digital=['D%d' % i for i in range(8)]))
@@ -135,7 +144,7 @@ def run(scope, quick=False, awg=True):
         al = dt is not None and dt <= 2e-6     # A1 edge is slow (~8 us 10-90 %); digital switches mid-edge
         return on_ok and off_ok and al, {c: md[c]['state'] for c in md} | {'A1_vs_D0_edge_s': dt}, \
             'D0/D2/D5/D7 toggling at the reference frequency, D1/D3/D4/D6 static, D0 edge within 2 us of A1 mid crossing'
-    check('V05', 'digital channels + alignment with A1', v05)
+    check('V05', 'digital channels + alignment with A1', v05, needs='digital')
 
     def v06():
         res = {}
@@ -143,7 +152,7 @@ def run(scope, quick=False, awg=True):
             cap = scope.capture(_st(analog=[], digital=['D0'], threshold=thr, trig_source=None, trig_mode='force'))
             res['%gV' % thr] = cap.measure('D0')['state']
         return res['0.5V'] == 'toggling' and res['4V'] in ('low', 'high'), res, '0.5 V toggles, 4.0 V static'
-    check('V06', 'digital threshold', v06)
+    check('V06', 'digital threshold', v06, needs='digital')
 
     def v07():
         res = {}
@@ -153,13 +162,13 @@ def run(scope, quick=False, awg=True):
             res['%d%%' % pos] = {'edge_t_s': t, 't0_s': cap.t0('A1'), 'triggered': cap.meta['acq']['triggered']}
         ok = all(v['triggered'] and v['edge_t_s'] is not None and abs(v['edge_t_s']) < 15e-6 for v in res.values())
         return ok, res, 'rising edge (mid-level) within 15 us of t=0 (slow ~8 us edge, trigger at 1.4 V)'
-    check('V07', 'trigger position', v07)
+    check('V07', 'trigger position', v07, needs='analog')
 
     def v08():
         cap = scope.capture(_st(analog=['A1'], digital=['D5'], trig_source='D5', trig_edge='fall'))
         t = _t_of_first_edge_near_zero(cap, 'D5', rising=False)
         return cap.meta['acq']['triggered'] and t is not None and abs(t) < 1e-6, {'D5_fall_t_s': t}, 'D5 falling edge at t=0 +-1 us'
-    check('V08', 'digital trigger source (D5 falling)', v08)
+    check('V08', 'digital trigger source (D5 falling)', v08, needs='digital')
 
     def v09():
         if awg:
@@ -191,7 +200,7 @@ def run(scope, quick=False, awg=True):
             m = cap.measure('A0'); res['off'] = {'vpp_v': m.get('vpp_v'), 'vmean_v': m.get('vmean_v')}
             ok = ok and m['vpp_v'] < 0.15 and abs(m['vmean_v']) < 0.15
             return ok, res, 'sine 10 kHz 2 Vpp mean 1 V; square 5 kHz 25 %; off = flat at 0 V'
-        check('V10', 'AWG loopback on A0', v10)
+        check('V10', 'AWG loopback on A0', v10, needs='analog')
 
     def v11():
         n, t0 = 5 if quick else 20, time.time()
@@ -199,11 +208,13 @@ def run(scope, quick=False, awg=True):
             scope.capture(_st(analog=['A0', 'A1', 'A2', 'A3'], digital=['D%d' % i for i in range(8)], samples=100_000, duration=1e-3))
         per = (time.time() - t0) / n
         return per < 1.5, {'captures': n, 'seconds_per_capture': round(per, 3)}, '< 1.5 s per 4-ch 100k capture'
-    check('V11', 'repeated captures / latency', v11)
+    check('V11', 'repeated captures / latency', v11, needs='analog')
 
     passed = sum(1 for i in items if i['pass'])
+    skipped = sum(1 for i in items if i.get('skipped') and i['pass'] is None)
     res = {'ok': all(i['pass'] for i in items if i['gating']), 'cmd': 'selftest', 'passed': passed,
-           'failed': len(items) - passed, 'seconds': round(time.time() - t_all, 1), 'items': items}
+           'failed': len(items) - passed - skipped, 'skipped': skipped, 'fixture': fx,
+           'seconds': round(time.time() - t_all, 1), 'items': items}
     if fatal:
         res['stopped_at'] = fatal['id']
         res['device_error'] = fatal['error']

@@ -112,11 +112,20 @@ def _capture_args(p):
     g.add_argument('--edges', type=int, default=0, help='list the first N edge times per channel')
     g.add_argument('--dump', type=int, default=0, help='decimated min/max/mean series with N points per channel')
     g.add_argument('--window', default=None, help="restrict measurements/plot to t0:t1 (e.g. -1ms:1ms)")
+    _decode_args(g)
     g.add_argument('--no-plot', action='store_true')
     g.add_argument('--no-save', action='store_true')
     g.add_argument('--out', default=DEFAULT_OUT)
     g.add_argument('--tag', default='cap')
     g.add_argument('--awg', default=None, help="also set the AWG first: 'sine,10k,0V,2V[,duty%%]'")
+
+
+def _decode_args(g):
+    g.add_argument('--decode', action='append', default=[], metavar='SPEC',
+                   help="protocol decoder (repeatable): 'uart:rx=D4,baud=115200[,invert=1]', "
+                        "'spi:clk=D1,mosi=D3,miso=D2,cs=D0,mode=0', 'i2c:scl=D6,sda=D7', 'can:rx=D6,bitrate=500k'")
+    g.add_argument('--decode-limit', type=int, default=50,
+                   help='frames listed per decoder in the JSON (all of them go to <capture>_decode.json)')
 
 
 def build_parser():
@@ -174,6 +183,7 @@ def build_parser():
     an = sub.add_parser('analyze', help='measure a saved capture (.npz) (no device)')
     an.add_argument('file'); an.add_argument('--window', default=None); an.add_argument('--edges', type=int, default=0)
     an.add_argument('--dump', type=int, default=0); an.add_argument('--channels', default=None)
+    _decode_args(an)
     st = sub.add_parser('selftest', help='verify driver + bench fixture')
     st.add_argument('--quick', action='store_true'); st.add_argument('--no-awg', action='store_true')
     sub.add_parser('release', help='make sure the device is idle and released')
@@ -206,11 +216,14 @@ def cmd_capture(args, scope, emit=True):
         res.update(cap.summary(edges_n=args.edges, window=win))
     if args.dump:
         res['dump'] = {ch: cap.dump(ch, args.dump, win) for ch in cap.channels()}
+    decoded = _decode(cap, args, win, res)
     files = {}
     if not args.no_save:
         from .capture import new_path, prune
         stem = new_path(args.out, args.tag)
         files['npz'] = _fwd(cap.save(stem + '.npz'))
+        if decoded:
+            files['decode'] = _fwd(_save_json(stem + '_decode.json', decoded))
         if not args.no_plot:
             files['png'] = _fwd(plotmod.plot(cap, stem + '.png', window=win, title=_title(cap)))
         prune(args.out)
@@ -224,6 +237,21 @@ def cmd_capture(args, scope, emit=True):
     if emit:
         _emit(res)
     return cap, res
+
+
+def _decode(cap, args, win, res):
+    """Run every --decode spec; res gets the size-limited results, the full ones are returned."""
+    from .decode import decode, trim
+    full = [decode(cap, spec, win, None) for spec in getattr(args, 'decode', None) or ()]
+    if full:
+        res['decode'] = [trim(r, args.decode_limit) for r in full]
+    return full
+
+
+def _save_json(path, obj):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(obj, f, separators=(',', ':'))
+    return path
 
 
 def _title(cap):
@@ -263,6 +291,11 @@ def cmd_watch(args, scope):
                     flat['%s.%s' % (ch, k)] = v
         keys = fields or [k for k in flat if k.split('.')[1] in ('vpp_v', 'freq_hz', 'duty_pct', 'state', 'vmean_v')]
         line = {'i': i, 't_s': round(time.time() - t0, 3), 'triggered': cap.meta['acq'].get('triggered')}
+        if getattr(args, 'decode', None):
+            line['decode'] = [{k: r.get(k) for k in ('protocol', 'count', 'errors', 'frames') if k in r}
+                              for r in _decode(cap, args, None, {})]
+            for r in line['decode']:
+                r['frames'] = r['frames'][:args.decode_limit]
         for k in keys:
             line[k] = flat.get(k)
             if isinstance(flat.get(k), (int, float)) and not isinstance(flat.get(k), bool):
@@ -319,11 +352,14 @@ def cmd_stream(args, scope):
         _clear_stop_request()
     res = {'ok': True, 'cmd': 'stream', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
     res.update(cap.summary())
+    decoded = _decode(cap, args, None, res)
     files = {}
     if not args.no_save:
         from .capture import new_path
         stem = new_path(args.out, args.tag if args.tag != 'cap' else 'stream')
         files['npz'] = _fwd(cap.save(stem + '.npz'))
+        if decoded:
+            files['decode'] = _fwd(_save_json(stem + '_decode.json', decoded))
         if not args.no_plot:
             files['png'] = _fwd(plotmod.plot(cap, stem + '.png', title=_title(cap)))
     res['files'] = files
@@ -386,6 +422,7 @@ def cmd_offline(args):
         res.update(s)
         if args.dump:
             res['dump'] = {ch: cap.dump(ch, args.dump, win) for ch in (chans or cap.channels())}
+        _decode(cap, args, win, res)
         _emit(res)
 
 
@@ -400,6 +437,8 @@ def _budget(args):
     if args.cmd not in ('capture', 'watch', 'stream'):
         return 60.0, None
     st = stream_settings(args) if args.cmd == 'stream' else settings_from_args(args)
+    from .decode import check
+    check(args.decode, list(st.analog) + list(st.digital))
     geom = Scope().plan(st)['geometry']
     rec = geom['record_s']
     collect = max(10.0, 1.5 * rec + 2.0)

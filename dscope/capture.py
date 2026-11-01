@@ -98,6 +98,11 @@ class Capture:
                 out['digital'][ch] = self.measure(ch, edges_n, window)
         return out
 
+    def decode(self, spec, window=None, limit=None):
+        """Protocol decoder on captured lines, e.g. 'uart:rx=D4,baud=115200' (see dscope.decode)."""
+        from .decode import decode
+        return decode(self, spec, window, limit)
+
     def dump(self, ch, points=200, window=None):
         """Decimated min/max/mean series for numeric inspection without a picture."""
         arr = self.volts(ch) if ch.startswith('A') else self.digital[ch].astype(np.float32)
