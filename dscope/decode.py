@@ -366,12 +366,13 @@ def i2c(L, p, limit):
         # The slow pulled-up edges chatter at the threshold. A quarter of the SCL high time (set by the master; a
         # stretching slave only lengthens the lows), measured on a provisionally cleaned line, and at least 50 ns
         # (the fast-mode spike filter), stays far below any pulse that matters for START, STOP or data.
-        floor = max(2, int(round(50e-9 * L.rate)))
-        s0 = deglitch(L.lines['scl'], floor)
+        # Undersampled lines (a few samples per SCL period) get no filter: there a 1-sample high is real.
+        spike = int(round(50e-9 * L.rate))
+        s0 = deglitch(L.lines['scl'], 2)                    # provisional: without 1-sample spikes
         e0 = _edges(s0)
         runs = np.diff(e0)
         high = runs[s0[e0[:-1]] == 1] if len(e0) > 1 else runs
-        g = max(floor, int(np.median(high) / 4)) if len(high) > 4 else floor
+        g = max(spike, int(np.median(high) / 4)) if len(high) > 4 else spike
     else:
         g = int(p['glitch'])
     scl, sda = deglitch(L.lines['scl'], g), deglitch(L.lines['sda'], g)

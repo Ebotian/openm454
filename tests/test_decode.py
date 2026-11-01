@@ -294,3 +294,12 @@ def test_i2c_ten_bit_combined_read_and_a_bare_read_header():
     f = r['frames'][0]
     assert (f['addr'], f['read'], f['data_hex']) == (0x200, True, '1122')
     assert f['notes'] == ['10-bit read header without a preceding address write: low address byte unknown']
+
+
+@pytest.mark.parametrize('quarter', [1.0, 1.25, 1.5, 2.0])
+def test_i2c_decodes_at_four_to_eight_samples_per_scl_period(quarter):
+    tr = [{'addr': 0x53, 'data': [0x1D], 'restart': {'addr': 0x53, 'read': True, 'data': [0xA5, 0x11, 0x22, 0x33]}},
+          {'addr': 0x2A, 'nack_addr': True}]
+    scl, sda = sim.i2c(tr, quarter=quarter, lead=10, tail=10)
+    r = decode(cap_of(1e6, D0=scl, D1=sda), 'i2c:scl=D0,sda=D1')
+    assert [f['data_hex'] for f in r['frames']] == ['1da5112233', ''] and r['errors'] == 1

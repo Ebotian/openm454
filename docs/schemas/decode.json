@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dscope/decode.json",
+  "title": "dscope protocol decoder result",
+  "description": "One element of the `decode` list printed by `python -m dscope capture|stream|analyze --decode SPEC` (all frames are written to files.decode, `*_decode.json`, a list of these objects; `watch` lines carry only protocol, count, errors and the first frames). Also the return value of dscope.capture.Capture.decode(). Times are seconds relative to the trigger.",
+  "type": "object",
+  "required": ["protocol", "spec", "params", "count", "errors", "frames"],
+  "properties": {
+    "protocol": {"enum": ["uart", "spi", "i2c", "can"]},
+    "spec": {"type": "string", "description": "the --decode spec as given"},
+    "params": {"type": "object", "description": "spec options in effect (strings)"},
+    "count": {"type": "integer", "minimum": 0, "description": "frames decoded in the window"},
+    "errors": {"type": "integer", "minimum": 0, "description": "frames with at least one error"},
+    "frames": {"type": "array", "description": "at most --decode-limit frames (all of them in the file)"},
+    "truncated": {"type": "boolean", "description": "true when frames was cut to --decode-limit"},
+    "error_frames": {"type": "array", "description": "with truncated: up to --decode-limit frames that have errors"},
+    "note": {"type": "string", "description": "e.g. 'no activity on the line'"},
+    "glitch_samples": {"type": "integer", "minimum": 0, "description": "pulses shorter than this were removed"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"protocol": {"const": "uart"}}},
+      "then": {
+        "properties": {
+          "baud": {"type": "number", "description": "baud rate used (snapped to a standard rate with baud=auto)"},
+          "baud_measured": {"type": "number", "description": "with baud=auto: the measured rate"},
+          "samples_per_bit": {"type": "number"},
+          "data_hex": {"type": "string", "description": "low 8 bits of up to 4096 characters"},
+          "text": {"type": "string", "description": "the first 1024 characters, non-printable as '.'"},
+          "frames": {"type": "array", "items": {"$ref": "#/$defs/uart_frame"}},
+          "error_frames": {"type": "array", "items": {"$ref": "#/$defs/uart_frame"}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"protocol": {"const": "spi"}}},
+      "then": {
+        "properties": {
+          "mode": {"type": "integer", "minimum": 0, "maximum": 3},
+          "bits": {"type": "integer", "minimum": 1, "maximum": 64},
+          "sck_hz": {"type": "number", "description": "mean clock rate inside words"},
+          "samples_per_clock": {"type": "number"},
+          "mosi_hex": {"type": "string", "description": "8-bit words only: up to 4096 bytes"},
+          "miso_hex": {"type": "string"},
+          "frames": {"type": "array", "items": {"$ref": "#/$defs/spi_frame"}},
+          "error_frames": {"type": "array", "items": {"$ref": "#/$defs/spi_frame"}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"protocol": {"const": "i2c"}}},
+      "then": {
+        "properties": {
+          "scl_hz": {"type": "number", "description": "mean SCL rate inside bytes (stretched periods excluded)"},
+          "frames": {"type": "array", "items": {"$ref": "#/$defs/i2c_frame"}},
+          "error_frames": {"type": "array", "items": {"$ref": "#/$defs/i2c_frame"}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"protocol": {"const": "can"}}},
+      "then": {
+        "properties": {
+          "bitrate": {"type": "number"},
+          "bitrate_measured": {"type": "number", "description": "with bitrate=auto"},
+          "samples_per_bit": {"type": "number"},
+          "sample_point": {"type": "number"},
+          "frames": {"type": "array", "items": {"$ref": "#/$defs/can_frame"}},
+          "error_frames": {"type": "array", "items": {"$ref": "#/$defs/can_frame"}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "uart_frame": {
+      "type": "object",
+      "required": ["t_s", "value"],
+      "properties": {
+        "t_s": {"type": "number", "description": "start bit edge"},
+        "value": {"type": "integer", "minimum": 0, "description": "data bits (5..9)"},
+        "errors": {"type": "array", "items": {"enum": ["parity", "framing", "break"]}}
+      }
+    },
+    "spi_frame": {
+      "type": "object",
+      "required": ["t_s", "t_end_s", "words"],
+      "properties": {
+        "t_s": {"type": "number", "description": "CS asserted (or the first clock without CS)"},
+        "t_end_s": {"type": "number"},
+        "words": {"type": "integer", "minimum": 0},
+        "mosi": {"type": ["string", "array"], "description": "hex for 8-bit words, else a list of integers"},
+        "miso": {"type": ["string", "array"]},
+        "errors": {"$ref": "#/$defs/errors", "description": "'partial word (n bits)', 'cut by the capture window'"}
+      }
+    },
+    "i2c_segment": {
+      "type": "object",
+      "required": ["data_hex", "acks"],
+      "properties": {
+        "addr": {"type": ["integer", "null"], "description": "7- or 10-bit address (10-bit header NACKed: high bits only)"},
+        "addr_10bit": {"type": "boolean"},
+        "read": {"type": ["boolean", "null"]},
+        "addr_ack": {"type": ["boolean", "null"]},
+        "data_hex": {"type": "string"},
+        "acks": {"type": "array", "items": {"type": "boolean"}, "description": "one per data byte, true = ACK"}
+      }
+    },
+    "i2c_frame": {
+      "type": "object",
+      "required": ["t_s", "t_end_s", "stop", "segments", "data_hex"],
+      "properties": {
+        "t_s": {"type": "number", "description": "START"},
+        "t_end_s": {"type": "number", "description": "STOP (or the end of the window)"},
+        "stop": {"type": "boolean"},
+        "segments": {"type": "array", "items": {"$ref": "#/$defs/i2c_segment"}, "description": "one per START / repeated START"},
+        "addr": {"type": ["integer", "null"], "description": "first segment"},
+        "addr_ack": {"type": ["boolean", "null"]},
+        "read": {"type": ["boolean", "null"], "description": "last segment"},
+        "restart": {"type": "boolean"},
+        "data_hex": {"type": "string", "description": "data bytes of all segments"},
+        "last_ack": {"type": ["boolean", "null"]},
+        "cut_start": {"type": "boolean", "description": "the window joined a transaction in progress"},
+        "errors": {"$ref": "#/$defs/errors", "description": "'address NACK', 'write NACK at byte n', 'read NACK before the last byte', 'n stray bits', 'no STOP in the window'"},
+        "notes": {"$ref": "#/$defs/errors", "description": "'last read byte ACKed by the master', 'window starts mid-transaction: ...', '10-bit read header without ...'"}
+      }
+    },
+    "can_frame": {
+      "type": "object",
+      "required": ["t_s"],
+      "description": "a frame ended by a stuff error (e.g. an error flag) may carry only t_s and errors",
+      "properties": {
+        "t_s": {"type": "number", "description": "start of frame"},
+        "id": {"type": "integer", "minimum": 0},
+        "id_hex": {"type": "string"},
+        "extended": {"type": "boolean"},
+        "remote": {"type": "boolean"},
+        "dlc": {"type": "integer", "minimum": 0, "maximum": 15},
+        "data": {"type": "string"},
+        "crc": {"type": "string"},
+        "crc_ok": {"type": "boolean"},
+        "ack": {"type": "boolean", "description": "ACK slot dominant"},
+        "stuff_bits": {"type": "integer", "minimum": 0},
+        "errors": {"$ref": "#/$defs/errors", "description": "'CRC mismatch (computed ...)', 'stuff error ...', 'form error: ...'"}
+      }
+    }
+  }
+}
