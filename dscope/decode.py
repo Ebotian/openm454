@@ -10,8 +10,8 @@ invert=1 inverts a line: RS232 levels (idle negative) and CANH (dominant high) n
 percentile) with 10 % hysteresis. All lines of one decoder must be in the same group (all digital or all analog).
 
 The digital inputs have no hysteresis, so slow edges chatter at high sample rates: pulses shorter than `glitch`
-samples are removed first (default: 1/8 of a UART/CAN bit; 1 sample less than a third of the fastest SPI clock
-half-period; 50 ns for I2C). Times are seconds on the capture's time base (t = 0 at the trigger).
+samples are removed first (default: 1/8 of a UART/CAN bit; a third of the fastest SPI clock half-period; for I2C
+1/8 of the typical SCL half-period, at least 50 ns). Times are seconds on the capture's time base (t = 0 at the trigger).
 """
 import numpy as np
 
@@ -73,25 +73,43 @@ def _edges(b):
     return np.flatnonzero(b[1:] != b[:-1]) + 1
 
 
-def deglitch(b, n):
-    """Remove pulses shorter than n samples (they take the level before them)."""
+def deglitch(b, n, max_passes=32):
+    """Remove pulses shorter than n samples: majority (median) filter passes of width 2n-1, applied only around the
+    short runs and repeated until no inner run is shorter than n (one pass leaves dense chatter behind; a binary
+    median filter converges to a signal whose inner runs are all >= n). Unlike filling a short run with the level
+    before it, this keeps edges in place when a spike splits a run."""
     n = int(n)
     if n <= 1 or len(b) < 3:
         return b
-    e = _edges(b)
-    if len(e) < 2:
-        return b
-    short = np.flatnonzero(np.diff(e) < n)
-    if not len(short):
-        return b
-    out = b.copy()
-    done = -1
-    for i in short:
-        a, z = e[i], e[i + 1]
-        if a < done:
-            continue
-        out[a:z] = out[a - 1]
-        done = z
+    k = n - 1
+    out = b
+    nb = len(b)
+    for _ in range(max_passes):
+        e = _edges(out)
+        if len(e) < 2:
+            break
+        short = np.flatnonzero(np.diff(e) < n)
+        if not len(short):
+            break
+        # regions [first edge of a cluster of short runs - k, last edge + k], merged where they come within k
+        lo = e[short] - k
+        hi = e[short + 1] + k
+        new = np.ones(len(lo), bool)
+        new[1:] = lo[1:] > np.maximum.accumulate(hi)[:-1] + k
+        first = np.flatnonzero(new)
+        starts, ends = lo[first], np.maximum.reduceat(hi, first)
+        results = []
+        for a_, z_ in zip(starts, ends):                    # computed from this pass's input, then written
+            a_, z_ = max(0, int(a_)), min(nb, int(z_))
+            pa, pz = max(0, a_ - k), min(nb, z_ + k)
+            seg = np.pad(out[pa:pz].astype(np.int32), (k - (a_ - pa), k - (pz - z_)), mode='edge')
+            c = np.concatenate(([0], np.cumsum(seg)))
+            win = c[2 * k + 1:] - c[:-(2 * k + 1)]          # window sums centred on a_ .. z_-1
+            results.append((a_, z_, (win[:z_ - a_] > k).astype(b.dtype)))
+        if out is b:
+            out = b.copy()
+        for a_, z_, v in results:
+            out[a_:z_] = v
     return out
 
 
@@ -266,9 +284,10 @@ def spi(L, p, limit):
     if not 1 <= bits <= 64:
         raise _bad('spi: bits 1..64')
     clk = L.lines['clk']
-    e = _edges(clk)
     if p['glitch'] == 'auto':
-        runs = np.diff(e)
+        # from a provisionally cleaned clock (1-sample pulses removed): raw run lengths shrink exactly when the
+        # edges chatter. Any clock that can be decoded has half periods of 2 samples or more.
+        runs = np.diff(_edges(deglitch(clk, 2)))
         g = max(1, int(np.percentile(runs, 10) / 3)) if len(runs) > 4 else 1
     else:
         g = int(p['glitch'])
@@ -340,79 +359,149 @@ def spi(L, p, limit):
 
 # ------------------------------------------------------------------------------------------- I2C
 def i2c(L, p, limit):
-    g = int(round(50e-9 * L.rate)) if p['glitch'] == 'auto' else int(p['glitch'])
+    """Transactions from START to STOP. Each has `segments` (one per START / repeated START): addr (7 or 10 bit),
+    read, addr_ack, data_hex, acks; plus the convenience fields addr (first segment), read (last segment),
+    restart, data_hex (all data bytes), last_ack. Bits clocked outside a transaction are ignored."""
+    if p['glitch'] == 'auto':
+        # The slow pulled-up edges chatter at the threshold. A quarter of the SCL high time (set by the master; a
+        # stretching slave only lengthens the lows), measured on a provisionally cleaned line, and at least 50 ns
+        # (the fast-mode spike filter), stays far below any pulse that matters for START, STOP or data.
+        floor = max(2, int(round(50e-9 * L.rate)))
+        s0 = deglitch(L.lines['scl'], floor)
+        e0 = _edges(s0)
+        runs = np.diff(e0)
+        high = runs[s0[e0[:-1]] == 1] if len(e0) > 1 else runs
+        g = max(floor, int(np.median(high) / 4)) if len(high) > 4 else floor
+    else:
+        g = int(p['glitch'])
     scl, sda = deglitch(L.lines['scl'], g), deglitch(L.lines['sda'], g)
     rise = np.flatnonzero((scl[:-1] == 0) & (scl[1:] == 1)) + 1
     de = _edges(sda)
     de = de[scl[de] == 1]                                   # SDA changes while SCL is high: START / STOP
     ev = [(int(i), 'S' if sda[i] == 0 else 'P') for i in de] + [(int(i), 'B') for i in rise]
     ev.sort()
-    frames, nerr, cur, bitbuf = [], 0, None, []
+    frames, nerr, periods = [], 0, []
+    st = {'cur': None, 'seg': None, 'bits': [], 'state': None, 'last_rise': None,
+          'idle': bool(scl[0]) and bool(sda[0]) if len(scl) else True}
+
+    def finish_segment(cut=False):
+        """cut: the window ended inside this segment, so its last byte's ACK says nothing about the master."""
+        seg = st['seg']
+        if seg is None:
+            return
+        cur = st['cur']
+        errs = cur.setdefault('errors', [])
+        if len(st['bits']) > 1 and not cut:                 # SCL always rises once before a STOP / repeated START
+            errs.append('%d stray bits' % len(st['bits']))
+        if seg.get('addr_ack') is False:
+            errs.append('address NACK')
+        acks = seg['acks']
+        if seg.get('read'):
+            if acks and not all(acks[:-1]):
+                errs.append('read NACK before the last byte')
+            if acks and acks[-1] and not cut:
+                cur.setdefault('notes', []).append('last read byte ACKed by the master')
+        elif seg.get('addr_ack') and not all(acks):
+            errs.append('write NACK at byte %d' % acks.index(False))
+        st['seg'] = None
 
     def close(end_idx, stop):
-        nonlocal cur, nerr
+        nonlocal nerr
+        cur = st['cur']
         if cur is None:
             return
+        finish_segment(cut=not stop)
         cur['t_end_s'] = _fmt_t(L.t(end_idx))
         cur['stop'] = stop
-        if len(bitbuf) > 1:                                 # SCL always rises once before a STOP
-            cur.setdefault('errors', []).append('%d stray bits' % len(bitbuf))
-        if cur.get('errors'):
+        if not stop:
+            cur['errors'].append('no STOP in the window')
+        segs = cur['segments']
+        for s_ in segs:
+            s_['data_hex'] = bytes(s_.pop('data')).hex()
+        first = segs[0] if segs else {}
+        cur['addr'] = first.get('addr')
+        cur['addr_ack'] = first.get('addr_ack')
+        cur['read'] = segs[-1].get('read') if segs else None
+        cur['restart'] = len(segs) > 1
+        cur['data_hex'] = ''.join(s_['data_hex'] for s_ in segs)
+        lastacks = segs[-1]['acks'] if segs else []
+        cur['last_ack'] = lastacks[-1] if lastacks else None
+        if not cur['errors']:
+            del cur['errors']
+        else:
             nerr += 1
         frames.append(cur)
-        cur = None
+        st['cur'] = None
+
+    def byte(val, ack):
+        seg, state = st['seg'], st['state']
+        if state == 'addr':
+            seg['read'] = bool(val & 1)
+            seg['addr_ack'] = ack
+            if val >> 3 == 0b11110:                         # 10-bit address
+                hi = (val >> 1) & 3
+                seg['addr_10bit'] = True
+                if seg['read']:                             # a read header is never followed by an address byte
+                    prev = [s_ for s_ in st['cur']['segments'][:-1] if s_.get('addr_10bit')]
+                    if prev and prev[-1]['addr'] >> 8 == hi:
+                        seg['addr'] = prev[-1]['addr']
+                    else:
+                        seg['addr'] = hi << 8
+                        st['cur'].setdefault('notes', []).append(
+                            '10-bit read header without a preceding address write: low address byte unknown')
+                    st['state'] = 'data'
+                else:
+                    seg['addr'] = hi << 8
+                    st['state'] = 'addr2' if ack else 'data'
+            else:
+                seg['addr'] = val >> 1
+                st['state'] = 'data'
+        elif state == 'addr2':
+            seg['addr'] |= val
+            seg['addr_ack'] = ack
+            st['state'] = 'data'
+        else:
+            seg['data'].append(val)
+            seg['acks'].append(ack)
 
     for i, kind in ev:
         if kind == 'S':
-            restart = cur is not None
-            if restart:
-                bitbuf.clear()
-                cur.setdefault('segments', 1)
-                cur['segments'] += 1
-                cur['restart'] = True
-                cur['_first'] = True
+            if st['cur'] is None:
+                st['cur'] = {'t_s': _fmt_t(L.t(i)), 'segments': []}
+                if not st['idle']:                          # SCL was clocking with no STOP since the window start
+                    st['cur']['cut_start'] = True
+                    st['cur'].setdefault('notes', []).append(
+                        'window starts mid-transaction: this START may be a repeated START')
             else:
-                cur = {'t_s': _fmt_t(L.t(i)), 'bytes': [], '_first': True}
-            bitbuf.clear()
+                finish_segment()
+            st['seg'] = {'data': [], 'acks': []}
+            st['cur']['segments'].append(st['seg'])
+            st['state'], st['bits'] = 'addr', []
         elif kind == 'P':
             close(i, True)
-            bitbuf.clear()
-        elif cur is not None:
-            bitbuf.append(int(sda[i]))
-            if len(bitbuf) == 9:
-                val = int(''.join(map(str, bitbuf[:8])), 2)
-                ack = bitbuf[8] == 0
-                if cur.pop('_first', False):
-                    if val >> 3 == 0b11110:
-                        cur['addr10_hi'] = (val >> 1) & 3
-                        cur['_addr10'] = True
-                    else:
-                        cur['addr'] = val >> 1
-                    cur['read'] = bool(val & 1)
-                    cur['addr_ack'] = ack
-                    if not ack:
-                        cur.setdefault('errors', []).append('address NACK')
-                elif cur.pop('_addr10', False) and not cur['read']:
-                    cur['addr'] = (cur.pop('addr10_hi') << 8) | val
-                    cur['addr_10bit'] = True
-                    if not ack:
-                        cur.setdefault('errors', []).append('address NACK')
-                else:
-                    cur['bytes'].append(val)
-                    cur.setdefault('acks', []).append(ack)
-                bitbuf.clear()
-    if cur is not None:
-        cur.setdefault('errors', []).append('no STOP in the window')
+            st['bits'] = []
+            st['idle'] = True
+        elif st['cur'] is None:
+            st['idle'] = False                              # bits outside a transaction: we joined mid-transaction
+        elif st['seg'] is not None:
+            if st['last_rise'] is not None:
+                periods.append(i - st['last_rise'])
+            st['last_rise'] = i
+            st['bits'].append(int(sda[i]))
+            if len(st['bits']) == 9:
+                b = st['bits']
+                byte(int(''.join(map(str, b[:8])), 2), b[8] == 0)
+                st['bits'] = []
+            continue
+        st['last_rise'] = None
+    if st['cur'] is not None:
         close(L.n - 1, False)
-    for f in frames:
-        for k in ('_first', '_addr10', 'addr10_hi'):
-            f.pop(k, None)
-        f['data_hex'] = bytes(f.pop('bytes')).hex()
-        acks = f.pop('acks', [])
-        if acks and not all(acks[:-1]):
-            f.setdefault('errors', []).append('data NACK before the last byte')
-        f['last_ack'] = acks[-1] if acks else None
-    return _result('i2c', p, frames, nerr, limit, {'glitch_samples': g})
+    extra = {'glitch_samples': g}
+    if len(periods) > 4:
+        per = np.array(periods, np.float64)
+        per = per[per < 1.5 * np.median(per)]               # SCL periods inside bytes, not the gaps
+        extra['scl_hz'] = float('%.6g' % (L.rate / float(np.mean(per))))
+    return _result('i2c', p, frames, nerr, limit, extra)
 
 
 # ------------------------------------------------------------------------------------------- CAN

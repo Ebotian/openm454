@@ -10,17 +10,17 @@ COLUMNS = 3000
 
 
 def _decimate(t, y, cols=COLUMNS):
+    """Min/max per block of k samples; every sample lands in a block (a k = n // cols reshape used to drop the tail,
+    up to a quarter of the record), and the trace ends at the last sample."""
     n = len(y)
     if n <= 2 * cols:
         return t, y
-    k = n // cols
-    m = k * cols
-    yy = y[:m].reshape(cols, k)
-    tt = t[:m].reshape(cols, k)[:, 0]
-    lo, hi = yy.min(1), yy.max(1)
-    t2 = np.repeat(tt, 2)
-    y2 = np.empty(2 * cols, dtype=np.float64)
-    y2[0::2], y2[1::2] = lo, hi
+    k = -(-n // cols)
+    starts = np.arange(0, n, k)
+    lo, hi = np.minimum.reduceat(y, starts), np.maximum.reduceat(y, starts)
+    t2 = np.append(np.repeat(t[starts], 2), t[-1])
+    y2 = np.empty(2 * len(starts) + 1, dtype=np.float64)
+    y2[0:-1:2], y2[1:-1:2], y2[-1] = lo, hi, y[-1]
     return t2, y2
 
 

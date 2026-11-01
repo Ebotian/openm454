@@ -65,35 +65,61 @@ def spi(mosi, miso=None, mode=0, bits=8, order='msb', half=5, frame=None, cs_lea
 
 
 # ------------------------------------------------------------------------------------------- I2C
-def i2c(transactions, quarter=5, lead=10, tail=10):
-    """transactions: [{'addr', 'read', 'data': [...], 'nack_addr': bool, 'restart': {...} or None}] -> (scl, sda).
-    Each bit takes 4 quarter-periods; acks: the receiver pulls SDA low (master NACKs the last read byte)."""
+def i2c(transactions, quarter=5, lead=10, tail=10, stretch=None, release_slave=False):
+    """transactions: [{'addr', 'read', 'data': [...], 'nack_addr': bool, 'nack_data': bool, 'addr10': bool,
+    'restart': {...} or None}] -> (scl, sda). Each bit takes 4 quarter-periods; acks: the receiver pulls SDA low
+    (the master NACKs the last read byte). stretch: {byte number (counted over the whole call): extra quarters of
+    SCL low before that byte} - on the wire the same as a slave stretching the clock. release_slave: SDA stays
+    high (released) wherever the slave drives it (its ACKs and read data), for driving a real slave open-drain."""
     segs = [((1, 1), lead)]
+    stretch = stretch or {}
+    nbyte = [0]
 
-    def bit(v):
-        segs.extend([((0, v), 1), ((1, v), 2), ((0, v), 1)])
+    def bit(v, extra=0):
+        segs.extend([((0, v), 1 + extra), ((1, v), 2), ((0, v), 1)])
 
     def start():
         segs.extend([((1, 1), 1), ((1, 0), 1), ((0, 0), 1)])
 
-    def byte(v, ack):
+    def byte(v, ack, slave_data=False):
+        extra = stretch.get(nbyte[0], 0)
+        nbyte[0] += 1
         for k in range(7, -1, -1):
-            bit((v >> k) & 1)
-        bit(0 if ack else 1)
+            bit(1 if slave_data and release_slave else (v >> k) & 1, extra if k == 7 else 0)
+        bit(1 if release_slave and not slave_data else (0 if ack else 1))
+
+    def restart():
+        segs.extend([((0, 1), 1), ((1, 1), 1)])            # SDA high, SCL high, then START again
+        segs.extend([((1, 0), 1), ((0, 0), 1)])
 
     for t in transactions:
         start()
         seg = t
+        last10 = None
         while seg is not None:
-            byte((seg['addr'] << 1) | (1 if seg.get('read') else 0), not seg.get('nack_addr'))
+            rd = bool(seg.get('read'))
+            if seg.get('addr10'):
+                hdr = 0xF0 | ((seg['addr'] >> 7) & 6)
+                if rd and last10 != seg['addr']:            # a 10-bit read starts as a write of both address bytes
+                    byte(hdr, True)
+                    byte(seg['addr'] & 0xFF, True)
+                    restart()
+                if rd:
+                    byte(hdr | 1, not seg.get('nack_addr'))
+                else:
+                    byte(hdr, not seg.get('nack_addr'))
+                    if not seg.get('nack_addr'):
+                        byte(seg['addr'] & 0xFF, True)
+                last10 = seg['addr']
+            else:
+                byte((seg['addr'] << 1) | (1 if rd else 0), not seg.get('nack_addr'))
             if not seg.get('nack_addr'):
                 d = seg.get('data', [])
                 for i, v in enumerate(d):
-                    byte(v, i < len(d) - 1 if seg.get('read') else not seg.get('nack_data'))
+                    byte(v, i < len(d) - 1 if rd else not seg.get('nack_data'), slave_data=rd)
             seg = seg.get('restart')
             if seg is not None:
-                segs.extend([((0, 1), 1), ((1, 1), 1)])   # SDA high, SCL high, then START again
-                segs.extend([((1, 0), 1), ((0, 0), 1)])
+                restart()
         segs.extend([((0, 0), 1), ((1, 0), 1), ((1, 1), 2)])  # STOP
     segs.append(((1, 1), tail))
     return render(segs, quarter)

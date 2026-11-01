@@ -180,7 +180,7 @@ def run(scope, quick=False, awg=True):
         except DscopeError as e:
             dt = time.time() - t0
             return e.code == 'TIMEOUT_NO_TRIGGER' and dt < 3.0, {'code': e.code, 'seconds': round(dt, 2)}, 'TIMEOUT_NO_TRIGGER within ~1 s'
-    check('V09', 'normal-mode timeout with no signal (A0, AWG off)', v09)
+    check('V09', 'normal-mode timeout with no signal (A0, AWG off)', v09, needs='analog')
 
     if awg:
         def v10():

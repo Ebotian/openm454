@@ -114,7 +114,9 @@ def test_i2c_write_read_restart_and_nacks():
     assert (f[0]['addr'], f[0]['read'], f[0]['data_hex'], f[0].get('errors')) == (0x50, False, '0010', None)
     assert f[1]['restart'] and f[1]['read'] and f[1]['data_hex'] == '02deadbe' and f[1]['last_ack'] is False
     assert f[2]['addr'] == 0x23 and 'address NACK' in f[2]['errors']
-    assert 'data NACK before the last byte' in f[3]['errors']
+    assert 'write NACK at byte 0' in f[3]['errors']
+    assert [s['addr'] for s in f[1]['segments']] == [0x50, 0x50] and f[1]['segments'][0]['data_hex'] == '02'
+    assert f[1]['segments'][1]['acks'] == [True, True, False]
 
 
 def test_i2c_slow_rises_chatter_but_decode():
@@ -195,3 +197,100 @@ def test_output_is_limited_but_counts_everything():
     line = sim.uart(prbs(300), 115200, rate)
     r = decode(cap_of(rate, D4=line), 'uart:rx=D4,baud=115200', limit=10)
     assert r['count'] == 300 and len(r['frames']) == 10 and r['truncated'] and len(r['data_hex']) == 600
+
+
+def test_i2c_clock_stretching_ten_bit_addresses_and_scl_rate():
+    tr = [{'addr': 0x2A5, 'addr10': True, 'data': [0x11, 0x22]},
+          {'addr': 0x53, 'data': [0x32], 'restart': {'addr': 0x53, 'read': True, 'data': [1, 2, 3, 4, 5, 6]}}]
+    scl, sda = sim.i2c(tr, quarter=25, stretch={1: 40, 4: 400, 6: 25})   # 10 us bits; up to 100 us stretched
+    r = decode(cap_of(10e6, D0=scl, D1=sda), 'i2c:scl=D0,sda=D1', limit=None)
+    f = r['frames']
+    assert r['errors'] == 0 and len(f) == 2
+    assert f[0]['segments'][0]['addr_10bit'] and f[0]['addr'] == 0x2A5 and f[0]['data_hex'] == '1122'
+    assert f[1]['segments'][1]['data_hex'] == '010203040506' and f[1]['segments'][1]['acks'][-1] is False
+    assert abs(r['scl_hz'] - 100e3) < 1e3                          # stretched periods are not clock periods
+
+
+def test_i2c_master_that_acks_the_last_read_byte_gets_a_note():
+    scl, sda = sim.i2c([{'addr': 0x53, 'read': True, 'data': [0xE5]}], quarter=5)
+    # make the master ACK its last byte: SDA low during the 9th clock of the data byte
+    rise = np.flatnonzero(np.diff(scl) == 1) + 1
+    i9 = rise[17]                                                  # 9 address clocks, then 9 data clocks
+    sda = sda.copy()
+    sda[i9 - 5:i9 + 10] = 0
+    r = decode(cap_of(10e6, D0=scl, D1=sda), 'i2c:scl=D0,sda=D1')
+    assert r['frames'][0]['notes'] == ['last read byte ACKed by the master'] and r['errors'] == 0
+
+
+def test_protosim_release_slave_leaves_slave_bits_high():
+    scl, sda = sim.i2c([{'addr': 0x53, 'read': True, 'data': [0x00]}], quarter=4, release_slave=True)
+    rise = np.flatnonzero(np.diff(scl) == 1) + 1
+    bits = [int(sda[i]) for i in rise]
+    assert bits[:8] == [1, 0, 1, 0, 0, 1, 1, 1]                    # 0x53 << 1 | R, driven by the master
+    assert bits[8] == 1 and bits[9:17] == [1] * 8                  # slave ACK and data released
+    assert bits[17] == 1                                           # master NACK of the last byte
+
+
+def test_plot_decimation_keeps_the_whole_record():
+    from dscope.plot import _decimate
+    for n in (6001, 11986, 100_000, 1_000_003):
+        t = np.arange(n) / 1e6
+        y = np.zeros(n)
+        y[-1] = 1.0                                                  # a feature in the very last sample
+        tt, yy = _decimate(t, y)
+        assert tt[-1] == t[-1] and yy.max() == 1.0 and len(tt) <= 2 * 3000 + 1
+
+
+def _chatter(line, after=3, every_edge=True):
+    """Alternating 1-sample pulses right after every edge (comparator chatter / crosstalk)."""
+    out = line.copy()
+    for i in np.flatnonzero(np.diff(line)) + 1:
+        for k in range(1, 2 * after, 2):
+            if i + k < len(out):
+                out[i + k] ^= 1
+    return out
+
+
+def test_deglitch_repeats_until_no_short_run_is_left():
+    b = np.array([0] * 6 + [1, 0] * 6 + [1] * 6, np.uint8)
+    out = deglitch(b, 2)
+    runs = np.diff(np.flatnonzero(np.diff(out)) + 1)
+    assert (runs >= 2).all() and out[0] == 0 and out[-1] == 1
+
+
+def test_i2c_and_spi_decode_through_dense_edge_chatter():
+    tr = [{'addr': 0x53, 'data': [0x32], 'restart': {'addr': 0x53, 'read': True, 'data': [9, 8, 7, 6, 5, 4]}}]
+    scl, sda = sim.i2c(tr, quarter=25)                              # 10 MSa/s, 100 kHz
+    r = decode(cap_of(10e6, D0=_chatter(scl), D1=_chatter(sda)), 'i2c:scl=D0,sda=D1')
+    assert r['errors'] == 0 and r['frames'][0]['data_hex'] == '32090807060504'
+    cs, clk, mosi, miso = sim.spi([0xA5, 0x3C, 0xF0], mode=0, half=50)
+    r = decode(cap_of(100e6, D0=cs, D1=_chatter(clk, 2), D3=mosi), 'spi:clk=D1,mosi=D3,cs=D0')
+    assert r['frames'][0]['mosi'] == 'a53cf0' and r['errors'] == 0
+
+
+def test_i2c_window_cuts_are_reported_without_false_protocol_notes():
+    tr = [{'addr': 0x53, 'data': [0x32], 'restart': {'addr': 0x53, 'read': True, 'data': [1, 2, 3, 4, 5, 6]}}]
+    scl, sda = sim.i2c(tr, quarter=10)
+    rise = np.flatnonzero(np.diff(scl) == 1) + 1
+    end = rise[9 + 9 + 9 + 9 + 9] + 15                             # after the third read byte's ACK clock
+    r = decode(cap_of(10e6, D0=scl[:end], D1=sda[:end]), 'i2c:scl=D0,sda=D1')
+    f = r['frames'][0]
+    assert f['errors'] == ['no STOP in the window'] and 'notes' not in f
+    start = rise[17] + 15                                           # after the register byte's ACK clock
+    r = decode(cap_of(10e6, D0=scl[start:], D1=sda[start:]), 'i2c:scl=D0,sda=D1')
+    f = r['frames'][0]
+    assert f['cut_start'] and f['read'] and f['data_hex'] == '010203040506'
+    assert f['notes'] == ['window starts mid-transaction: this START may be a repeated START']
+
+
+def test_i2c_ten_bit_combined_read_and_a_bare_read_header():
+    scl, sda = sim.i2c([{'addr': 0x2A5, 'addr10': True, 'read': True, 'data': [0x11, 0x22]}], quarter=8)
+    r = decode(cap_of(10e6, D0=scl, D1=sda), 'i2c:scl=D0,sda=D1')
+    segs = r['frames'][0]['segments']
+    assert [(s['addr'], s['read'], s['data_hex']) for s in segs] == [(0x2A5, False, ''), (0x2A5, True, '1122')]
+    assert r['errors'] == 0 and 'notes' not in r['frames'][0]
+    scl, sda = sim.i2c([{'addr': 0x7A, 'read': True, 'data': [0x11, 0x22]}], quarter=8)   # header 0xF5 on its own
+    r = decode(cap_of(10e6, D0=scl, D1=sda), 'i2c:scl=D0,sda=D1')
+    f = r['frames'][0]
+    assert (f['addr'], f['read'], f['data_hex']) == (0x200, True, '1122')
+    assert f['notes'] == ['10-bit read header without a preceding address write: low address byte unknown']
