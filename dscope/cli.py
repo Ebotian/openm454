@@ -165,6 +165,9 @@ def build_parser():
     _capture_args(sm)
     sm.add_argument('--every', default='1s', help='signal time per live statistics line')
     sm.add_argument('--save-each', action='store_true', help='save every record (default: only the last one)')
+    sm.add_argument('--record-first', action='store_true',
+                    help="above ~100 MB/s acquire each record first and read it out afterwards (DSWave's way); by "
+                         "default the record is sent while it is acquired, so the next one starts sooner")
     lg = sub.add_parser('log', help='gap-free endless recording (loop mode) at one rate for all channels, kept in RAM '
                                     '(default) or dumped to disk; --plan shows rate limits, duration and storage')
     _vertical_args(lg)
@@ -186,8 +189,12 @@ def build_parser():
     lg.add_argument('--plan', action='store_true', help='print the plan (rate verdict, max duration, storage) and exit '
                                                          'without touching the device')
     lg.add_argument('--no-save', action='store_true', help='same as --storage none')
-    lg.add_argument('--force', action='store_true', help='run above the ~190 MB/s planning ceiling for longer than the '
-                                                         'burst limit (stops with HOST_TOO_SLOW if the host falls behind)')
+    lg.add_argument('--force', action='store_true', help='above the readout of this channel set, log anyway for longer '
+                                                         'than the gap-free limit: records that much, then stops '
+                                                         '(ring_full); without it such a log is refused (NEEDS_FORCE, '
+                                                         'or STREAM_BETTER when stream does better)')
+    lg.add_argument('--remeasure', action='store_true', help='measure the readout of this channel set again before the run '
+                                                         '(otherwise measured once, when unknown, and remembered)')
     lg.add_argument('--out', default=None, help='output folder (default: the data folder set with dscope bench '
                                                  '--dir, else captures/)')
     lg.add_argument('--tag', default='log')
@@ -389,47 +396,15 @@ def stream_plan(args):
     One record holds at most 400M samples per channel and 512 MiB of sample memory; a longer stream (or
     'forever') is cut into records of the same rate, each refreshing the previous one (~0.2 s between them)."""
     import copy
-    from .scope import Scope
+    from .scope import stream_record_plan
     a = copy.copy(args)
     forever = is_forever(args.duration)
     if forever:
         a.duration = None
     st = stream_settings(a)
     total = None if forever else st.duration
-    first_error = None
-    if total is not None:
-        try:
-            pl = Scope().plan(st)
-            if not any('samples capped' in w for w in pl['warnings']):
-                return st, total, total, False
-        except DscopeError as e:            # e.g. a long window squeezed into one record needs small packets
-            if e.code != 'INVALID_ARG':
-                raise
-            first_error = e
-    rate = st.rate or (st.samples / total if total else STREAM_MIN_RATE)   # --samples keeps its density
-
-    def record(d):
-        r = copy.copy(st)
-        r.duration, r.rate = d, rate
-        return r
-    d = MAX_RECORD_SAMPLES / rate
-    for _ in range(60):
-        try:
-            pl = Scope().plan(record(d))
-            if not any('samples capped' in w for w in pl['warnings']):
-                break
-        except DscopeError as e:
-            if e.code != 'INVALID_ARG':
-                raise
-        d *= 0.9
-    else:
-        raise first_error or DscopeError('INVALID_ARG', 'no record length fits these stream settings')
-    if total is not None and total <= d:
-        return record(total), total, total, False
-    return record(d), total, d, True
-
-
-MAX_RECORD_SAMPLES = 400_000_000
+    rec, rec_s, chained = stream_record_plan(st, total, STREAM_MIN_RATE)
+    return rec, total, rec_s, chained
 
 
 def cmd_stream(args, scope):
@@ -440,7 +415,8 @@ def cmd_stream(args, scope):
     every = si(args.every, 's', '--every')
     if not chained:
         try:
-            cap = scope.stream(st, every=every, emit=_emit, stop_flag=_throttled(stop_requested))
+            cap = scope.stream(st, every=every, emit=_emit, stop_flag=_throttled(stop_requested),
+                               live=not args.record_first)
         except DscopeError as e:
             if e.code != 'STOPPED':
                 raise
@@ -470,7 +446,8 @@ def cmd_stream(args, scope):
             _emit(line)
         try:
             cap = scope.stream(st_k, every=every, emit=emit_k, stop_flag=_throttled(stop_requested),
-                               build=lambda last_one=is_last: last_one or args.save_each or stop_requested())
+                               build=lambda last_one=is_last: last_one or args.save_each or stop_requested(),
+                               live=not args.record_first)
         except DscopeError as e:
             if e.code != 'STOPPED':
                 raise
@@ -539,8 +516,9 @@ def _log_out(args):
     return args.out or host.data_dir(DEFAULT_OUT)
 
 
-def log_plan(args, zero_info=None):
-    """-> (settings, plan) of a 'log' command (offline)."""
+def log_plan(args, zero_info=None, defer=False):
+    """-> (settings, plan) of a 'log' command (offline). defer: an unmeasured readout (or --remeasure) refuses
+    nothing yet; the run measures it first."""
     from .scope import vertical_from_args
     from .units import si
     from . import logger
@@ -551,16 +529,21 @@ def log_plan(args, zero_info=None):
                      None if storage == 'none' else _log_out(args), storage,
                      int(si(args.ram, 'B', '--ram')) if args.ram else None,
                      si(args.chunk, 's', '--chunk') if args.chunk else None, zero_info=zero_info, force=args.force,
-                     keep_last=args.keep_last)
+                     keep_last=args.keep_last, defer=defer, remeasure=defer and args.remeasure)
     return st, pl
 
 
 def cmd_log(args, scope):
     from . import logger
     from .capture import new_path
-    st, pl = log_plan(args, scope.dev.zero_info)
+    st, pl = log_plan(args, scope.dev.zero_info, defer=True)
     scope._check_link()
-    if args.awg:
+    if pl['_needs_probe']:
+        r, kept_up = logger.measure_readout(scope, pl)  # this channel set's readout, remembered in state/host.json
+        _emit({'ok': True, 'cmd': 'log', 'probe': {'readout_mb_s': round(r / 1e6, 1), 'kept_up': kept_up,
+                                                   'data_mb_s': round(pl['_data_bps'] / 1e6, 1)}})
+        st, pl = log_plan(args, scope.dev.zero_info)    # now with the measured readout: may refuse
+    if args.awg:                                        # only once the log will run
         scope.awg_from_spec(args.awg)
     stem = None if pl['storage'] == 'none' else new_path(_log_out(args), args.tag)
     _emit({'ok': True, 'cmd': 'log', 'started': True, 'plan': logger.public(pl), 'out_stem': _fwd(stem)})
@@ -615,7 +598,7 @@ def cmd_bench(args, scope=None):
         for name, analog, rate in BENCH_READOUT:     # a 2 s burst above the sustained rate, nothing kept
             st = Settings()
             st.analog, st.digital = list(analog), ['D%d' % i for i in range(8)]
-            r = scope.record(st, rate, 2.0, every=1.0, storage='none')
+            r = scope.record(st, rate, 2.0, every=1.0, storage='none', force=True, probe=False)   # remembers R
             readout[name] = {'data_mb_s': r['plan']['data_mb_s'], 'readout_mb_s': r['acq']['host_mb_s'],
                              'backlog_max_mb': r['acq']['backlog_max_mb']}
         b['usb_readout'] = readout
@@ -624,6 +607,7 @@ def cmd_bench(args, scope=None):
         for k in ('usb_readout', 'usb_readout_mb_s'):
             if k in h.get('bench', {}):
                 b[k] = h['bench'][k]
+    h = host.load()                                # the readout runs above remembered their channel sets
     h['allow'], h['bench'] = allow, b
     host.save(h)
     ram = logger.default_ram_budget()
@@ -712,7 +696,7 @@ def _budget(args):
     if args.cmd == 'bench':
         return 180.0, None
     if args.cmd == 'log':
-        st, pl = log_plan(args)                        # rejects what cannot work before the device is opened
+        st, pl = log_plan(args, defer=True)            # rejects what cannot work before the device is opened
         per = max(60.0, 3 * pl['every_s'] + 60.0)        # re-armed after every statistics line
         return 90.0 + per, per
     if args.cmd not in ('capture', 'watch', 'stream'):
@@ -799,7 +783,7 @@ def main(argv=None):
             return 0
         if args.cmd == 'log' and args.plan:
             from . import logger
-            st, pl = log_plan(args)
+            st, pl = log_plan(args, defer=True)
             _emit({'ok': True, 'cmd': 'log', 'plan': logger.public(pl)})
             return 0
         if args.cmd == 'debug' and args.debug_cmd == 'plan':

@@ -5,6 +5,7 @@ EXIT_CODES = {
     'USB_ERROR': 6, 'DECODE_ERROR': 6, 'FPGA_CONFIG_FAILED': 6, 'SECURITY_FAILED': 6, 'PROTOCOL_ERROR': 6,
     'FW_TOO_OLD': 6, 'SECURITY_KEY_BLANK': 6, 'UNSAFE_OPERATION': 7, 'FIRMWARE_SOURCE': 6,
     'DEVICE_ERROR': 6, 'TIMEOUT_DATA': 6, 'UNSUPPORTED': 6, 'STOPPED': 0, 'HOST_TOO_SLOW': 6, 'WRITE_FAILED': 6,
+    'STREAM_BETTER': 2, 'NEEDS_FORCE': 2,
 }
 
 
@@ -23,4 +24,6 @@ class DscopeError(Exception):
         d = {'code': self.code, 'message': self.message}
         if self.hint:
             d['hint'] = self.hint
+        if getattr(self, 'plan', None):        # STREAM_BETTER / NEEDS_FORCE: the numbers behind the decision
+            d['plan'] = self.plan
         return d

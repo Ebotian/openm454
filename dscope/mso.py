@@ -204,6 +204,8 @@ class MsoConfig:
     # modes (UsbDevice_SetModes 0x340630)
     repeat_mode: bool = False       # :REPEATModeEnable  (bsp+0x34)
     loop_mode: bool = False         # :LOOPModeEnable    (bsp+0x36)
+    stream_always: bool = False     # not DSWave: send the record while it is acquired (MODE 2) at any data rate, not
+                                    # only below hw+0x68 (102,400 kB/s); verified up to 400 MB/s (docs/PROTOCOL.md 8.1)
     loop_fold: bool = False         # not DSWave (it always uses fold 0 in loop mode): interleave in loop mode as in
                                     # the other modes; verified on hardware 2026-11-02 (docs/PROTOCOL.md 8.1)
     transfer_mode: bool = False     # :TRANSFERModeEnable (bsp+0x31; no effect on the setup block)
@@ -443,7 +445,7 @@ def geometry(cfg: MsoConfig) -> Geometry:
             + ((float(arate) / 1000.0) * float(nA)) * float(math.ceil(ADC_BITS * 0.125)))
     thr = RATE_THRESHOLD_KBPS[cfg.usb3]
     if not cfg.repeat_mode:
-        if kbps >= thr:
+        if kbps >= thr and not cfg.stream_always:
             roll = False
             n = float(0x100000 // blk)
         else:

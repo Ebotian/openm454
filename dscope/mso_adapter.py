@@ -32,6 +32,7 @@ def to_mso(hal):
     cfg.trig_margin = int(t['margin'])
     cfg.trig_hold_ps = int(t['hold_ps'])
     cfg.repeat_mode = bool(hal.get('repeat'))
+    cfg.stream_always = bool(hal.get('stream_always'))
     cfg.loop_mode = False
     if hal.get('loop'):
         # loop mode (DSWave's Data Acquisition mode): endless stream, trigger off, one explicit rate for every

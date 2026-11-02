@@ -80,3 +80,19 @@ def bench_disk(d, mb=256):
         except OSError:
             pass
     return (max(1, mb // 8) * len(block)) / dt / 1e6, shutil.disk_usage(d).free
+
+
+def readout_key(n_analog, n_digital, rate):
+    """The loop readout while acquiring depends on the channel set and interleave (measured 196-275 MB/s)."""
+    return '%da%dd@%d' % (n_analog, n_digital, int(round(rate)))
+
+
+def readout_get(key):
+    return load().get('readout', {}).get(key)
+
+
+def readout_put(key, mb_s, lower_bound, data_mb_s):
+    d = load()
+    d.setdefault('readout', {})[key] = {'mb_s': round(mb_s, 3), 'lower_bound': bool(lower_bound),
+                                        'data_mb_s': round(data_mb_s, 1), 'time': time.strftime('%Y-%m-%dT%H:%M:%S')}
+    save(d)

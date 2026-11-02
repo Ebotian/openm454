@@ -260,9 +260,15 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   whole 512 MiB, record 1.0 s; at 400 MB/s with R = 275 MB/s: loop 2.95 s, record 1.34 s (loop is longer when
   R > D / 2, the record when R < D / 2).
 * **The 512 MiB DDR is a ring.** The host may fall behind by up to ~512 MiB without loss (host stalls of up to 10 s
-  at 50 MB/s were absorbed and caught up). Past that the device overwrites unread data without any flag, and the
-  stream stays misaligned until it is restarted. The host must track backlog = rate x (t - t_head) - bytes read.
-* **Readout while acquiring: ~196-266 MB/s, depending on the channel set** (the read size, 1 to 8 MiB, makes no
+  at 50 MB/s were absorbed and caught up). Past that the device overwrites unread data without any flag and keeps
+  streaming: one phase step on analog, and the digital channels decode as garbage (the block alignment is lost)
+  until the run is restarted. The break came at 508-511 MiB (2026-11-01, a 12 s host stall and a 250 MB/s run) and
+  at ~514 MiB (2026-11-02, 250 MB/s, 8.88 s into the run) of the host's estimate backlog = rate x (t - t_head) -
+  bytes received, i.e. at the ring size. The host must track it; over long runs it needs a baseline for the scope /
+  PC clock difference (the driver lets the baseline follow raw down at once and, while the host is caught up, up
+  by at most 200 ppm x rate per second), checks it on every transfer and stops at 480 MiB: two 250 MB/s runs
+  stopped there were complete to their last sample.
+* **Readout while acquiring: ~196-275 MB/s, depending on the channel set** (the read size, 1 to 8 MiB, makes no
   difference). 4 analog + 8 digital at 50 MSa/s (250 MB/s) read out at ~200 MB/s, so the backlog grew ~55 MB/s and
   the ring overflowed after ~10 s; 2 analog + 8 digital at 100 MSa/s (300 MB/s) read out at 266 MB/s; 2 analog at
   100 MSa/s (200 MB/s) ran 20 s without backlog in one run and ~2 % short in another; 1 analog at 200 MSa/s
@@ -273,6 +279,9 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   + 8 digital at 50 kSa/s (60 s) and at 1-20 MSa/s (100 MB/s), 8 digital at 100 MSa/s, 2 analog + 8 digital at
   50 MSa/s (150 MB/s for 180 s, 27 GB, host lag constant), 4 analog + 8 digital at 1 MSa/s for 10 min (3 GB,
   599,361 periods, no step above 1.1 us).
+* **MODE 2 above the switch** (this driver's `stream` default): 12 channels at 50 MSa/s (250 MB/s), ~2 s records
+  sent while acquired: 0.74 / 0.66 s from one record to the next, records complete and continuous; the same
+  records in MODE 0: 2.35 / 2.45 s.
 * **Gap between two runs started back to back** = drain + restart. The restart (stop handshake, 100 ms quiet, setup,
   50 ms before the start) takes ~0.18 s. The drain is the time the host still needs, after the run's signal has
   ended, to read the data that belong to the run:

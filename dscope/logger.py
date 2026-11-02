@@ -4,18 +4,21 @@ What the hardware does (measured 2026-11-01/02, docs/PROTOCOL.md section 8.1):
   * after the head the device streams plain sample blocks until it is stopped; nothing in the stream marks time,
     so a loss could only be seen in the signal;
   * the 512 MiB sample memory is a ring: the host may fall behind by up to ~512 MiB without loss; past that the
-    device overwrites unread data without any flag and the block alignment is lost for the rest of the run;
-  * readout while acquiring: 196-266 MB/s depending on the channel set; 150 MB/s ran 3 min (27 GB) with a constant
+    device overwrites unread data without any flag and keeps streaming, misaligned (garbage) for the rest of the
+    run; the break came at 508-511 MiB (2026-11-01, the older estimate) and ~514 MiB (2026-11-02, BacklogMeter);
+  * readout while acquiring: 196-275 MB/s depending on the channel set; 150 MB/s ran 3 min (27 GB) with a constant
     host lag;
   * nothing is read out after a stop: a run must keep acquiring until the host has read everything it wants, so
-    above the readout limit the backlog grows for the whole run (burst_max_s);
+    above the readout limit R the backlog grows for the whole run: gap-free for at most gapfree_max_s;
   * one rate for every channel, 100 MHz / N for any integer N; above 100 MSa/s the converters are interleaved as in a normal
     capture (DSWave never does this in loop mode; verified on hardware 2026-11-02): 200 MSa/s with <= 2 analog and
     <= 4 digital channels, 400 MSa/s with <= 1 analog and <= 2 digital channels.
 
-So the host decides everything. plan() checks that the rate is sustainable (above the ceiling a run is allowed only
-when it is short enough for the ring to absorb the excess), works out how long the log can run and where the data
-goes. run() streams with the engine keeping nothing in memory: the USB loop only counts and queues the raw transfers,
+So the host decides everything. plan() checks that the rate is sustainable with the readout measured for this
+channel set (measure_readout, cached in state/host.json); above it a log is gap-free for gapfree_max_s only, and a
+longer one is compared with `stream` (records of <= 512 MiB sent while acquired, short gaps): refused with
+STREAM_BETTER when stream's records are at least as long as the log's single gap-free piece, else NEEDS_FORCE
+(--force records that piece and stops: 'ring_full'). It also works out where the data goes. run() streams with the engine keeping nothing in memory: the USB loop only counts and queues the raw transfers,
 a writer thread decodes them, prints the live statistics and keeps or writes the samples, and the backlog (data the
 device has acquired but the host has not read) is watched so a run stops well before the ring could overwrite data.
 
@@ -44,9 +47,11 @@ from . import packet
 from .errors import DscopeError
 
 RING_BYTES = 512 * 2 ** 20           # device sample memory = loop ring
-BACKLOG_STOP = 384 * 2 ** 20         # stop a run once the device is this far ahead (the ring overwrites at ~512 MiB)
+BACKLOG_STOP = 480 * 2 ** 20         # stop a run once the device is this far ahead: the ring overwrote unread data at
+                                     # 508-514 MiB of the estimate (hardware, 2026-11-01/02); the margin covers the
+                                     # drift band and the in-flight reads
 SUSTAINED_BPS = 150e6                # verified: 3 min, 27 GB, host lag constant
-CEILING_BPS = 190e6                  # planning ceiling; the readout while acquiring measured 196-266 MB/s
+CEILING_BPS = 190e6                  # planning ceiling; the readout while acquiring measured 196-275 MB/s
 MAX_RATE = 100_000_000               # one converter per channel (fold 0, DSWave's loop mode)
 FOLD_RATES = (200_000_000, 400_000_000)  # interleaved loop rates (loop_fold)
 MAX_DIVIDER = 100_000                # 100 MHz / N for any integer N up to this (1 kSa/s; all verified as dividers)
@@ -64,11 +69,18 @@ QUEUE_LIMIT_BYTES = 768 * 2 ** 20    # raw data waiting for the writer thread; m
 PIECE_BYTES = 32 * 2 ** 20           # the USB loop hands the writer pieces of at most this (statistics lines are
                                      # assembled from pieces, so --every does not size the queue)
 CHUNK_MAX_BYTES = 2 ** 30            # one disk chunk is collected in RAM before it is written
-CLOCK_TOL = 200e-6                   # scope vs PC clock: backlog growth below this is not counted (a 30 ppm slower
-                                     # scope clock would otherwise look like a growing backlog after ~a day)
+CLOCK_TOL = 200e-6                   # scope vs PC clock: the backlog baseline may rise this fast (x the data rate),
+                                     # so a scope clock up to 200 ppm fast never looks like a growing backlog
+DRIFT_BAND = 16 * 2 ** 20            # ... but only while the estimate is below this (the host caught up): a real
+                                     # backlog is never absorbed beyond it
 RAM_BUDGET_MAX = 4 * 2 ** 30         # default RAM budget: min(this, a quarter of the free memory)
 DISK_WEAR_BYTES = 100e9              # warn when a disk log writes more than this (or this per day when unbounded)
 STORAGES = ('ram', 'disk', 'none')
+RESTART_S = 0.18                     # measured: stop handshake, 100 ms quiet, setup, 50 ms before the next start
+RECORD_SAMPLES = 400_000_000         # a stream record: at most 400M samples per channel and 512 MiB
+PROBE_S = 2.0                        # readout probe before a log above SUSTAINED_BPS whose channel set was not measured
+PROBE_BACKLOG = 256 * 2 ** 20        # ... ends early once the scope is this far ahead (its data are dropped anyway)
+KEPT_UP = 0.99                       # a probe reading >= this x D: the host keeps up (R >= D, a lower bound)
 
 
 def available_ram():
@@ -117,10 +129,16 @@ def loop_hal(st, rate, fold=False, divider=None):
 
 
 def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_budget=None, chunk_s=None,
-         zero_info=None, force=False, keep_last=False, disk_budget=None):
+         zero_info=None, force=False, keep_last=False, disk_budget=None, defer=False, remeasure=False):
     """Offline plan of a loop log. duration None = until stopped. Raises INVALID_ARG for what cannot work.
-    force: run above the planning ceiling for longer than burst_max_s anyway (the measured readout is 196-266 MB/s
-    depending on the channel set); the backlog guard still stops the run before data could be lost.
+    The readout while acquiring (R) depends on the channel set: it comes from state/host.json (measured by a probe
+    or an earlier run), else the planning ceiling of 190 MB/s is assumed. Above R the scope's memory fills at D - R
+    and nothing can be read after the stop, so a log is gap-free for at most gapfree_max_s. A longer one is compared
+    with `stream` (stream_alternative): STREAM_BETTER when stream's records are at least as long as that single
+    piece (or one record holds the whole duration), else NEEDS_FORCE: log gives the longest gap-free piece, and
+    force records it and stops when the scope is BACKLOG_STOP ahead (stop_reason 'ring_full'). Both errors carry
+    the numbers in .plan. defer=True: with an assumed R nothing is refused (the run measures R first);
+    remeasure: ignore the cached R (with defer: measure it again before deciding).
     keep_last: a RAM log longer than the budget keeps the newest budget's worth (ring) instead of being refused.
     disk_budget: bytes a disk log may use (default: the owner's allowance in state/host.json, else 90 % of free)."""
     from .scope import _cached_zero
@@ -168,33 +186,75 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     pkt_s = (geom['pkt_bytes'] / usb_bps) if not small else block_s
     hb = host.load().get('bench', {})
 
-    if data_bps <= SUSTAINED_BPS:
+    # readout while acquiring for this channel set: measured (probe / bench, cached) or the planning ceiling
+    rkey = host.readout_key(na, nd, r)
+    cached = None if remeasure else host.readout_get(rkey)
+    if cached:
+        R = cached['mb_s'] * 1e6
+        rsrc = 'measured %s%s' % (cached['time'], ' (lower bound: the host kept up)' if cached['lower_bound'] else '')
+    else:
+        R, rsrc = CEILING_BPS, 'assumed (planning ceiling)'
+    needs_probe = not cached and data_bps > SUSTAINED_BPS
+    if needs_probe and defer:
+        rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
+    kept_up = bool(cached and cached['lower_bound'] and data_bps <= R * (1 + 1e-3))    # stored rounded
+    if data_bps <= SUSTAINED_BPS or kept_up or (cached and data_bps <= 0.95 * R):
         verdict = 'sustained'
-    elif data_bps <= CEILING_BPS:
+    elif data_bps <= R:
         verdict = 'near_limit'
-        warnings.append('%.0f MB/s is near the readout limit (verified sustained: 150 MB/s); the backlog is watched '
-                        'and the run stops before data could be lost' % (data_bps / 1e6))
+        warnings.append('%.0f MB/s is near the readout limit of this channel set (%.0f MB/s, %s); the backlog is '
+                        'watched and the run stops before data could be lost' % (data_bps / 1e6, R / 1e6, rsrc))
     else:
         verdict = 'burst'
-    # a burst of T s ends when the host has read data_bps x T at the ceiling R, at t = data_bps x T / R; the backlog
-    # then is (data_bps - R) x data_bps x T / R, which must stay below BACKLOG_STOP
-    burst_s = BACKLOG_STOP * CEILING_BPS / (data_bps * (data_bps - CEILING_BPS)) if verdict == 'burst' else None
-    if burst_s is not None and (duration is None or duration > burst_s) and not force:
-        raise DscopeError('INVALID_ARG', '%.0f MB/s is above what the scope sustains (~190 MB/s while acquiring): the '
-                          '512 MiB ring absorbs the excess for about %.1f s only' % (data_bps / 1e6, burst_s),
-                          'use a lower --rate or fewer channels, --duration <= %.1fs, or --force (the run stops '
-                          'with HOST_TOO_SLOW if the scope gets 384 MiB ahead)' % burst_s)
+    # Above R the backlog grows at D - R, and the scope sends nothing after a stop: a log of T s ends when the host
+    # has read D x T at R, at t = D x T / R, with a backlog of (D - R) x D x T / R that must stay below BACKLOG_STOP.
+    burst_s = BACKLOG_STOP * R / (data_bps * (data_bps - R)) if verdict == 'burst' else None
+    gapfree = None if burst_s is None else math.floor(burst_s * 100) / 100     # reported: never above the limit
+    alt = None
+    too_long = burst_s is not None and (duration is None or duration > burst_s)
+    # log gives one gap-free piece of burst_s; stream covers the whole time in records with gaps. Stream is better
+    # when it samples every channel at least as fast and its records are at least that long (or one holds it all).
+    recommendation = 'log'
+    if too_long:
+        alt = stream_alternative(st, r, data_bps, R, duration)
+        better = alt['same_rates'] and (alt['records'] == 1 or alt['record_s'] >= burst_s)
+        recommendation = 'stream' if better else 'log --force'
+    what = 'forever' if duration is None else '%g s' % duration
+    if too_long and not force and not (defer and needs_probe):
+        why = ('%s at %.0f MB/s: log is gap-free for the first %.2f s only (readout %.0f MB/s, %s: the scope gets '
+               '%.0f MB/s ahead, and nothing can be read after a stop)' % (what, data_bps / 1e6, gapfree, R / 1e6, rsrc,
+                                                                           (data_bps - R) / 1e6))
+        if recommendation == 'stream':
+            e = DscopeError('STREAM_BETTER', why + '; stream does better: %s' % alt['summary'],
+                            'run: %s (or --duration <= %.2fs, a lower --rate, fewer channels; --force logs the %.2f s '
+                            'anyway)' % (alt['command'], gapfree, gapfree))
+        else:
+            e = DscopeError('NEEDS_FORCE', why + '; that one piece is the longest gap-free recording possible (stream: '
+                            '%s)' % alt['summary'],
+                            'add --force to log the first ~%.2f s (the run then stops: ring_full; the rest of the %s '
+                            'is not recorded)%s' % (gapfree, what, ', or use stream for the whole time with gaps: %s'
+                                                    % alt['command'] if alt.get('command') else ''))
+        e.plan = {'data_mb_s': round(data_bps / 1e6, 3), 'readout_mb_s': round(R / 1e6, 1), 'readout_source': rsrc,
+                  'backlog_growth_mb_s': round((data_bps - R) / 1e6, 1), 'gapfree_max_s': gapfree,
+                  'duration_s': duration, 'recommendation': recommendation, 'stream_alternative': alt}
+        raise e
     if burst_s is not None:
-        warnings.append('burst: above the sustained rate the ring absorbs the excess for ~%.1f s at the planning '
-                        'ceiling of 190 MB/s%s' % (burst_s, '; --force: the backlog guard ends the run if the host '
-                                                  'falls 384 MiB behind' if force else ''))
+        warnings.append('burst: the scope gets %.0f MB/s ahead (readout %.0f MB/s, %s): gap-free for at most %.2f s%s'
+                        % ((data_bps - R) / 1e6, R / 1e6, rsrc, gapfree,
+                           '; --force: the run stops when the scope is %.0f MiB ahead (ring_full)'
+                           % (BACKLOG_STOP / 2 ** 20) if too_long else ''))
+    if too_long and recommendation == 'stream':
+        warnings.append('stream would do better: %s' % alt['summary'])
     if hb.get('decode_mb_s') and data_bps > 0.8e6 * hb['decode_mb_s'] and storage != 'none':
         warnings.append('%.0f MB/s is close to what this PC decodes (%.0f MB/s, dscope bench): the run may stop with '
                         'HOST_TOO_SLOW' % (data_bps / 1e6, hb['decode_mb_s']))
 
     if ram_budget is None:
         ram_budget = default_ram_budget()
-    total = None if duration is None else data_bps * duration
+    run_s = duration
+    if too_long and duration is not None:            # forced: stops at the guard (R may be a little better)
+        run_s = min(duration, 1.25 * burst_s)
+    total = None if run_s is None else data_bps * run_s
     ram_window = ram_budget / data_bps
     ring = False
     disk_bytes = None
@@ -206,7 +266,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         if total is None or total > ram_budget:
             if total is not None and not keep_last:
                 raise DscopeError('INVALID_ARG', '%.2f GB (%.0f s at %.1f MB/s) does not fit the RAM budget of %.2f GB'
-                                  % (total / 1e9, duration, data_bps / 1e6, ram_budget / 1e9),
+                                  % (total / 1e9, run_s, data_bps / 1e6, ram_budget / 1e9),
                                   '--keep-last keeps the newest %.0f s; --storage disk writes everything (it wears an SSD: '
                                   'only for records needed in full); --ram raises the budget; or a lower --rate / '
                                   'fewer channels' % ram_window)
@@ -229,7 +289,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         disk_bytes = budget
         disk_s = budget / data_bps
         max_s = disk_s if max_s is None else min(max_s, disk_s)
-        if duration is not None and duration > disk_s:
+        if run_s is not None and run_s > disk_s:
             raise DscopeError('INVALID_ARG', 'not enough disk allowance in %s: %.1f GB hold %.0f s at %.1f MB/s'
                               % (d, budget / 1e9, disk_s, data_bps / 1e6),
                               'use RAM (--storage ram, --keep-last), a lower --rate, fewer channels, or raise the '
@@ -252,27 +312,126 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         warnings.append('chunk limited to %.0f MB (%.3g s): a chunk is collected in RAM before it is written'
                         % (chunk_blocks * blk / 1e6, chunk_blocks * block_s))
     chunk_s = chunk_blocks * block_s
-    if storage == 'ram' and not ring and duration is not None:
-        max_s = duration if max_s is None else min(max_s, duration)
+    if storage == 'ram' and not ring and run_s is not None:
+        max_s = run_s if max_s is None else min(max_s, run_s)
     pub = {
         'rate_hz': r, 'channels': list(st.analog) + list(st.digital), 'data_mb_s': round(data_bps / 1e6, 3),
         'usb_mb_s': round(usb_bps / 1e6, 3), 'verdict': verdict,
         'sustained_mb_s': SUSTAINED_BPS / 1e6, 'ceiling_mb_s': CEILING_BPS / 1e6,
-        'duration_s': duration, 'burst_max_s': None if burst_s is None else round(burst_s, 2),
-        'ring_s': round(RING_BYTES / data_bps, 3), 'storage': storage,
+        'duration_s': duration, 'ring_s': round(RING_BYTES / data_bps, 3), 'storage': storage,
         'ram_budget_mb': round(ram_budget / 1e6), 'ram_window_s': round(ram_window, 3), 'ram_ring': ring,
         'file_mb': None if file_bytes is None else round(file_bytes / 1e6, 1),
         'total_mb': None if total is None else round(total / 1e6, 1),
         'chunk_s': round(chunk_s, 6) if storage == 'disk' else None,
         'chunk_mb': round(chunk_blocks * blk / 1e6, 1) if storage == 'disk' else None,
-        'chunks': (math.ceil(duration / chunk_s) if duration else None) if storage == 'disk' else None,
+        'chunks': (math.ceil(run_s / chunk_s) if run_s else None) if storage == 'disk' else None,
         'disk_free_gb': None if disk_free is None else round(disk_free / 1e9, 1),
-        'max_duration_s': None if max_s is None else round(max_s, 1), 'every_s': round(every, 6),
+        'max_duration_s': None if max_s is None else math.floor(max_s * 100) / 100, 'every_s': round(every, 6),
         'small_packets': small, 'packet_bytes': geom['pkt_bytes'], 'transfers': geom['transfer_count'],
-        'interleaved': fold, 'divider': divider, 'max_rate_hz': top, 'warnings': warnings}
+        'interleaved': fold, 'divider': divider, 'max_rate_hz': top,
+        'readout_mb_s': round(R / 1e6, 1), 'readout_source': rsrc,
+        'backlog_growth_mb_s': round(max(0.0, data_bps - R) / 1e6, 1), 'gapfree_max_s': gapfree,
+        'backlog_stop_mb': round(BACKLOG_STOP / 1e6, 1), 'recommendation': recommendation,
+        'stream_alternative': alt, 'provisional': bool(defer and needs_probe), 'warnings': warnings}
     return dict(pub, _hal=hal, _scale=scale, _prog=prog, _geom=geom, _every_blocks=every_blocks,
                 _chunk_blocks=chunk_blocks, _data_bps=data_bps, _pkt_s=pkt_s, _ram_budget=ram_budget,
-                _disk_bytes=disk_bytes)
+                _disk_bytes=disk_bytes, _needs_probe=needs_probe, _readout_key=rkey, _force=bool(force and too_long),
+                _ram_limit=(min(ram_budget, 0.9 * disk_free) if disk_free is not None else ram_budget)
+                if storage == 'ram' and not ring else None)
+
+
+def _rate_arg(rate):
+    return '%gM' % (rate / 1e6) if rate >= 1e6 else ('%gk' % (rate / 1e3) if rate >= 1e3 else '%g' % rate)
+
+
+def stream_alternative(st, rate, data_bps, readout, duration):
+    """What `stream` gives instead of a log above the readout, from stream's own planning (scope.stream_record_plan):
+    the lead domain runs at fold x the smallest 1-2-5 table rate that is >= `rate`, the other domain follows, and a
+    record holds <= 400M samples per channel and <= 512 MiB. Each record is sent while acquired and ends with a drain
+    of record x (D_stream - R) / R plus the ~0.18 s restart (R: this log's readout; stream's interleave can make it
+    lower). same_rates: every channel at >= `rate` (otherwise stream is no substitute)."""
+    import copy
+    from . import mso
+    from .scope import Scope, stream_record_plan, vertical_flags, afold_for, dfold_for
+    na, nd = len(st.analog), len(st.digital)
+    lead = afold_for(na) if na else dfold_for(nd)
+    steps = sorted(t for t in mso.SAMPLERATES if t * lead >= rate * (1 - 1e-9))
+    s = copy.copy(st)
+    s.rate = lead * steps[0] if steps else rate
+    s.duration = duration if duration is not None else 1.0
+    s.trig_source, s.trig_mode = None, 'force'
+    what = 'run' if duration is None else '%g s' % duration
+    try:
+        rec, rec_s, chained = stream_record_plan(s, duration, s.rate)
+        g = Scope().plan(rec)['geometry']
+    except DscopeError as e:
+        return {'same_rates': False, 'records': None, 'record_s': None, 'gap_s': None, 'coverage_pct': None,
+                'command': None, 'summary': 'stream cannot record these channels at %s (%s)' % (_rate_arg(rate),
+                                                                                             e.message)}
+    ar = g.get('analog_rate') if na else None
+    dr = g.get('digital_rate') if nd else None
+    slower = ['%s at %s' % (k, _rate_arg(x)) for k, x in (('analog', ar), ('digital', dr))
+              if x is not None and x < rate * (1 - 1e-6)]
+    d_stream = (ar or 0) * na + (dr or 0) * nd / 8.0
+    cmd = ('python -m dscope stream -c %s --rate %s --duration %s %s' % (
+        ','.join(list(st.analog) + list(st.digital)), _rate_arg(s.rate),
+        'forever' if duration is None else '%gs' % duration, vertical_flags(st))).strip()
+    out = {'analog_rate_hz': ar, 'digital_rate_hz': dr, 'same_rates': not slower, 'command': cmd,
+           'note': 'gaps estimated with this log\'s readout; with interleaved converters a stream can read out slower'}
+    if not chained:
+        out.update(record_s=round(rec_s, 3), gap_s=0.0, coverage_pct=100.0, records=1,
+                   summary='one record holds all %g s gap-free' % duration)
+    else:
+        gap = rec_s * max(0.0, d_stream - readout) / readout + RESTART_S
+        cov = 100 * rec_s / (rec_s + gap)
+        out.update(record_s=round(rec_s, 3), gap_s=round(gap, 3), coverage_pct=round(cov, 1),
+                   records=None if duration is None else int(math.ceil(duration / (rec_s + gap))),
+                   summary='records of %.2f s with %.2f s gaps over the whole %s (%.0f %% of the signal)'
+                   % (rec_s, gap, what, cov))
+    if slower:
+        out['summary'] += ', but it samples %s only' % ' and '.join(slower)
+    return out
+
+
+def measure_readout(scope, pl, seconds=PROBE_S):
+    """Run the planned loop program with nothing kept and measure how fast this PC reads it while the scope acquires
+    (it depends on the channel set): for `seconds`, or until the scope is PROBE_BACKLOG ahead. The rate over the
+    last two thirds decides: >= KEPT_UP x D = the host kept up (stored as the lower bound R = D), else R itself.
+    Cached in state/host.json. -> (R in bytes/s, kept_up)."""
+    from . import host
+    geom = dict(pl['_geom'])
+    small = bool(geom['small_pkt'])
+    if small:
+        geom['transfer_count'] = max(4, geom['transfer_count'])
+    blk = packet.layout_from_regs(geom['_regs'], rates={'analog': pl['rate_hz'], 'digital': pl['rate_hz']}).block_bytes
+    D = pl['_data_bps']
+    log = []
+    p = {'meter': None, 'n': 0}
+
+    def on_chunk(b):
+        now = time.perf_counter()
+        if p['meter'] is None:
+            p['meter'] = BacklogMeter(D, now)
+            return
+        p['n'] += blk if small else len(b)
+        log.append((now, p['n']))
+
+    def stop():
+        m = p['meter']
+        if m is None:
+            return False
+        now = time.perf_counter()
+        return now - m.t0 > seconds or m.update(now, p['n']) > PROBE_BACKLOG
+    scope._run(pl['_prog'], geom, 3.0, None, on_chunk=on_chunk, keep_data=False, poll=False, stop_flag=stop)
+    if len(log) < 6:
+        raise DscopeError('PROTOCOL_ERROR', 'readout probe: no data from the scope')
+    (t0, n0), (t1, n1) = log[len(log) // 3], log[-1]    # skip the start (the queued reads fill first)
+    R = (n1 - n0) / (t1 - t0) if t1 > t0 else D
+    kept_up = R >= KEPT_UP * D
+    if kept_up:
+        R = D
+    host.readout_put(pl['_readout_key'], R / 1e6, kept_up, D / 1e6)
+    return R, kept_up
 
 
 def public(pl):
@@ -455,6 +614,9 @@ class _Writer(threading.Thread):
         info = self.line_info
         line = {'i': self.line, 't_signal_s': round(self.blocks * packet.BLOCK_SAMPLES / self.rate, 6),
                 't_wall_s': round(info.get('t_wall', 0.0), 3), 'backlog_mb': round(info.get('backlog', 0) / 1e6, 2)}
+        if 'guard_in' in info:                # the backlog grows: when the guard stops the run, what it will hold
+            line.update(backlog_growth_mb_s=round(info['growth'] / 1e6, 1), ring_full_in_s=round(info['guard_in'], 1),
+                        gapfree_projected_s=round(info['gapfree_projected'], 2))
         for c in self.an:
             a = self.lacc.get(c)
             if a:
@@ -538,6 +700,38 @@ class _Writer(threading.Thread):
         return out
 
 
+class BacklogMeter:
+    """Data the scope has acquired but the host has not read yet (the loop ring's fill), seen from the host only:
+    raw = D x (t - t_head) - bytes received, backlog = raw - baseline. The baseline absorbs the start offset and the
+    scope / PC clock difference: it follows raw down at once (a backlog is never negative) and, while the estimate
+    is below DRIFT_BAND (the host caught up), up by at most CLOCK_TOL x D per second. Above the band it stays put, so
+    a real backlog is never absorbed beyond the band, and the estimate stays exact over hours whichever clock is
+    faster (a fixed tolerance subtracted from D would hide ~110 MB of backlog after an hour at 150 MB/s). Growth
+    slower than CLOCK_TOL x D cannot be told from clock drift. growth: backlog slope over the last ~2 s."""
+
+    def __init__(self, data_bps, t_head):
+        self.D, self.t0 = data_bps, t_head
+        self.base, self.t_base = 0.0, t_head          # at the head nothing is behind yet
+        self.backlog = self.max = self.growth = 0.0
+        self.hist = []
+
+    def update(self, now, received):
+        raw = self.D * (now - self.t0) - received
+        rise = CLOCK_TOL * self.D * max(0.0, now - self.t_base) if raw - self.base < DRIFT_BAND else 0.0
+        self.base = min(raw, self.base + rise)
+        self.t_base = now
+        self.backlog = max(0.0, raw - self.base)
+        self.max = max(self.max, self.backlog)
+        h = self.hist
+        if not h or now - h[-1][0] >= 0.25:
+            h.append((now, self.backlog))
+            while len(h) > 2 and now - h[0][0] > 2.0:
+                h.pop(0)
+            if len(h) >= 2 and h[-1][0] > h[0][0]:
+                self.growth = max(0.0, (h[-1][1] - h[0][1]) / (h[-1][0] - h[0][0]))
+        return self.backlog
+
+
 STOP_ERRORS = {
     'backlog': ('HOST_TOO_SLOW', 'the host fell behind the scope by %.0f MB; the run was stopped before the 512 MiB ring '
                                  'could overwrite unread data', 'use a lower --rate or fewer channels'),
@@ -562,6 +756,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
     data_bps = pl['_data_bps']
     piece_bytes = max(blk, min(pl['_every_blocks'] * blk, PIECE_BYTES // blk * blk))
     disk_limit = pl.get('_disk_bytes') if pl['storage'] == 'disk' else None
+    ram_limit = pl.get('_ram_limit')
     target = None if pl['duration_s'] is None else int(math.ceil(pl['duration_s'] * rate / packet.BLOCK_SAMPLES)) * blk
     stall_s = max(2.0, 50 * pl['_pkt_s'])
     storage = pl['storage']
@@ -580,7 +775,18 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                 pl['_ram_budget'], pl['ram_ring'], pl['_every_blocks'])
     w.start()
     s = {'head': False, 't_head': None, 't_last': None, 'n_usb': 0, 'n_data': 0, 'pend': [], 'pend_n': 0,
-         'reason': None, 'backlog': 0, 'backlog_max': 0, 'queued_at_stop': 0}
+         'reason': None, 'backlog': 0, 'backlog_max': 0, 'queued_at_stop': 0, 'meter': None, 'tripped': False,
+         'quiet': 0.0}
+    quiet_s = max(0.25, 10 * pl['_pkt_s'])           # no data for this long: the scope stopped, not a slow host
+
+    def projection():
+        """Backlog growth over the last ~2 s and when the guard would stop the run (live lines)."""
+        m = s['meter']
+        if m is None or m.growth <= 0.01 * data_bps:
+            return {}
+        left = max(0.0, (BACKLOG_STOP - m.backlog) / m.growth)
+        return {'growth': m.growth, 'guard_in': left,
+                'gapfree_projected': (s['n_data'] + (data_bps - m.growth) * left) / data_bps}
 
     def flush(limit=None):
         bufs, n = s['pend'], s['pend_n']
@@ -594,17 +800,23 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
             bufs, n = out, limit
         s['pend'], s['pend_n'] = [], 0
         if n:
-            w.put(bufs, n, {'t_wall': time.time() - t0_wall, 'backlog': s['backlog']})
+            w.put(bufs, n, dict(projection(), t_wall=time.time() - t0_wall, backlog=s['backlog']))
 
     def on_chunk(buf):
-        now = time.monotonic()
+        now = time.perf_counter()
         if not s['head']:
             s['head'], s['t_head'], s['t_last'] = True, now, now
+            s['meter'] = BacklogMeter(data_bps, now)
+            return
+        s['t_last'] = now
+        if s['tripped']:
+            return                                   # read after the guard tripped: may be overwritten data
+        if s['meter'].update(now, s['n_data']) > BACKLOG_STOP:
+            s['tripped'] = True                      # per transfer: the engine calls stop() once per pass
             return
         s['n_usb'] += len(buf)
         d = buf[:blk] if small else buf             # small packets: one block, then filler, per 4 KiB read
         s['n_data'] += len(d)
-        s['t_last'] = now
         s['pend'].append(d)
         s['pend_n'] += len(d)
         if s['pend_n'] >= piece_bytes and (target is None or s['n_data'] < target):
@@ -619,19 +831,24 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
             return True
         if not s['head']:
             return False
-        now = time.monotonic()
+        now = time.perf_counter()
+        s['backlog'] = s['meter'].update(now, s['n_data'])
+        s['backlog_max'] = s['meter'].max
+        s['quiet'] = now - s['t_last']
+        if s['tripped'] or s['backlog'] > BACKLOG_STOP:
+            # a forced log planned to end here: ring_full; nothing arriving at all: the scope stopped sending
+            s['reason'] = 'stalled' if s['quiet'] > quiet_s else ('ring_full' if pl.get('_force') else 'backlog')
+            return True
         if target is not None and s['n_data'] >= target:
             s['reason'] = 'duration'
             return True
         if disk_limit is not None and s['n_data'] >= disk_limit:
             s['reason'] = 'disk_allowance'
             return True
-        s['backlog'] = max(0.0, data_bps * (1.0 - CLOCK_TOL) * (now - s['t_head']) - s['n_data'])
-        s['backlog_max'] = max(s['backlog_max'], s['backlog'])
-        if s['backlog'] > BACKLOG_STOP:
-            s['reason'] = 'backlog'
+        if ram_limit is not None and s['n_data'] >= ram_limit:
+            s['reason'] = 'ram_budget'
             return True
-        if now - s['t_last'] > stall_s:
+        if s['quiet'] > stall_s:
             s['reason'] = 'stalled'
             return True
         if w.queued > QUEUE_LIMIT_BYTES:
@@ -676,12 +893,21 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
            'data_mb': round(s['n_data'] / 1e6, 3), 'usb_mb': round(s['n_usb'] / 1e6, 3),
            'host_mb_s': round(s['n_usb'] / span / 1e6, 3) if span > 0 else None,
            'backlog_max_mb': round(s['backlog_max'] / 1e6, 2), 'stop_reason': s['reason'],
+           'unread_at_stop_mb': round(s['backlog'] / 1e6, 1),
            'head_word': '%08X' % int.from_bytes(raw.head[8:12], 'little'), 'stop': raw.stop,
            'elapsed_s': round(time.time() - t0_wall, 3)}
     res = {'ok': True, 'cmd': 'log', 'plan': public(pl), 'acq': acq}
     res.update(w.summary())
     res['files'] = _files(storage, w, stem, rate)
     res['warnings'] = list(pl['warnings'])
+    if s['reason'] == 'ring_full':
+        res['warnings'].append('--force: stopped after %.2f s of gap-free signal when the scope was %.0f MB ahead; the '
+                               'unread part (acquired after that) is lost' % (n_samples / rate, s['backlog'] / 1e6))
+    if s['reason'] == 'ram_budget':
+        res['warnings'].append('stopped at the RAM budget (%.2f GB)' % (ram_limit / 1e9))
+    remembered = None
+    if s['reason'] in ('duration', 'ring_full', 'backlog', 'stop_request') and data_bps > SUSTAINED_BPS and span >= 1.0:
+        remembered = _remember_readout(pl, s['meter'], s['n_data'] / span, data_bps)
     if s['reason'] == 'disk_allowance':
         res['warnings'].append('stopped at the disk allowance (%.1f GB); raise it with dscope bench --disk'
                                % (disk_limit / 1e9))
@@ -691,10 +917,35 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                         'hint': 'check the free space and permissions of --out'}
     elif s['reason'] in STOP_ERRORS:
         code, msg, hint = STOP_ERRORS[s['reason']]
-        val = {'backlog': s['backlog'] / 1e6, 'host_slow': s['queued_at_stop'] / 1e6, 'stalled': stall_s}[s['reason']]
+        val = {'backlog': s['backlog'] / 1e6, 'host_slow': s['queued_at_stop'] / 1e6, 'stalled': s['quiet']}[s['reason']]
+        if s['reason'] == 'backlog' and remembered and not remembered[1]:
+            hint = ('this channel set reads out at %.0f MB/s here (now remembered): log --plan shows how long a log '
+                    'stays gap-free and what stream gives; or %s' % (remembered[0], hint))
         res['ok'] = False
         res['error'] = {'code': code, 'message': msg % val + ' (data up to the stop is kept)', 'hint': hint}
     return res
+
+
+def _remember_readout(pl, meter, run_bps, data_bps):
+    """A run above the sustained rate measures the readout of its channel set, cached for the next plan: exactly when
+    the backlog was still growing at the stop and the run's average read rate agrees with D - growth (a steady
+    readout limit, not a stall at the end); as the lower bound R >= D when the host was caught up at the end; else
+    nothing (it ended while catching up). -> (MB/s, lower_bound) stored, or None."""
+    from . import host
+    if meter is None:
+        return None
+    if meter.growth > 0.01 * data_bps and meter.backlog > DRIFT_BAND \
+            and abs((data_bps - meter.growth) - run_bps) < 0.03 * data_bps:
+        mb, lower = run_bps / 1e6, False
+    elif meter.backlog < DRIFT_BAND and meter.growth <= 0.005 * data_bps:
+        mb, lower = data_bps / 1e6, True
+    else:
+        return None
+    try:
+        host.readout_put(pl['_readout_key'], mb, lower, data_bps / 1e6)
+    except (OSError, ValueError, KeyError):
+        return None
+    return mb, lower
 
 
 def _files(storage, w, stem, rate):

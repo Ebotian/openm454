@@ -67,6 +67,69 @@ def settings_from_args(a):
     return _timing_from_args(st, a)
 
 
+MAX_RECORD_SAMPLES = 400_000_000
+
+
+def stream_record_plan(st, total, min_rate):
+    """Records of a `stream` with untriggered settings st over `total` seconds (None = forever) -> (settings of
+    one record, seconds per record, chained). One record holds at most 400M samples per channel and 512 MiB of
+    sample memory; a longer stream is cut into records of the same rate (the largest that fits)."""
+    import copy
+    first_error = None
+    if total is not None:
+        try:
+            pl = Scope().plan(st)
+            if not any('samples capped' in w for w in pl['warnings']):
+                return st, total, False
+        except DscopeError as e:            # e.g. a long window squeezed into one record needs small packets
+            if e.code != 'INVALID_ARG':
+                raise
+            first_error = e
+    rate = st.rate or (st.samples / total if total else min_rate)   # --samples keeps its density
+
+    def record(d):
+        r = copy.copy(st)
+        r.duration, r.rate = d, rate
+        return r
+    d = MAX_RECORD_SAMPLES / rate
+    for _ in range(60):
+        try:
+            pl = Scope().plan(record(d))
+            if not any('samples capped' in w for w in pl['warnings']):
+                break
+        except DscopeError as e:
+            if e.code != 'INVALID_ARG':
+                raise
+        d *= 0.9
+    else:
+        raise first_error or DscopeError('INVALID_ARG', 'no record length fits these stream settings')
+    if total is not None and total <= d:
+        return record(total), total, False
+    return record(d), d, True
+
+
+def vertical_flags(st):
+    """CLI options that reproduce st's channels' vertical settings and threshold (defaults left out)."""
+    def spec(d, fmt, default):
+        items = ['%s=%s' % (c, fmt(d[c])) for c in st.analog if c in d and d[c] != default]
+        return ','.join(items)
+    out = []
+    for flag, d, fmt, default in (('--vdiv', st.vdiv, lambda v: '%gV' % v, 1.0),
+                                  ('--offset', st.offset, lambda v: '%gV' % v, 0.0),
+                                  ('--probe', st.probe, lambda v: '%gx' % v, 1.0),
+                                  ('--coupling', st.coupling, str, 'dc')):
+        v = spec(d, fmt, default)
+        if v:
+            out.append('%s %s' % (flag, v))
+    for flag, chans in (('--bw20', st.bw20), ('--invert', st.invert)):
+        chans = [c for c in chans if c in st.analog]
+        if chans:
+            out.append('%s %s' % (flag, ','.join(chans)))
+    if st.digital and abs(st.threshold - 1.4) > 1e-9:
+        out.append('--threshold %gV' % st.threshold)
+    return ' '.join(out)
+
+
 def vertical_from_args(a):
     """Channels, vertical settings and the digital threshold (shared by capture/watch/stream and log)."""
     from .units import si, channel_list, per_channel
@@ -482,19 +545,23 @@ class Scope:
             self._last_cross = cross
         return raw
 
-    def stream(self, st, every=1.0, emit=None, stop_flag=None, build=True):
+    def stream(self, st, every=1.0, emit=None, stop_flag=None, build=True, live=True):
         """Long untriggered recording with live statistics: the device streams the record while it is
-        acquired (roll mode for data rates below ~100 MB/s). emit(dict) receives one line per `every` seconds
+        acquired (roll mode; live=False: only below ~100 MB/s). emit(dict) receives one line per `every` seconds
         of signal time. stop_flag(): optional callable that ends the recording early (normal stop).
         Returns the full Capture at the end. build=False (a stream refreshing record after record): a complete
         record is not decoded into a Capture; the returned one only carries meta['acq'] (samples, duration,
         start time), so the next record can start at once; build_capture() decodes it later if it is needed after
-        all. build may be a callable, evaluated when the record is complete (a stop request may arrive meanwhile)."""
+        all. build may be a callable, evaluated when the record is complete (a stop request may arrive meanwhile).
+        live=True: the record is sent while it is acquired at any data rate (MODE 2; DSWave does that only below
+        102.4 MB/s and records first above it, which live=False keeps); the scope's memory buffers what the USB link
+        cannot take, so the next record starts after a short drain instead of a full read-out."""
         from . import packet
         self._check_link()
         st.trig_source, st.trig_mode = None, 'force'
         hal, scale, warnings, hints = hal_config(st)
         hal['trigger']['enable'] = 0
+        hal['stream_always'] = int(bool(live))
         prog, geom = self._compile_ok(hal, warnings)
         layout = packet.layout_from_regs(geom['_regs'], rates={'analog': geom['analog_rate'], 'digital': geom['digital_rate']},
                                          trig_domain=geom['trig_domain'])
@@ -598,16 +665,23 @@ class Scope:
         return cap.build() if not cap.meta.get('kept', True) else cap
 
     def record(self, st, rate, duration=None, every=1.0, out_stem=None, storage='ram', ram_budget=None, chunk_s=None,
-            emit=None, stop_flag=None, heartbeat=None, keep_last=False, force=False):
+            emit=None, stop_flag=None, heartbeat=None, keep_last=False, force=False, probe=None):
         """Gap-free recording over loop mode at one `rate` for every channel (<= 100 MSa/s; 200/400 MSa/s
         interleaved on 1-2 channels, see logger.max_rate), `duration` s or until
         stop_flag() is true (duration None). storage 'ram' (default: kept in RAM, written once to <out_stem>.npz),
-        'disk' (chunks dumped while running), 'none'. Returns the result document (see dscope.logger)."""
+        'disk' (chunks dumped while running), 'none'. Returns the result document (see dscope.logger).
+        probe: None measures the readout of this channel set first when it is unknown and the rate is above the
+        sustained one; True always; False never (plans with the cached readout or the 190 MB/s ceiling).
+        Raises STREAM_BETTER / NEEDS_FORCE (with .plan) for a log longer than its gap-free limit."""
         from . import logger
         self._check_link()
         out_dir = os.path.dirname(out_stem) if out_stem else None
-        pl = logger.plan(st, rate, duration, every, out_dir, storage, ram_budget, chunk_s,
-                         zero_info=self.dev.zero_info, force=force, keep_last=keep_last)
+        kw = dict(zero_info=self.dev.zero_info, force=force, keep_last=keep_last)
+        pl = logger.plan(st, rate, duration, every, out_dir, storage, ram_budget, chunk_s, defer=probe is not False,
+                         remeasure=probe is True, **kw)
+        if pl['_needs_probe']:
+            logger.measure_readout(self, pl)
+            pl = logger.plan(st, rate, duration, every, out_dir, storage, ram_budget, chunk_s, **kw)
         return logger.run(self, st, pl, out_stem, emit, stop_flag, heartbeat)
 
     def _meta(self, st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin):
