@@ -225,7 +225,8 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   (0x3512f0). Below it DSWave streams in MODE 2 with packets of 20 ms of data and ~200 ms of reads queued; at or
   above it, it records in MODE 0 and reads 1 MiB packets afterwards. Forced into MODE 2, 200 MB/s still streamed
   in real time; at 400 MB/s the readout ran at 270-290 MB/s and the record arrived complete and continuous (the
-  DDR buffers one record). A finished MODE 0 record reads out at 250-265 MB/s. Every MODE 0/1/2 record is bounded
+  DDR buffers one record). A finished MODE 0 record reads out at 175-265 MB/s depending on the channel set (1 analog
+  at 400 MSa/s: 250-265; 2 analog + 8 digital at 100 MSa/s: 214; 4 analog + 8 digital at 50 MSa/s: 175). Every MODE 0/1/2 record is bounded
   by `rd_bytes <= 512 MiB`; chaining MODE 2 records costs ~0.18-0.22 s per seam. Measured between two 1 s records
   (8 digital at 100 MSa/s): 43 ms until the last packet and the tail arrive, 3 ms stop handshake and cancel, 100 ms
   quiet after the stop, 19 ms setup writes (62, including 15 ms after CTRL = 0), 4 ms to queue the reads, 50 ms
@@ -251,11 +252,25 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   difference). 4 analog + 8 digital at 50 MSa/s (250 MB/s) read out at ~200 MB/s, so the backlog grew ~55 MB/s and
   the ring overflowed after ~10 s; 2 analog + 8 digital at 100 MSa/s (300 MB/s) read out at 266 MB/s; 2 analog at
   100 MSa/s (200 MB/s) ran 20 s without backlog in one run and ~2 % short in another; 1 analog at 200 MSa/s
-  (interleaved, 200 MB/s) ran 10 s without backlog. The same channel set reads out at the same speed in MODE 2 and in
-  loop mode (4 analog + 8 digital at 50 MSa/s: 205 / 206 MB/s; 4 analog at 100 MSa/s: 276 / 275 MB/s). Gap-free loop runs: 4 analog
+  (interleaved, 200 MB/s) ran 10 s without backlog. With the same interleave the readout is the same in MODE 2 and in
+  loop mode (4 analog + 8 digital at 50 MSa/s: 205 / 206 MB/s; 4 analog at 100 MSa/s: 276 / 275 MB/s); it depends on
+  the interleave: 2 analog + 8 digital at 100 MSa/s read out at ~205 MB/s in MODE 2 (two converters per analog
+  channel) and at 266 MB/s in loop mode (one converter per channel). Gap-free loop runs: 4 analog
   + 8 digital at 50 kSa/s (60 s) and at 1-20 MSa/s (100 MB/s), 8 digital at 100 MSa/s, 2 analog + 8 digital at
   50 MSa/s (150 MB/s for 180 s, 27 GB, host lag constant), 4 analog + 8 digital at 1 MSa/s for 10 min (3 GB,
   599,361 periods, no step above 1.1 us).
+* **Gap between two runs started back to back** = drain + restart. The restart (stop handshake, 100 ms quiet, setup,
+  50 ms before the start) takes ~0.18 s. The drain is the time the host still needs, after the run's signal has
+  ended, to read the data that belong to the run:
+  * loop mode: T x (D / R - 1) for a run of T seconds at data rate D read out at R while acquiring (0 when R >= D).
+    The scope keeps acquiring during the drain; what it acquires after T is never read (dropped at the stop).
+  * MODE 0 (DSWave's choice at or above 102,400 kB/s): the whole record, D x T / R, because nothing is sent while
+    the record is acquired.
+  * MODE 2 below 102,400 kB/s: ~0 (sent while acquired).
+  Measured with 4 analog + 8 digital channels (identical programs in both modes apart from the mode): at 20 MSa/s
+  (100 MB/s, 3 s runs) loop 0.178 s, MODE 2 0.191 s; at 50 MSa/s (250 MB/s, 1.5 s runs) loop 0.51 s (drain 0.33 s),
+  MODE 0 2.33 s (drain 2.14 s: the 375 MB record read out after it was acquired), MODE 2 forced above the switch
+  0.73 s (drain 0.54 s).
 
 ## 9. AWG (MCX output 0..3 V)
 

@@ -30,7 +30,7 @@ python -m dscope selftest
 | Command | How it records | Length | Rates |
 |---|---|---|---|
 | `capture` | into the 512 MiB sample memory, read out afterwards (250-265 MB/s) | one record: 400M samples per channel / 512 MiB | up to 400 MSa/s (1 channel) |
-| `stream` | streamed while acquired (below 102.4 MB/s, DSWave's switch); longer than one record or `--duration forever`: record after record, each refreshing the previous one | unlimited, ~0.3 s gap between records; the last record is kept (`--save-each`: all) | as `capture` |
+| `stream` | streamed while acquired below 102.4 MB/s (DSWave's switch), above it recorded first and read out afterwards; longer than one record or `--duration forever`: record after record, each refreshing the previous one | unlimited, ~0.2 s gap between records below 100 MB/s, seconds above (each record is read out first); the last record is kept (`--save-each`: all) | as `capture`: analog and digital at their own rates |
 | `log` | loop mode: one endless gap-free stream, kept in RAM (default; written once at the end; a RAM ring keeps the newest part of longer runs) or, with `--storage disk`, dumped in chunk files while running | until `dscope stop` or the duration; RAM budget / disk allowance | one rate for all channels, 1 kSa/s..100 MSa/s; interleaved 200 MSa/s (<= 2 analog, <= 4 digital channels) and 400 MSa/s (<= 1 analog, <= 2 digital) |
 
 Measured on the M454 over USB 3 with every input on a 1 kHz square, every period checked for gaps (2026-11-01/02):
@@ -59,6 +59,26 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   the owner allows for recordings and the data folder (`bench --ram 8GB --disk 50GB --dir <folder>`,
   `state/host.json`); `log` takes its defaults from there. Measured here: decode 468 MB/s, USB readout 206 MB/s
   (4 analog + 8 digital) / 267 MB/s (2 analog + 8 digital).
+
+### `log` or `stream`?
+
+Both record untriggered, but they are not the same mode of the scope. `log` is one endless run (loop mode);
+`stream` is a series of records, each programmed with a fixed length that the scope stops at.
+
+| | `log` | `stream` |
+|---|---|---|
+| gaps | none inside a run | one per record (refresh) |
+| gap between two runs, 12 channels at 20 MSa/s (100 MB/s) | 0.18 s | 0.19 s |
+| gap between two 1.5 s runs, 12 channels at 50 MSa/s (250 MB/s, above the readout limit) | 0.51 s: 0.33 s to read the run's backlog (data the scope acquires meanwhile are dropped), then 0.18 s restart | 2.33 s: the whole 375 MB record is acquired first and read out afterwards (2.14 s), then the restart |
+| rates | one rate for every channel: up to 100 MSa/s, interleaved 200 / 400 MSa/s on 1-2 channels | analog and digital at their own rates (e.g. 1 analog at 400 MSa/s with 8 digital at 100 MSa/s), the full rate table (e.g. 80 MSa/s) |
+| above the readout limit (~200-275 MB/s) | a burst limited by the 384 MiB backlog guard (500 MB/s: ~0.5 s) | one full record at any rate (up to 400M samples per channel / 512 MiB: 500 MB/s for 1.0 s), read out afterwards |
+| below ~51 kB/s (e.g. 1 channel at 1-20 kSa/s) | supported | the rate is raised |
+| protocol decoders | offline on the saved file (`analyze --decode`) | `--decode` on the kept record |
+| register program | DSWave's Data Acquisition mode (interleaving: this driver's extension, verified) | DSWave's own program for this window (golden-tested) |
+
+The restart (~0.18 s) is the same for both; the difference is what has to be read out before it. Use `log` for
+continuous recording; `stream` for different analog and digital rates, decoding the record, or one full-memory
+record above the readout limit (`capture --trig-mode force` gives that record too).
 
 ```
 python -m dscope bench --ram 8GB --disk 50GB --dir logs
