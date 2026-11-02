@@ -84,8 +84,10 @@ class Layout:
     afold / dfold    : interleave factor (1, 2, 4) of the analog / digital front end
     amtxs / dmtxs    : 64-sample units per block for analog / digital (rate ratio after gcd)
     analog_rate / digital_rate : samples per second of each domain (None if unknown)
-    hw_mode          : HW_BASE_MODE (0 single, 1 repeat, 2 stream/slow)
-    acq_words        : HORI_RWORDS + 1 (32-bit words of sample data per frame), None if unknown
+    hw_mode          : HW_BASE_MODE & 3 (0 single, 1 repeat, 2 stream/slow)
+    loop             : HW_BASE_MODE bit 2 (loop mode: an endless stream of blocks, no tails)
+    acq_words        : HORI_RWORDS + 1 (32-bit words of sample data per frame), None if unknown or in loop mode
+                       (there RWORDS covers one USB packet, not a record)
     pretrig          : TRIG_PRES (pretrigger offset in trigger-domain samples), None if unknown
     trig_domain      : 'analog' or 'digital' -- sample domain of trigger positions / pretrig
     """
@@ -98,6 +100,7 @@ class Layout:
     analog_rate: float | None = None
     digital_rate: float | None = None
     hw_mode: int = MODE_SINGLE
+    loop: bool = False
     acq_words: int | None = None
     pretrig: int | None = None
     trig_domain: str = "analog"
@@ -198,7 +201,8 @@ def layout_from_regs(regs: dict, rates=None, trig_domain=None) -> Layout:
     else:
         amtxs, dmtxs = _mtxs(arate, drate, analog, digital)
     acq_words = None
-    if R_HORI_RWORDS0 in regs:
+    loop = bool(g(R_HW_BASE_MODE, 0) & 4)
+    if R_HORI_RWORDS0 in regs and not loop:
         acq_words = (g(R_HORI_RWORDS0, 0) | g(R_HORI_RWORDS1, 0) << 16) + 1
     pretrig = None
     if R_TRIG_PRES0 in regs:
@@ -209,7 +213,7 @@ def layout_from_regs(regs: dict, rates=None, trig_domain=None) -> Layout:
         else:
             trig_domain = "analog" if analog else "digital"
     return Layout(analog=analog, digital=digital, afold=afold, dfold=dfold, amtxs=amtxs, dmtxs=dmtxs,
-                  analog_rate=arate, digital_rate=drate, hw_mode=g(R_HW_BASE_MODE, 0) & 3,
+                  analog_rate=arate, digital_rate=drate, hw_mode=g(R_HW_BASE_MODE, 0) & 3, loop=loop,
                   acq_words=acq_words, pretrig=pretrig, trig_domain=trig_domain)
 
 
@@ -318,8 +322,9 @@ def _mv(data):
 
 
 # ----------------------------------------------------------------------------------------------- decode
-def _decode_blocks(B: np.ndarray, layout: Layout):
-    """B: (nblk, block_bytes) uint8 -> (analog dict, digital dict)."""
+def _decode_blocks(B: np.ndarray, layout: Layout, packed=False):
+    """B: (nblk, block_bytes) uint8 -> (analog dict, digital dict). packed=True: digital channels stay 1 bit per
+    sample (= np.packbits(bits, bitorder='little'), 8x less memory; see bit_stats)."""
     nblk = B.shape[0]
     na, nd = len(layout.analog), len(layout.digital)
     analog, digital = {}, {}
@@ -328,7 +333,11 @@ def _decode_blocks(B: np.ndarray, layout: Layout):
         A = B[:, :ab].reshape(nblk, layout.amtxs * 8, na, 8).transpose(2, 0, 1, 3).reshape(na, -1)
         for i, ch in enumerate(layout.analog):
             analog[ch] = np.array(A[i])              # own (writable) copy, not a view of the input
-    if nd:
+    if nd and packed:
+        D = B[:, ab:].reshape(nblk, layout.dmtxs, nd, 8)
+        for i, ch in enumerate(layout.digital):
+            digital[ch] = np.array(D[:, :, i, :]).reshape(-1)       # own writable copy, like the analog path
+    elif nd:
         D = B[:, ab:].reshape(nblk, layout.dmtxs, nd, 8)
         D = np.unpackbits(D, axis=3, bitorder="little")              # (nblk, dmtxs, nd, 64)
         D = D.transpose(2, 0, 1, 3).reshape(nd, -1)
@@ -389,6 +398,30 @@ def decode(data, layout: Layout, nsamples=None, fill_stale=False) -> dict:
             "digital_rate": layout.digital_rate, "analog_samples": na_s, "digital_samples": nd_s,
             "nblocks": nblk, "valid_bytes": nblk * layout.block_bytes, "tail": tail,
             "tail_offset": toff, "primary": layout.primary, "digital_stale": stale}
+
+
+_POP8 = np.array([bin(i).count('1') for i in range(256)], dtype=np.uint8)
+
+
+def _popcount(x):
+    """Set bits per byte (np.bitwise_count needs NumPy >= 2.0)."""
+    f = getattr(np, 'bitwise_count', None)
+    return f(x) if f is not None else _POP8[x]
+
+
+def bit_stats(packed, prev_bit=None):
+    """Statistics of a packed digital channel (little bit order) without unpacking it.
+    -> (ones, edges, last_bit). prev_bit: last sample of the previous piece (None = start, no edge before it)."""
+    x = np.asarray(packed, dtype=np.uint8)
+    if x.size == 0:
+        return 0, 0, prev_bit
+    prev = np.empty_like(x)
+    prev[0] = (x[0] & 1) if prev_bit is None else prev_bit
+    prev[1:] = x[:-1] >> 7
+    shifted = (x << 1) | prev                   # bit j holds sample j - 1
+    edges = int(_popcount(x ^ shifted).sum(dtype=np.uint64))
+    ones = int(_popcount(x).sum(dtype=np.uint64))
+    return ones, edges, int(x[-1] >> 7)
 
 
 # -------------------------------------------------------------------------------------------- triggers
@@ -486,19 +519,19 @@ class StreamAssembler:
     head) and returns a list of events:
       {'kind': 'head', 'head': parse_head(...)}
       {'kind': 'samples', 'frame': f, 'block': first block index, 'nblocks': n,
-       'analog': {...}, 'digital': {...}}
+       'analog': {...}, 'digital': {...}}      (packed=True: digital arrays are packed bits, see bit_stats)
       {'kind': 'frame', 'frame': f, 'tail': parse_tail(...), 'nblocks': valid blocks of the frame,
        'trig_index': trigger index or None}
       {'kind': 'end'}   (single / stream mode after the tail; later bytes are padding)
     Samples are released as soon as whole blocks arrive, except for the blocks within the last 64
     bytes before acq_words*4 (the tail may mark them invalid); they come with the 'frame' event.
-    continuous=True: no tail is expected (loop mode, never observed): every complete block is
-    released.  max_frames bounds repeat mode (None = unbounded).  flush() releases what is left
+    continuous=True: no tail is expected (loop mode, HW_BASE_MODE 6: an endless stream of blocks after
+    the head, verified on hardware 2026-11-01): every complete block is released.  max_frames bounds repeat mode (None = unbounded).  flush() releases what is left
     of an acquisition that was stopped before its tail arrived.  Samples are raw: the first
     layout.digital_stale digital samples of frame 0 hold a stale level (see DIGITAL_STALE).
     """
 
-    def __init__(self, layout: Layout, continuous=False, max_frames=None):
+    def __init__(self, layout: Layout, continuous=False, max_frames=None, packed=False):
         if layout.block_bytes == 0:
             raise PacketError("layout has no enabled channels")
         if layout.acq_words is None and not continuous:
@@ -506,6 +539,7 @@ class StreamAssembler:
         self.layout = layout
         self.continuous = continuous
         self.max_frames = max_frames
+        self.packed = packed
         self.head = None
         self.frame = 0
         self.done = False
@@ -557,7 +591,7 @@ class StreamAssembler:
             return
         a = self._blk * bb - self._pos
         B = np.frombuffer(bytes(self._buf[a:a + n * bb]), dtype=np.uint8).reshape(n, bb)
-        an, dg = _decode_blocks(B, self.layout)
+        an, dg = _decode_blocks(B, self.layout, self.packed)
         ev.append({"kind": "samples", "frame": self.frame, "block": self._blk, "nblocks": n,
                    "analog": an, "digital": dg})
         self._blk = upto_blocks

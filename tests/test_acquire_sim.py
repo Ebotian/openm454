@@ -697,3 +697,14 @@ def test_silent_mcu_gets_the_recover_then_replug_hint():
     with pytest.raises(DscopeError) as ei:
         d.open()
     assert ei.value.code == 'USB_ERROR' and 'recover' in ei.value.hint and 'replug' in ei.value.hint
+
+
+def test_endless_run_without_buffering_stops_on_the_flag():
+    """Loop mode: no record end, no collect deadline, data only goes to on_chunk."""
+    sim, eng = engine()
+    got = []
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=None, n_transfers=4, trigger_timeout=1.0, collect_timeout=None,
+                  on_chunk=got.append, stop_flag=lambda: len(got) > 50, poll=False, keep_data=False)
+    assert cap.stop == 'normal' and cap.stopped and not cap.timed_out
+    assert len(cap.data) == 0 and cap.n_data == sum(len(b) for b in got[1:]) >= 50 * PKT
+    assert sim.violations == [] and not sim.starved and cap.ep84 == [1, 2, 3]

@@ -33,6 +33,14 @@ def to_mso(hal):
     cfg.trig_hold_ps = int(t['hold_ps'])
     cfg.repeat_mode = bool(hal.get('repeat'))
     cfg.loop_mode = False
+    if hal.get('loop'):
+        # loop mode (DSWave's Data Acquisition mode): endless stream, trigger off, one explicit rate for every
+        # channel (AUTORATE off; :SAMPLEtime is ignored), fold 0, so at most 100 MSa/s per channel
+        cfg.loop_mode = True
+        cfg.auto_rate = False
+        cfg.analog_rate = cfg.digital_rate = int(hal['rate'])
+        cfg.trig_enable = False
+        cfg.trig_mode = 0
     ar, ad, dr, dd = mso.rates_and_depths(cfg)
     depth = ad if cfg.trig_channel_type == 1 and any(a.enable for a in cfg.analog) else dd
     cfg.trig_sample_index = int(round(t['pos_pct'] / 100.0 * depth))
@@ -71,7 +79,8 @@ def compile(hal, zero_info, include_cross=True):
         'analog_depth': g.analog_depth if g.n_analog else 0,
         'digital_depth': g.digital_depth if g.n_digital else 0,
         'pkt_bytes': g.transfer_size, 'transfer_count': g.transfer_count,
-        'need_bytes': g.acqu_bytes + (0 if cfg.repeat_mode else packet.TAIL_BYTES), 'acqu_bytes': g.acqu_bytes,
+        'need_bytes': None if cfg.loop_mode else g.acqu_bytes + (0 if cfg.repeat_mode else packet.TAIL_BYTES),
+        'acqu_bytes': g.acqu_bytes, 'loop': bool(cfg.loop_mode),
         'small_pkt': bool(g.small_pkt),
         'hw_mode': g.hw_mode, 'pretrig': g.pretrig, 'sample_index': cfg.trig_sample_index,
         'trig_domain': 'analog' if cfg.trig_channel_type == 1 and g.n_analog else 'digital',
@@ -80,7 +89,7 @@ def compile(hal, zero_info, include_cross=True):
         '_regs': {a: v for a, v in prog},
     }
     dom = geom['trig_domain']
-    geom['record_s'] = (geom[dom + '_depth'] / geom[dom + '_rate']) if geom[dom + '_rate'] else 0.0
+    geom['record_s'] = (geom[dom + '_depth'] / geom[dom + '_rate']) if geom[dom + '_rate'] and not cfg.loop_mode else 0.0
     return prog, geom
 
 

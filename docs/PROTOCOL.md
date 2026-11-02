@@ -240,11 +240,13 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
 * **The 512 MiB DDR is a ring.** The host may fall behind by up to ~512 MiB without loss (host stalls of up to 10 s
   at 50 MB/s were absorbed and caught up). Past that the device overwrites unread data without any flag, and the
   stream stays misaligned until it is restarted. The host must track backlog = rate x (t - t_head) - bytes read.
-* **Sustained readout while acquiring: ~196 MB/s** (any read size from 1 to 8 MiB). Gap-free loop runs: 4 analog
+* **Readout while acquiring: ~196-266 MB/s, depending on the channel set** (the read size, 1 to 8 MiB, makes no
+  difference). 4 analog + 8 digital at 50 MSa/s (250 MB/s) read out at ~200 MB/s, so the backlog grew ~55 MB/s and
+  the ring overflowed after ~10 s; 2 analog + 8 digital at 100 MSa/s (300 MB/s) read out at 266 MB/s; 2 analog at
+  100 MSa/s (200 MB/s) ran 20 s without backlog in one run and ~2 % short in another. Gap-free loop runs: 4 analog
   + 8 digital at 50 kSa/s (60 s) and at 1-20 MSa/s (100 MB/s), 8 digital at 100 MSa/s, 2 analog + 8 digital at
   50 MSa/s (150 MB/s for 180 s, 27 GB, host lag constant), 4 analog + 8 digital at 1 MSa/s for 10 min (3 GB,
-  599,361 periods, no step above 1.1 us). At 200 MB/s the backlog grows ~4 MB/s; at 250 MB/s the ring overflowed
-  after ~10 s.
+  599,361 periods, no step above 1.1 us).
 
 ## 9. AWG (MCX output 0..3 V)
 

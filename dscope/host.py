@@ -1,0 +1,82 @@
+"""This PC's limits for recording: what the owner allows (RAM, disk, data folder) and what was measured.
+
+Stored in state/host.json (git-ignored). `python -m dscope bench` measures and records it; `log` takes its RAM budget,
+disk allowance and default output folder from here.
+
+  allow: {'ram_bytes', 'disk_bytes', 'data_dir'}          set by the owner (bench --ram / --disk / --dir)
+  bench: {'time', 'ram_free_bytes', 'decode_mb_s', 'disk_write_mb_s', 'disk_dir', 'usb_readout_mb_s', ...}
+"""
+import json
+import os
+import shutil
+import tempfile
+import time
+
+import numpy as np
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HOST_FILE = os.path.join(ROOT, 'state', 'host.json')
+
+
+def load():
+    try:
+        with open(HOST_FILE) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save(d):
+    os.makedirs(os.path.dirname(HOST_FILE), exist_ok=True)
+    tmp = HOST_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(d, f, indent=1)
+    os.replace(tmp, HOST_FILE)
+
+
+def allow():
+    return load().get('allow', {})
+
+
+def data_dir(default):
+    return allow().get('data_dir') or default
+
+
+def bench_decode(seconds=1.0):
+    """Throughput of the log writer's per-block work (decode + statistics) on 4 analog + 8 digital blocks, MB/s."""
+    from . import packet
+    lay = packet.make_layout(analog=(0, 1, 2, 3), digital=tuple(range(8)), analog_rate=1e6, digital_rate=1e6,
+                             afold=1, dfold=1, acq_words=None)
+    nb = (64 << 20) // lay.block_bytes
+    B = np.random.default_rng(0).integers(0, 256, (nb, lay.block_bytes), dtype=np.uint8)
+    t0 = time.perf_counter()
+    n = 0
+    while time.perf_counter() - t0 < seconds:
+        an, dg = packet._decode_blocks(B, lay, packed=True)
+        for x in an.values():
+            int(x.min()), int(x.max()), int(x.sum(dtype=np.uint64))
+        for x in dg.values():
+            packet.bit_stats(x)
+        n += B.nbytes
+    return n / (time.perf_counter() - t0) / 1e6
+
+
+def bench_disk(d, mb=256):
+    """Sequential write speed into folder d (fsync'ed), MB/s; the test file is deleted. Writes `mb` MB once."""
+    os.makedirs(d, exist_ok=True)
+    block = np.random.default_rng(1).integers(0, 256, 8 << 20, dtype=np.uint8).tobytes()
+    fd, path = tempfile.mkstemp(prefix='dscope_bench_', suffix='.bin', dir=d)
+    try:
+        t0 = time.perf_counter()
+        with os.fdopen(fd, 'wb', buffering=0) as f:
+            for _ in range(max(1, mb // 8)):
+                f.write(block)
+            os.fsync(f.fileno())
+        dt = time.perf_counter() - t0
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return (max(1, mb // 8) * len(block)) / dt / 1e6, shutil.disk_usage(d).free

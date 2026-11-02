@@ -63,6 +63,12 @@ class Settings:
 
 
 def settings_from_args(a):
+    st = vertical_from_args(a)
+    return _timing_from_args(st, a)
+
+
+def vertical_from_args(a):
+    """Channels, vertical settings and the digital threshold (shared by capture/watch/stream and log)."""
     from .units import si, channel_list, per_channel
     st = Settings()
     an, dg = channel_list(a.channels)
@@ -78,6 +84,11 @@ def settings_from_args(a):
     st.probe = per_channel(a.probe, None, '--probe', '1x')
     st.probe = {k: si(v, None, '--probe') for k, v in st.probe.items()}
     st.threshold = si(a.threshold, 'V', '--threshold')
+    return st
+
+
+def _timing_from_args(st, a):
+    from .units import si
     if a.duration:
         st.duration = si(a.duration, 's', '--duration')
     elif a.timebase:
@@ -471,11 +482,14 @@ class Scope:
             self._last_cross = cross
         return raw
 
-    def stream(self, st, every=1.0, emit=None, stop_flag=None):
+    def stream(self, st, every=1.0, emit=None, stop_flag=None, build=True):
         """Long untriggered recording with live statistics: the device streams the record while it is
         acquired (roll mode for data rates below ~100 MB/s). emit(dict) receives one line per `every` seconds
         of signal time. stop_flag(): optional callable that ends the recording early (normal stop).
-        Returns the full Capture at the end."""
+        Returns the full Capture at the end. build=False (a stream refreshing record after record): a complete
+        record is not decoded into a Capture; the returned one only carries meta['acq'] (samples, duration,
+        start time), so the next record can start at once; build_capture() decodes it later if it is needed after
+        all. build may be a callable, evaluated when the record is complete (a stop request may arrive meanwhile)."""
         from . import packet
         self._check_link()
         st.trig_source, st.trig_mode = None, 'force'
@@ -484,9 +498,10 @@ class Scope:
         prog, geom = self._compile_ok(hal, warnings)
         layout = packet.layout_from_regs(geom['_regs'], rates={'analog': geom['analog_rate'], 'digital': geom['digital_rate']},
                                          trig_domain=geom['trig_domain'])
-        asm = packet.StreamAssembler(layout)
+        asm = packet.StreamAssembler(layout, packed=True)      # digital stays packed: statistics on the bits
         an, dg = list(st.analog), list(st.digital)
-        acc = {c: [] for c in an + dg}
+        acc = {}                                                 # per line: running min/max/sum, ones/edges
+        last_bit = {c: None for c in dg}
         state = {'t_sig': 0.0, 'next': every, 'i': 0}
         prate = geom['analog_rate'] if an else geom['digital_rate']
         t0 = time.time()
@@ -499,19 +514,16 @@ class Scope:
         def report(final=False):
             line = {'i': state['i'], 't_signal_s': round(state['t_sig'], 4), 't_wall_s': round(time.time() - t0, 3)}
             for c in an:
-                if acc[c]:
-                    codes = np.concatenate(acc[c]).astype(np.float32)
+                a = acc.get(c)
+                if a:
                     s_ = scale[c]
-                    v = (codes - s_['zero_code']) * s_['volts_per_code'] * s_['probe']
-                    line[c] = {'vmin_v': round(float(v.min()), 4), 'vmax_v': round(float(v.max()), 4),
-                               'vmean_v': round(float(v.mean()), 4), 'n': int(v.size)}
+                    v = lambda code: round(float((code - s_['zero_code']) * s_['volts_per_code'] * s_['probe']), 4)
+                    line[c] = {'vmin_v': v(a[0]), 'vmax_v': v(a[1]), 'vmean_v': v(a[2] / a[3]), 'n': a[3]}
             for c in dg:
-                if acc[c]:
-                    b = np.concatenate(acc[c])
-                    line[c] = {'high_frac': round(float(b.mean()), 4),
-                               'edges': int(np.count_nonzero(np.diff(b.astype(np.int8))))}
-            for c in acc:
-                acc[c] = []
+                a = acc.get(c)
+                if a:
+                    line[c] = {'high_frac': round(a[0] / a[2], 4), 'edges': a[1]}
+            acc.clear()
             state['i'] += 1
             if final:
                 line['final'] = True
@@ -526,13 +538,20 @@ class Scope:
                 if ev['kind'] != 'samples':
                     continue
                 for c in an:
-                    arr = pick(ev['analog'], c)
-                    if arr is not None:
-                        acc[c].append(np.asarray(arr))
+                    x = pick(ev['analog'], c)
+                    if x is not None and x.size:
+                        a = acc.setdefault(c, [255, 0, 0, 0])
+                        a[0], a[1] = min(a[0], int(x.min())), max(a[1], int(x.max()))
+                        a[2] += int(x.sum(dtype=np.uint64))
+                        a[3] += int(x.size)
                 for c in dg:
-                    arr = pick(ev['digital'], c)
-                    if arr is not None:
-                        acc[c].append(np.asarray(arr))
+                    x = pick(ev['digital'], c)
+                    if x is not None and x.size:
+                        ones, edges, last_bit[c] = packet.bit_stats(x, last_bit[c])
+                        a = acc.setdefault(c, [0, 0, 0])
+                        a[0] += ones
+                        a[1] += edges
+                        a[2] += ev['nblocks'] * layout.digital_block_samples
                 n = ev['nblocks'] * (layout.analog_block_samples if an else layout.digital_block_samples)
                 state['t_sig'] += n / prate
                 if state['t_sig'] >= state['next']:
@@ -549,17 +568,46 @@ class Scope:
             if raw.aborted:
                 raise DscopeError('TIMEOUT_WATCHDOG', 'stream stopped before any data arrived')
             raise DscopeError('PROTOCOL_ERROR', 'no data from the device')
-        if not self._check_complete(raw, geom):
+        complete = self._check_complete(raw, geom)
+        if not complete:
             warnings.append('record incomplete: %d of %d data bytes (%s)' % (
                 len(raw.data), geom['need_bytes'], 'stopped on request' if raw.stopped else
                 'aborted' if raw.aborted else 'data stopped arriving'))
-        frame = _decode(raw, geom, hal)
-        self._overdriven = _saturated(frame)
-        meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, ['stream'], t0)
-        meta['acq']['mode'] = 'roll' if geom.get('roll') else 'single'
-        cap = Capture(meta, frame['analog'], frame['digital'])
-        cap.meta['hints'] = _hints(cap) + hints
-        return cap
+        def full():
+            frame = _decode(raw, geom, hal)
+            self._overdriven = _saturated(frame)
+            meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, ['stream'], t0)
+            meta['acq']['mode'] = 'roll' if geom.get('roll') else 'single'
+            meta['acq']['t_start_wall'] = raw.t_start  # host clock at the start write (stream refresh: seam gaps)
+            cap = Capture(meta, frame['analog'], frame['digital'])
+            cap.meta['hints'] = _hints(cap) + hints
+            return cap
+        if complete and not (build() if callable(build) else build):
+            dom = 'analog' if st.analog else 'digital'
+            n = geom[dom + '_depth']
+            light = Capture({'kept': False, 'warnings': warnings, 'acq': {
+                'mode': 'roll' if geom.get('roll') else 'single', 'samples': n, 'duration_s': n / geom[dom + '_rate'],
+                't_start_wall': raw.t_start, 'complete': True, 'stop': raw.stop}})
+            light.build = full
+            return light
+        return full()
+
+    @staticmethod
+    def build_capture(cap):
+        """The full Capture of a record that stream(build=False) did not decode (the raw data was kept)."""
+        return cap.build() if not cap.meta.get('kept', True) else cap
+
+    def record(self, st, rate, duration=None, every=1.0, out_stem=None, storage='ram', ram_budget=None, chunk_s=None,
+            emit=None, stop_flag=None, heartbeat=None, keep_last=False, force=False):
+        """Gap-free recording over loop mode at one `rate` for every channel (<= 100 MSa/s), `duration` s or until
+        stop_flag() is true (duration None). storage 'ram' (default: kept in RAM, written once to <out_stem>.npz),
+        'disk' (chunks dumped while running), 'none'. Returns the result document (see dscope.logger)."""
+        from . import logger
+        self._check_link()
+        out_dir = os.path.dirname(out_stem) if out_stem else None
+        pl = logger.plan(st, rate, duration, every, out_dir, storage, ram_budget, chunk_s,
+                         zero_info=self.dev.zero_info, force=force, keep_last=keep_last)
+        return logger.run(self, st, pl, out_stem, emit, stop_flag, heartbeat)
 
     def _meta(self, st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin):
         trig = {'source': st.trig_source, 'edge': st.trig_edge if st.trig_source else None,

@@ -22,6 +22,13 @@ _IDLE = [None]                   # called when the device is idle again (host po
 _OUT = {'lock': threading.Lock(), 'owner': None}     # one output owner: main thread, or the watchdog once it fires
 
 
+FOREVER = ('forever', 'inf', 'until-stop')
+
+
+def is_forever(text):
+    return bool(text) and text.strip().lower() in FOREVER
+
+
 def stream_settings(args):
     """Settings for 'stream': untriggered, 10 s by default, at least STREAM_MIN_RATE unless the user chose."""
     from .scope import settings_from_args
@@ -81,6 +88,11 @@ def _fwd(p):
 
 # ------------------------------------------------------------------------------------------- arguments
 def _capture_args(p):
+    _vertical_args(p)
+    _timing_trigger_output_args(p)
+
+
+def _vertical_args(p):
     g = p.add_argument_group('channels / vertical')
     g.add_argument('-c', '--channels', default='A0-A3,D0-D7', help="e.g. 'A1', 'A0-A3,D0-D7', 'analog', 'digital'")
     g.add_argument('--vdiv', default='1V', help="volts/div at the probe tip: '1V' or 'A0=500mV,A2=2V' (hw range 1mV..5V x probe)")
@@ -90,6 +102,9 @@ def _capture_args(p):
     g.add_argument('--invert', default='', help='channels to invert, e.g. A2')
     g.add_argument('--probe', default=None, help="probe factor: '10x' or 'A2=10x' (default 1x)")
     g.add_argument('--threshold', default='1.4V', help='digital input threshold 0..5 V (default 1.4V)')
+
+
+def _timing_trigger_output_args(p):
     g = p.add_argument_group('timing')
     g.add_argument('--timebase', default=None, help='time/div; window = 10 divisions (e.g. 500us)')
     g.add_argument('--duration', default=None, help='window length (e.g. 10ms); default 10 x timebase or 5ms')
@@ -145,9 +160,42 @@ def build_parser():
     w.add_argument('--fields', default=None, help='comma list like A1.freq_hz,A1.vpp_v,D0.state (default: key stats)')
     w.add_argument('--stop-when', default=None, help="python expression over fields, e.g. \"A1['vpp_v'] < 1\"")
     w.add_argument('--save-last', action='store_true')
-    sm = sub.add_parser('stream', help='long untriggered recording with live JSON statistics (data logger)')
+    sm = sub.add_parser('stream', help='untriggered recording streamed while it is acquired, with live JSON statistics; '
+                                       'longer than one record (400M samples / 512 MiB) it refreshes record after record')
     _capture_args(sm)
     sm.add_argument('--every', default='1s', help='signal time per live statistics line')
+    sm.add_argument('--save-each', action='store_true', help='save every record (default: only the last one)')
+    lg = sub.add_parser('log', help='gap-free endless recording (loop mode) at one rate for all channels, kept in RAM '
+                                    '(default) or dumped to disk; --plan shows rate limits, duration and storage')
+    _vertical_args(lg)
+    lg.add_argument('--rate', default='1M', help='sample rate of every channel, 1k..100M (1-2-5 steps; default 1M)')
+    lg.add_argument('--duration', default='10s', help="e.g. 60s, 2h, or 'forever' (until dscope stop)")
+    lg.add_argument('--every', default='1s', help='signal time per live statistics line')
+    lg.add_argument('--storage', default='ram', choices=['ram', 'disk', 'none'],
+                    help='ram (default): keep the samples in RAM, write one .npz at the end; disk: dump chunk files '
+                         'while running (wears an SSD at high rates: only for records needed in full); none: '
+                         'statistics only')
+    lg.add_argument('--keep-last', action='store_true', help='RAM log longer than the budget: keep the newest part '
+                                                             '(a ring) instead of refusing ("forever" always does)')
+    lg.add_argument('--chunk', default=None, help='disk storage: seconds per file (default: ~256 MB per file)')
+    lg.add_argument('--ram', default=None, help='RAM budget (default: the allowance set with dscope bench --ram, else '
+                                                 'min(4 GB, a quarter of the free RAM))')
+    lg.add_argument('--plan', action='store_true', help='print the plan (rate verdict, max duration, storage) and exit '
+                                                         'without touching the device')
+    lg.add_argument('--no-save', action='store_true', help='same as --storage none')
+    lg.add_argument('--force', action='store_true', help='run above the ~190 MB/s planning ceiling for longer than the '
+                                                         'burst limit (stops with HOST_TOO_SLOW if the host falls behind)')
+    lg.add_argument('--out', default=None, help='output folder (default: the data folder set with dscope bench '
+                                                 '--dir, else captures/)')
+    lg.add_argument('--tag', default='log')
+    bn = sub.add_parser('bench', help="this PC's limits for recording: device status, free RAM, decode speed, disk "
+                                      "write speed, USB readout; records the owner's RAM / disk allowance")
+    bn.add_argument('--ram', default=None, help='RAM the owner allows for logs, e.g. 8GB (stored in state/host.json)')
+    bn.add_argument('--disk', default=None, help='disk space the owner allows for disk logs, e.g. 50GB')
+    bn.add_argument('--dir', default=None, help='data folder for logs (stored; default --out of log)')
+    bn.add_argument('--disk-test-mb', type=int, default=256, help='size of the disk write test (written once, deleted)')
+    bn.add_argument('--no-device', action='store_true', help='host measurements only (no USB readout test)')
+    lg.add_argument('--awg', default=None, help="also set the AWG first: 'sine,10k,0V,2V[,duty%%]'")
     a = sub.add_parser('awg', help='signal generator on the MCX output (0..3 V)')
     asub = a.add_subparsers(dest='awg_cmd', required=True)
     s = asub.add_parser('set')
@@ -189,7 +237,7 @@ def build_parser():
     sub.add_parser('release', help='make sure the device is idle and released')
     sub.add_parser('recover', help='reset and reload the FPGA (like a power-up) when the scope hangs; a scope '
                                    'that does not answer register reads still needs a replug')
-    sub.add_parser('stop', help='ask a running watch/stream (e.g. started in the background) to stop cleanly; '
+    sub.add_parser('stop', help='ask a running watch/stream/log (e.g. started in the background) to stop cleanly; '
                                 'never kill those processes')
     d = sub.add_parser('debug', help='maintenance only (not for experiments)')
     dsub = d.add_subparsers(dest='debug_cmd', required=True)
@@ -333,38 +381,258 @@ def cmd_watch(args, scope):
     _emit(out)
 
 
+def stream_plan(args):
+    """-> (settings of one record, total seconds or None for 'forever', seconds per record, chained).
+    One record holds at most 400M samples per channel and 512 MiB of sample memory; a longer stream (or
+    'forever') is cut into records of the same rate, each refreshing the previous one (~0.2 s between them)."""
+    import copy
+    from .scope import Scope
+    a = copy.copy(args)
+    forever = is_forever(args.duration)
+    if forever:
+        a.duration = None
+    st = stream_settings(a)
+    total = None if forever else st.duration
+    first_error = None
+    if total is not None:
+        try:
+            pl = Scope().plan(st)
+            if not any('samples capped' in w for w in pl['warnings']):
+                return st, total, total, False
+        except DscopeError as e:            # e.g. a long window squeezed into one record needs small packets
+            if e.code != 'INVALID_ARG':
+                raise
+            first_error = e
+    rate = st.rate or (st.samples / total if total else STREAM_MIN_RATE)   # --samples keeps its density
+
+    def record(d):
+        r = copy.copy(st)
+        r.duration, r.rate = d, rate
+        return r
+    d = MAX_RECORD_SAMPLES / rate
+    for _ in range(60):
+        try:
+            pl = Scope().plan(record(d))
+            if not any('samples capped' in w for w in pl['warnings']):
+                break
+        except DscopeError as e:
+            if e.code != 'INVALID_ARG':
+                raise
+        d *= 0.9
+    else:
+        raise first_error or DscopeError('INVALID_ARG', 'no record length fits these stream settings')
+    if total is not None and total <= d:
+        return record(total), total, total, False
+    return record(d), total, d, True
+
+
+MAX_RECORD_SAMPLES = 400_000_000
+
+
 def cmd_stream(args, scope):
     from .units import si
-    from . import plot as plotmod
-    st = stream_settings(args)
+    st, total, rec_s, chained = stream_plan(args)
     if args.awg:
         scope.awg_from_spec(args.awg)
-    try:
-        cap = scope.stream(st, every=si(args.every, 's', '--every'), emit=_emit, stop_flag=_throttled(stop_requested))
-    except DscopeError as e:
-        if e.code != 'STOPPED':
-            raise
-        _clear_stop_request()
-        _emit({'ok': True, 'cmd': 'stream', 'stopped_by': 'stop_request', 'samples': 0, 'note': e.message})
+    every = si(args.every, 's', '--every')
+    if not chained:
+        try:
+            cap = scope.stream(st, every=every, emit=_emit, stop_flag=_throttled(stop_requested))
+        except DscopeError as e:
+            if e.code != 'STOPPED':
+                raise
+            _clear_stop_request()
+            _emit({'ok': True, 'cmd': 'stream', 'stopped_by': 'stop_request', 'samples': 0, 'note': e.message})
+            return
+        _idle(_n_values(cap))
+        if stop_requested():
+            _clear_stop_request()
+        res = {'ok': True, 'cmd': 'stream', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
+        res.update(cap.summary())
+        _stream_files(args, cap, res)
+        _emit(res)
         return
-    _idle(_n_values(cap))
+    import copy
+    k, done, seams, prev_end, last, saved, stopped_by = 0, 0.0, [], None, None, [], None
+    prev = None                                    # the previous record, not decoded (kept raw until replaced)
+    while total is None or done < total - 1e-9:
+        st_k = copy.copy(st)
+        st_k.duration = rec_s if total is None else min(rec_s, total - done)
+        is_last = total is not None and total - done <= rec_s * (1 + 1e-9)
+
+        def emit_k(line, k=k, off=done):
+            line = dict(line, record=k, t_signal_s=round(off + line['t_signal_s'], 4))
+            if line.pop('final', False):
+                line['record_end'] = True
+            _emit(line)
+        try:
+            cap = scope.stream(st_k, every=every, emit=emit_k, stop_flag=_throttled(stop_requested),
+                               build=lambda last_one=is_last: last_one or args.save_each or stop_requested())
+        except DscopeError as e:
+            if e.code != 'STOPPED':
+                raise
+            stopped_by = 'stop_request'
+            if prev is not None:                   # stopped before this record had data: keep the previous one
+                last = scope.build_capture(prev)
+            break
+        acq = cap.meta['acq']
+        if prev_end is not None and acq.get('t_start_wall'):
+            seams.append(round(acq['t_start_wall'] - prev_end, 3))
+        prev_end = acq['t_start_wall'] + acq['duration_s'] if acq.get('t_start_wall') else None
+        done += acq['duration_s']
+        prev = cap
+        if cap.meta.get('kept', True):
+            last = cap
+            if args.save_each and not is_last:
+                res_k = {}
+                _stream_files(args, cap, res_k, tag='stream%03d' % k, plot=False)
+                saved.append(res_k['files'])
+        k += 1
+        if _HEARTBEAT[0]:
+            _HEARTBEAT[0]()
+        if stop_requested() or not acq.get('complete', True):
+            stopped_by = 'stop_request' if stop_requested() else 'incomplete record'
+            last = scope.build_capture(cap)
+            break
     if stop_requested():
         _clear_stop_request()
-    res = {'ok': True, 'cmd': 'stream', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
-    res.update(cap.summary())
+    res = {'ok': True, 'cmd': 'stream', 'records': k, 'record_s': round(rec_s, 6), 'signal_s': round(done, 6),
+           'seams_s': seams[:100], 'seam_max_s': max(seams) if seams else None, 'stopped_by': stopped_by,
+           'note': 'each record refreshes the previous one: only the last record is kept (--save-each keeps all; '
+                   '"log" records without gaps)'}
+    if last is not None:
+        _idle(_n_values(last))
+        res.update({'applied': last.meta['applied'], 'acq': last.meta['acq']})
+        res.update(last.summary())
+        _stream_files(args, last, res)
+        if saved:
+            res['files']['records'] = saved
+    _emit(res)
+
+
+def _stream_files(args, cap, res, tag=None, plot=True):
+    from . import plot as plotmod
     decoded = _decode(cap, args, None, res)
     files = {}
     if not args.no_save:
         from .capture import new_path
-        stem = new_path(args.out, args.tag if args.tag != 'cap' else 'stream')
+        stem = new_path(args.out, tag or (args.tag if args.tag != 'cap' else 'stream'))
         files['npz'] = _fwd(cap.save(stem + '.npz'))
         if decoded:
             files['decode'] = _fwd(_save_json(stem + '_decode.json', decoded))
-        if not args.no_plot:
+        if plot and not args.no_plot:
             files['png'] = _fwd(plotmod.plot(cap, stem + '.png', title=_title(cap)))
     res['files'] = files
     res['hints'] = cap.meta.get('hints', [])
     res['warnings'] = cap.meta.get('warnings', [])
+
+
+def _log_storage(args):
+    return 'none' if args.no_save else args.storage
+
+
+def _log_out(args):
+    from . import host
+    return args.out or host.data_dir(DEFAULT_OUT)
+
+
+def log_plan(args, zero_info=None):
+    """-> (settings, plan) of a 'log' command (offline)."""
+    from .scope import vertical_from_args
+    from .units import si
+    from . import logger
+    st = vertical_from_args(args)
+    duration = None if is_forever(args.duration) else si(args.duration, 's', '--duration')
+    storage = _log_storage(args)
+    pl = logger.plan(st, si(args.rate, 'Hz', '--rate'), duration, si(args.every, 's', '--every'),
+                     None if storage == 'none' else _log_out(args), storage,
+                     int(si(args.ram, 'B', '--ram')) if args.ram else None,
+                     si(args.chunk, 's', '--chunk') if args.chunk else None, zero_info=zero_info, force=args.force,
+                     keep_last=args.keep_last)
+    return st, pl
+
+
+def cmd_log(args, scope):
+    from . import logger
+    from .capture import new_path
+    st, pl = log_plan(args, scope.dev.zero_info)
+    scope._check_link()
+    if args.awg:
+        scope.awg_from_spec(args.awg)
+    stem = None if pl['storage'] == 'none' else new_path(_log_out(args), args.tag)
+    _emit({'ok': True, 'cmd': 'log', 'started': True, 'plan': logger.public(pl), 'out_stem': _fwd(stem)})
+    try:
+        res = logger.run(scope, st, pl, stem, emit=_emit, stop_flag=_throttled(stop_requested),
+                         heartbeat=_HEARTBEAT[0], on_final=_idle)
+    except (DscopeError, KeyboardInterrupt) as e:    # the data kept so far was written: say where
+        files = {k: _fwd(v) for k, v in (getattr(e, 'log_files', None) or {}).items()}
+        if isinstance(e, KeyboardInterrupt):
+            _emit({'ok': False, 'cmd': 'log', 'error': {'code': 'INTERRUPTED', 'message': 'interrupted (the scope was '
+                                                        'stopped first)'}, 'files': files})
+            return 1
+        _emit({'ok': False, 'cmd': 'log', 'error': e.to_dict(), 'files': files})
+        return e.exit_code
+    if stop_requested():
+        _clear_stop_request()
+    for k in ('npz', 'dir', 'index'):
+        if k in res.get('files', {}):
+            res['files'][k] = _fwd(res['files'][k])
+    _emit(res)
+    if not res['ok']:
+        from .errors import EXIT_CODES
+        return EXIT_CODES.get(res['error']['code'], 1)
+    return 0
+
+
+BENCH_READOUT = (('2 analog + 8 digital', ['A0', 'A1'], 100e6), ('4 analog + 8 digital', ['A0', 'A1', 'A2', 'A3'], 50e6))
+
+
+def cmd_bench(args, scope=None):
+    """Record the owner's allowances, measure this PC (and the USB readout when the scope is open), recommend."""
+    from . import host, logger
+    from .scope import Settings
+    from .units import si
+    h = host.load()
+    allow = dict(h.get('allow', {}))
+    if args.ram:
+        allow['ram_bytes'] = int(si(args.ram, 'B', '--ram'))
+    if args.disk:
+        allow['disk_bytes'] = int(si(args.disk, 'B', '--disk'))
+    if args.dir:
+        allow['data_dir'] = os.path.abspath(args.dir)
+    d = allow.get('data_dir') or DEFAULT_OUT
+    b = {'time': time.strftime('%Y-%m-%dT%H:%M:%S'), 'ram_free_bytes': logger.available_ram(),
+         'decode_mb_s': round(host.bench_decode(), 1)}
+    w, free = host.bench_disk(d, args.disk_test_mb)
+    b.update(disk_dir=_fwd(os.path.abspath(d)), disk_write_mb_s=round(w, 1), disk_free_bytes=free)
+    res = {'ok': True, 'cmd': 'bench'}
+    if scope is not None:
+        res['device'] = scope.info()['device']
+        readout = {}
+        for name, analog, rate in BENCH_READOUT:     # a 2 s burst above the sustained rate, nothing kept
+            st = Settings()
+            st.analog, st.digital = list(analog), ['D%d' % i for i in range(8)]
+            r = scope.record(st, rate, 2.0, every=1.0, storage='none')
+            readout[name] = {'data_mb_s': r['plan']['data_mb_s'], 'readout_mb_s': r['acq']['host_mb_s'],
+                             'backlog_max_mb': r['acq']['backlog_max_mb']}
+        b['usb_readout'] = readout
+        b['usb_readout_mb_s'] = min(v['readout_mb_s'] for v in readout.values() if v['readout_mb_s'])
+    h['allow'], h['bench'] = allow, b
+    host.save(h)
+    ram = logger.default_ram_budget()
+    live = min(b.get('usb_readout_mb_s') or logger.CEILING_BPS / 1e6, 0.8 * b['decode_mb_s'])
+    res.update(allow={'ram_gb': round(allow['ram_bytes'] / 1e9, 2) if allow.get('ram_bytes') else None,
+                      'disk_gb': round(allow['disk_bytes'] / 1e9, 1) if allow.get('disk_bytes') else None,
+                      'data_dir': _fwd(allow.get('data_dir'))},
+               bench=b, recommend={
+                   'ram_budget_gb': round(ram / 1e9, 2),
+                   'log_ram_max_mb_s': round(min(live, logger.CEILING_BPS / 1e6), 1),
+                   'log_disk_max_mb_s': round(min(live, logger.CEILING_BPS / 1e6, 0.7 * w), 1),
+                   'ram_window_s': {'%g MB/s' % x: round(ram / (x * 1e6), 1) for x in (0.1, 1, 10, 50, 150)},
+                   'note': 'short logs: --storage ram (default); disk only for records needed in full'},
+               file=_fwd(host.HOST_FILE))
+    if not allow.get('ram_bytes'):
+        res['hint'] = 'ask the owner how much RAM / disk the logs may use and record it: dscope bench --ram 8GB --disk 50GB'
     _emit(res)
 
 
@@ -434,16 +702,27 @@ def _budget(args):
     from .units import si
     if args.cmd == 'selftest':
         return 1200.0, None
+    if args.cmd == 'bench':
+        return 180.0, None
+    if args.cmd == 'log':
+        st, pl = log_plan(args)                        # rejects what cannot work before the device is opened
+        per = max(60.0, 3 * pl['every_s'] + 60.0)        # re-armed after every statistics line
+        return 90.0 + per, per
     if args.cmd not in ('capture', 'watch', 'stream'):
         return 60.0, None
-    st = stream_settings(args) if args.cmd == 'stream' else settings_from_args(args)
+    chained = False
+    if args.cmd == 'stream':
+        st, total, rec_s, chained = stream_plan(args)
+    else:
+        st = settings_from_args(args)
     from .decode import check
     check(args.decode, list(st.analog) + list(st.digital))
     geom = Scope().plan(st)['geometry']
     rec = geom['record_s']
     collect = max(10.0, 1.5 * rec + 2.0)
     if args.cmd == 'stream':
-        return 5.0 + 2.5 * rec + 5.0 + 60.0, None
+        per = 5.0 + 2.5 * rec + 5.0 + 60.0 + 2e-8 * geom.get('acqu_bytes', 0)
+        return (per, per) if chained else (per, None)       # a refreshing stream re-arms after every record
     wait = (st.timeout if st.trig_mode == 'normal' else (st.auto_after if st.trig_mode == 'auto' else 2.0)) + max(st.holdoff, 0.0)
     per = wait + rec + 0.5 + collect + 5.0
     if st.trig_mode == 'auto' and st.trig_source:      # forced fallback run: validate it too
@@ -503,11 +782,19 @@ def main(argv=None):
         os.makedirs(os.path.dirname(STOP_REQUEST), exist_ok=True)
         with open(STOP_REQUEST, 'w') as f:
             f.write(str(time.time()))
-        _emit({'ok': True, 'cmd': 'stop', 'note': 'a running watch/stream stops after its current capture or block'})
+        _emit({'ok': True, 'cmd': 'stop', 'note': 'a running watch/stream/log stops after its current capture or block'})
         return 0
     from .units import si
     from .scope import Scope
     try:                                     # everything here is offline: nothing has been sent to the scope yet
+        if args.cmd == 'bench' and args.no_device:
+            cmd_bench(args, None)
+            return 0
+        if args.cmd == 'log' and args.plan:
+            from . import logger
+            st, pl = log_plan(args)
+            _emit({'ok': True, 'cmd': 'log', 'plan': logger.public(pl)})
+            return 0
         if args.cmd == 'debug' and args.debug_cmd == 'plan':
             from .scope import settings_from_args
             _emit({'ok': True, 'cmd': 'plan', **Scope().plan(settings_from_args(args))})
@@ -524,7 +811,7 @@ def main(argv=None):
         _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERNAL', 'message': repr(e),
                                                          'trace': traceback.format_exc().splitlines()[-6:]}})
         return 1
-    if args.cmd in ('watch', 'stream'):
+    if args.cmd in ('watch', 'stream', 'log'):
         _clear_stop_request()                # a request left from an earlier run must not stop this one
     scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
     done = threading.Event()
@@ -556,6 +843,10 @@ def main(argv=None):
                 cmd_watch(args, scope)
             elif args.cmd == 'stream':
                 cmd_stream(args, scope)
+            elif args.cmd == 'log':
+                code = cmd_log(args, scope)
+            elif args.cmd == 'bench':
+                cmd_bench(args, scope)
             elif args.cmd == 'awg':
                 cmd_awg(args, scope)
             elif args.cmd == 'release':

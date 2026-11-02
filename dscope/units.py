@@ -7,10 +7,18 @@ _SI = {'G': 1e9, 'M': 1e6, 'k': 1e3, 'K': 1e3, '': 1.0, 'm': 1e-3, 'u': 1e-6, 'Â
 _RX = re.compile(r'^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([GMkKmuÂµnp]?)\s*([a-zA-Z%/]*)\s*$')
 
 
+_LONG_TIME = re.compile(r'^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(min|h|hr|hrs|d)\s*$', re.I)
+_LONG_TIME_S = {'min': 60.0, 'h': 3600.0, 'hr': 3600.0, 'hrs': 3600.0, 'd': 86400.0}
+
+
 def si(text, unit=None, what='value'):
-    """'500mV' -> 0.5, '10k' -> 10000, '200us' -> 2e-4, '50%' -> 50, '10x' -> 10."""
+    """'500mV' -> 0.5, '10k' -> 10000, '200us' -> 2e-4, '50%' -> 50, '10x' -> 10; times also '5min', '2h', '1d'."""
     if isinstance(text, (int, float)):
         return float(text)
+    if unit == 's':
+        m = _LONG_TIME.match(str(text))
+        if m:
+            return float(m.group(1)) * _LONG_TIME_S[m.group(2).lower()]
     m = _RX.match(str(text))
     if not m:
         raise DscopeError('INVALID_ARG', 'cannot parse %s %r' % (what, text))

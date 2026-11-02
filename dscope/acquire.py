@@ -59,6 +59,7 @@ class RawCapture:
     def __init__(self):
         self.head = None
         self.data = bytearray()
+        self.n_data = 0           # data bytes received (also counted when keep_data=False leaves data empty)
         self.frames = []          # repeat mode: one entry per data transfer (frame data + 4 KiB tail)
         self.t_start = None
         self.t_head = None
@@ -180,12 +181,16 @@ class Engine:
 
     # ------------------------------------------------------------------ run
     def run(self, setup_writes, pkt_bytes, need_bytes, n_transfers=16, trigger_timeout=5.0,
-            collect_timeout=10.0, repeat_frames=0, on_chunk=None, stop_flag=None, poll=True, settle=0.0):
+            collect_timeout=10.0, repeat_frames=0, on_chunk=None, stop_flag=None, poll=True, settle=0.0,
+            keep_data=True):
         """Execute one capture. need_bytes = data bytes (after the head) to collect.
         repeat_frames > 0: repeat mode; after the head every data transfer is one frame (data + 4 KiB tail);
         collect that many frames. on_chunk(bytes) is called for the head and for every data chunk as it arrives
         (live streaming). stop_flag(): optional callable; the capture stops when it returns True.
         settle: extra seconds between the setup writes and the start (front end recovering from overdrive).
+        collect_timeout=None: no deadline after the head (loop mode streams until stop_flag ends it).
+        keep_data=False: data chunks only go to on_chunk (cap.data stays empty, cap.n_data counts them), so an
+        endless stream does not grow in memory.
         Returns a RawCapture; cap.head is None when nothing arrived before trigger_timeout. Raises DEVICE_ERROR
         after an error stop (the session is then unusable until the device is reopened)."""
         t = self.t
@@ -214,7 +219,7 @@ class Engine:
             if gap > 0:
                 time.sleep(gap)
             cap = self._run(setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
-                            repeat_frames, on_chunk, stop_flag, poll, settle)
+                            repeat_frames, on_chunk, stop_flag, poll, settle, keep_data)
         finally:
             self._t_end = time.time()
             self.active = False
@@ -229,7 +234,7 @@ class Engine:
         return cap
 
     def _run(self, setup_writes, pkt_bytes, need_bytes, n_transfers, trigger_timeout, collect_timeout,
-             repeat_frames, on_chunk, stop_flag, poll, settle=0.0):
+             repeat_frames, on_chunk, stop_flag, poll, settle=0.0, keep_data=True):
         t = self.t
         cap = RawCapture()
         self._events = collections.deque()
@@ -270,7 +275,7 @@ class Engine:
                 time.sleep(START_SETTLE)
                 cap.t_start = time.time()
                 error = self._collect(cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk,
-                                      stop_flag, poll)
+                                      stop_flag, poll, keep_data)
             except DscopeError as e:            # failed start write or progress-poll handshake
                 error = 'start write failed: %s' % e.message if not cap.t_start else e.message
             except BaseException as exc:        # a bug in the engine loop: stop like a user stop, then re-raise
@@ -300,7 +305,7 @@ class Engine:
         return cap.error
 
     def _collect(self, cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk, stop_flag,
-                 poll):
+                 poll, keep_data=True):
         """Pump events until the record is complete, the caller stops, or a deadline passes. Returns None, or an
         error reason that requires the error stop."""
         t = self.t
@@ -324,13 +329,15 @@ class Engine:
                 if kind == 'head':
                     cap.head = buf
                     cap.t_head = time.time()
-                    deadline = cap.t_head + collect_timeout
+                    deadline = cap.t_head + collect_timeout if collect_timeout is not None else None
                 elif self._full:
                     continue                # zero padding after the record: discarded
                 elif repeat_frames:
                     cap.frames.append(buf)
                 else:
-                    cap.data += buf
+                    cap.n_data += len(buf)
+                    if keep_data:
+                        cap.data += buf
                 if on_chunk is not None:
                     try:
                         on_chunk(buf)
@@ -369,7 +376,7 @@ class Engine:
                         cap.ep84 += rec
                         cap.handshakes.append((round((now - cap.t_start) * 1000, 1), 'poll', rec))
                     cap.progress.append(v)
-            elif now > deadline:
+            elif deadline is not None and now > deadline:
                 cap.timed_out = True
                 return None
 
@@ -377,7 +384,7 @@ class Engine:
     def _enough(cap, need_bytes, repeat_frames):
         if repeat_frames:
             return len(cap.frames) >= repeat_frames
-        return cap.head is not None and need_bytes is not None and len(cap.data) >= need_bytes
+        return cap.head is not None and need_bytes is not None and cap.n_data >= need_bytes
 
     # ------------------------------------------------------------------ stop
     def _stop_normal(self, cap):
