@@ -452,6 +452,11 @@ def test_bench_without_device_records_the_allowance(tmp_path, capsys):
     h = host.load()
     assert h['allow']['disk_bytes'] == 20e9 and h['allow']['data_dir'].endswith('data')
     assert host.data_dir('x') == h['allow']['data_dir'] and not os.listdir(str(tmp_path / 'data'))
+    h['bench']['usb_readout_mb_s'] = 206.0
+    host.save(h)
+    assert cli.main(['bench', '--no-device', '--ram', '2GB', '--disk-test-mb', '8']) == 0     # keeps USB + disk allowance
+    h = host.load()
+    assert h['bench']['usb_readout_mb_s'] == 206.0 and h['allow']['ram_bytes'] == 2e9 and h['allow']['disk_bytes'] == 20e9
 
 
 def test_one_digital_channel_alone(tmp_path):

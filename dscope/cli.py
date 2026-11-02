@@ -617,6 +617,10 @@ def cmd_bench(args, scope=None):
                              'backlog_max_mb': r['acq']['backlog_max_mb']}
         b['usb_readout'] = readout
         b['usb_readout_mb_s'] = min(v['readout_mb_s'] for v in readout.values() if v['readout_mb_s'])
+    else:                                          # --no-device keeps the last USB measurement
+        for k in ('usb_readout', 'usb_readout_mb_s'):
+            if k in h.get('bench', {}):
+                b[k] = h['bench'][k]
     h['allow'], h['bench'] = allow, b
     host.save(h)
     ram = logger.default_ram_budget()
