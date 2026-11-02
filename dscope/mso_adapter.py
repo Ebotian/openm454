@@ -35,8 +35,9 @@ def to_mso(hal):
     cfg.loop_mode = False
     if hal.get('loop'):
         # loop mode (DSWave's Data Acquisition mode): endless stream, trigger off, one explicit rate for every
-        # channel (AUTORATE off; :SAMPLEtime is ignored), fold 0, so at most 100 MSa/s per channel
+        # channel (AUTORATE off; :SAMPLEtime is ignored), fold 0 (100 MSa/s per channel) unless loop_fold
         cfg.loop_mode = True
+        cfg.loop_fold = bool(hal.get('loop_fold'))   # interleave (rates above 100 MSa/s on 1-2 channels)
         cfg.auto_rate = False
         cfg.analog_rate = cfg.digital_rate = int(hal['rate'])
         cfg.trig_enable = False

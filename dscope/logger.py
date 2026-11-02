@@ -7,7 +7,9 @@ What the hardware does (measured 2026-11-01/02, docs/PROTOCOL.md section 8.1):
     device overwrites unread data without any flag and the block alignment is lost for the rest of the run;
   * readout while acquiring: 196-266 MB/s depending on the channel set; 150 MB/s ran 3 min (27 GB) with a constant
     host lag;
-  * fold 0: one rate for every channel, at most 100 MSa/s each.
+  * one rate for every channel: up to 100 MSa/s each; above that the converters are interleaved as in a normal
+    capture (DSWave never does this in loop mode; verified on hardware 2026-11-02): 200 MSa/s with <= 2 analog and
+    <= 4 digital channels, 400 MSa/s with <= 1 analog and <= 2 digital channels.
 
 So the host decides everything. plan() checks that the rate is sustainable (above the ceiling a run is allowed only
 when it is short enough for the ring to absorb the excess), works out how long the log can run and where the data
@@ -43,7 +45,16 @@ RING_BYTES = 512 * 2 ** 20           # device sample memory = loop ring
 BACKLOG_STOP = 384 * 2 ** 20         # stop a run once the device is this far ahead (the ring overwrites at ~512 MiB)
 SUSTAINED_BPS = 150e6                # verified: 3 min, 27 GB, host lag constant
 CEILING_BPS = 190e6                  # planning ceiling; the readout while acquiring measured 196-266 MB/s
-MAX_RATE = 100_000_000               # fold 0: no interleaving in loop mode
+MAX_RATE = 100_000_000               # one converter per channel (fold 0, DSWave's loop mode)
+FOLD_RATES = (200_000_000, 400_000_000)  # interleaved loop rates (loop_fold)
+
+
+def max_rate(n_analog, n_digital):
+    """Highest log rate for a channel set: 100 MSa/s x the interleave factor both domains allow (analog 4/2/1 for
+    1/2/3-4 channels, digital 4/2/1 for 1-2/3-4/5-8 channels, as in a normal capture)."""
+    fa = {0: 4, 1: 4, 2: 2}.get(n_analog, 1)
+    fd = 4 if n_digital <= 2 else (2 if n_digital <= 4 else 1)
+    return MAX_RATE * min(fa, fd)
 LOOP_DEPTH = 400_000                 # :STORAGEdepth sent with the loop program (DSWave keeps the last OSC value)
 CHUNK_TARGET_BYTES = 256e6           # default size of one dumped chunk file
 QUEUE_LIMIT_BYTES = 768 * 2 ** 20    # raw data waiting for the writer thread; more means disk or CPU are too slow
@@ -88,15 +99,17 @@ def default_ram_budget():
     return int(min(RAM_BUDGET_MAX, free // 4))
 
 
-def loop_hal(st, rate):
-    """HAL parameters of a loop run: the front-end settings of `st`, trigger off, one explicit rate."""
+def loop_hal(st, rate, fold=False):
+    """HAL parameters of a loop run: the front-end settings of `st`, trigger off, one explicit rate; fold:
+    interleave the converters (rates above 100 MSa/s)."""
     from .scope import hal_config
     import copy
     s = copy.copy(st)
     s.duration, s.rate, s.trig_source, s.trig_mode = 1.0, None, None, 'force'
     hal, scale, warnings, _ = hal_config(s)
     hal['trigger']['enable'] = 0
-    hal.update(loop=1, rate=int(rate), auto_rate=0, storage_depth=LOOP_DEPTH, sample_time_ps=10 ** 12)
+    hal.update(loop=1, loop_fold=int(bool(fold)), rate=int(rate), auto_rate=0, storage_depth=LOOP_DEPTH,
+               sample_time_ps=10 ** 12)
     return hal, scale, [w for w in warnings if 'samples' not in w and 'window' not in w]
 
 
@@ -117,10 +130,13 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     if not rate or rate <= 0:
         raise DscopeError('INVALID_ARG', '--rate must be > 0')
     warnings = []
-    if rate > MAX_RATE * (1 + 1e-9):
-        raise DscopeError('INVALID_ARG', 'log samples every channel at one rate of at most 100 MSa/s (loop mode has no '
-                          'interleaving)', 'use capture/stream for 200/400 MSa/s on 1-2 channels')
-    r = max([x for x in RATES if x <= rate * (1 + 1e-9)], default=None)
+    top = max_rate(na, nd)
+    if rate > top * (1 + 1e-9):
+        raise DscopeError('INVALID_ARG', 'log samples every channel at one rate: at most %d MSa/s for %d analog + %d '
+                          'digital channels' % (top // 10 ** 6, na, nd),
+                          'above 100 MSa/s the converters are interleaved: 200 MSa/s needs <= 2 analog and <= 4 '
+                          'digital channels, 400 MSa/s <= 1 analog and <= 2 digital channels')
+    r = max([x for x in tuple(RATES) + FOLD_RATES if x <= rate * (1 + 1e-9) and x <= top], default=None)
     if r is None:
         raise DscopeError('INVALID_ARG', 'the lowest log rate is %d Sa/s' % RATES[0])
     if abs(r - rate) > 1e-6 * rate:
@@ -130,7 +146,8 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         raise DscopeError('INVALID_ARG', '--duration must be > 0 (or "forever")')
     if every <= 0:
         raise DscopeError('INVALID_ARG', '--every must be > 0')
-    hal, scale, fe_warnings = loop_hal(st, r)
+    fold = r > MAX_RATE
+    hal, scale, fe_warnings = loop_hal(st, r, fold)
     warnings += fe_warnings
     prog, geom = mso_adapter.compile(hal, zero_info if zero_info is not None else _cached_zero())
     blk = geom['blk_bytes']
@@ -244,7 +261,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         'disk_free_gb': None if disk_free is None else round(disk_free / 1e9, 1),
         'max_duration_s': None if max_s is None else round(max_s, 1), 'every_s': round(every, 6),
         'small_packets': small, 'packet_bytes': geom['pkt_bytes'], 'transfers': geom['transfer_count'],
-        'warnings': warnings}
+        'interleaved': fold, 'max_rate_hz': top, 'warnings': warnings}
     return dict(pub, _hal=hal, _scale=scale, _prog=prog, _geom=geom, _every_blocks=every_blocks,
                 _chunk_blocks=chunk_blocks, _data_bps=data_bps, _pkt_s=pkt_s, _ram_budget=ram_budget,
                 _disk_bytes=disk_bytes)

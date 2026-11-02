@@ -230,7 +230,11 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
 * **Loop mode** (`:LOOPModeEnable 1`; DSWave's Data Acquisition / 记录仪 mode) is an endless stream: the setup of
   a MODE 2 run with trigger off and explicit rates (AUTORATE off; `:SAMPLEtime` is ignored), fold 0
   (VERT_AFOLD / VERT_DFOLD = 0x100 x channels, so at most 100 MSa/s per channel), HORI_RWORDS = one packet - 1
-  word, HW_BASE_MODE = 6. After the 4096-byte head (u32[2] = 0xC00000nn) the device sends plain blocks until the
+  word, HW_BASE_MODE = 6. DSWave always uses fold 0 in loop mode, but the FPGA also interleaves there exactly as in
+  a capture (hardware, 2026-11-02): with the normal VERT_AFOLD / VERT_DFOLD and dividers, 1 analog channel at 200
+  and 400 MSa/s, 2 analog at 200, 2 digital at 400, 4 digital at 200 and mixed sets streamed at the right rate,
+  without gaps and with the same per-phase pattern as a 400 MSa/s capture (plateau means of the four phases
+  165.32 / 165.81 / 165.34 / 165.01 codes vs 165.28 / 165.81 / 165.36 / 165.02). After the 4096-byte head (u32[2] = 0xC00000nn) the device sends plain blocks until the
   normal stop: no tails, no markers, every read full. Packets as in MODE 2 (20 ms of data, or floor(1 MiB / block)
   blocks with 16 reads at >= 102,400 kB/s); the host may read in larger multiples.
 * Rates are 100 MHz / ADIV. ADIV 1, 2, 4, 5, 10, 20, 100, 2000, 5000 and 100000 were checked; ADIV 3 (nominally
@@ -243,7 +247,9 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
 * **Readout while acquiring: ~196-266 MB/s, depending on the channel set** (the read size, 1 to 8 MiB, makes no
   difference). 4 analog + 8 digital at 50 MSa/s (250 MB/s) read out at ~200 MB/s, so the backlog grew ~55 MB/s and
   the ring overflowed after ~10 s; 2 analog + 8 digital at 100 MSa/s (300 MB/s) read out at 266 MB/s; 2 analog at
-  100 MSa/s (200 MB/s) ran 20 s without backlog in one run and ~2 % short in another. Gap-free loop runs: 4 analog
+  100 MSa/s (200 MB/s) ran 20 s without backlog in one run and ~2 % short in another; 1 analog at 200 MSa/s
+  (interleaved, 200 MB/s) ran 10 s without backlog. The same channel set reads out at the same speed in MODE 2 and in
+  loop mode (4 analog + 8 digital at 50 MSa/s: 205 / 206 MB/s; 4 analog at 100 MSa/s: 276 / 275 MB/s). Gap-free loop runs: 4 analog
   + 8 digital at 50 kSa/s (60 s) and at 1-20 MSa/s (100 MB/s), 8 digital at 100 MSa/s, 2 analog + 8 digital at
   50 MSa/s (150 MB/s for 180 s, 27 GB, host lag constant), 4 analog + 8 digital at 1 MSa/s for 10 min (3 GB,
   599,361 periods, no step above 1.1 us).

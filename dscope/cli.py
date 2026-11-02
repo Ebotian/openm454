@@ -168,7 +168,9 @@ def build_parser():
     lg = sub.add_parser('log', help='gap-free endless recording (loop mode) at one rate for all channels, kept in RAM '
                                     '(default) or dumped to disk; --plan shows rate limits, duration and storage')
     _vertical_args(lg)
-    lg.add_argument('--rate', default='1M', help='sample rate of every channel, 1k..100M (1-2-5 steps; default 1M)')
+    lg.add_argument('--rate', default='1M', help='sample rate of every channel, 1k..100M (1-2-5 steps; default 1M); '
+                                                  '200M with <= 2 analog and <= 4 digital channels, 400M with <= 1 analog '
+                                                  'and <= 2 digital (interleaved)')
     lg.add_argument('--duration', default='10s', help="e.g. 60s, 2h, or 'forever' (until dscope stop)")
     lg.add_argument('--every', default='1s', help='signal time per live statistics line')
     lg.add_argument('--storage', default='ram', choices=['ram', 'disk', 'none'],

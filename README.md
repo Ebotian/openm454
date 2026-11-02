@@ -31,7 +31,7 @@ python -m dscope selftest
 |---|---|---|---|
 | `capture` | into the 512 MiB sample memory, read out afterwards (250-265 MB/s) | one record: 400M samples per channel / 512 MiB | up to 400 MSa/s (1 channel) |
 | `stream` | streamed while acquired (below 102.4 MB/s, DSWave's switch); longer than one record or `--duration forever`: record after record, each refreshing the previous one | unlimited, ~0.3 s gap between records; the last record is kept (`--save-each`: all) | as `capture` |
-| `log` | loop mode: one endless gap-free stream, kept in RAM (default; written once at the end; a RAM ring keeps the newest part of longer runs) or, with `--storage disk`, dumped in chunk files while running | until `dscope stop` or the duration; RAM budget / disk allowance | one rate for all channels, 1 kSa/s..100 MSa/s |
+| `log` | loop mode: one endless gap-free stream, kept in RAM (default; written once at the end; a RAM ring keeps the newest part of longer runs) or, with `--storage disk`, dumped in chunk files while running | until `dscope stop` or the duration; RAM budget / disk allowance | one rate for all channels, 1 kSa/s..100 MSa/s; interleaved 200 MSa/s (<= 2 analog, <= 4 digital channels) and 400 MSa/s (<= 1 analog, <= 2 digital) |
 
 Measured on the M454 over USB 3 with every input on a 1 kHz square, every period checked for gaps (2026-11-01/02):
 
@@ -42,6 +42,11 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   lag; 200 MB/s (2 analog at 100 MSa/s) for 20 s without backlog; 5 MB/s for 10 min. At 250 MB/s (4 analog + 8
   digital at 50 MSa/s) the readout reached ~200 MB/s and the backlog grew ~55 MB/s. A 300 MB/s burst of 3 s (2
   analog + 8 digital at 100 MSa/s) read out at 266 MB/s and stayed complete.
+- `log` above 100 MSa/s interleaves the converters exactly as `capture` does (DSWave never does this in loop
+  mode). Verified on the scope: 1 analog channel at 200 and 400 MSa/s, 2 analog at 200, 2 digital at 400, 4 digital
+  at 200 and mixed sets. 2 digital channels at 400 MSa/s or 4 at 200 MSa/s are 100 MB/s and run without a time
+  limit. 1 analog channel at 200 MSa/s (200 MB/s, 10 s without backlog) is above the 190 MB/s planning ceiling, so
+  `log` plans it as a burst of about 38 s; `--force` runs it longer and relies on the backlog guard.
 - The sample memory is a 512 MiB ring in loop mode: the host may fall up to ~512 MiB behind without losing data (host
   stalls of 10 s at 50 MB/s were absorbed). Beyond that the scope overwrites unread data without any flag, so `log`
   stops with `HOST_TOO_SLOW` at 384 MiB of backlog.

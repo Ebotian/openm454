@@ -67,7 +67,7 @@ def test_verdicts_and_burst_limit():
 
 def test_rates():
     with pytest.raises(DscopeError):
-        make_plan(['A2'], [], 200e6, 1)                                    # no interleaving in loop mode
+        make_plan(['A2'], [], 800e6, 1)                                    # 400 MSa/s is the top (interleaved)
     pl = make_plan(['A2'], [], 33e6, 1)
     assert pl['rate_hz'] == 20_000_000 and 'verified dividers' in pl['warnings'][0]
     with pytest.raises(DscopeError):
@@ -542,3 +542,36 @@ def test_popcount_fallback_without_numpy2(monkeypatch):
 def test_disk_chunks_are_capped(tmp_path):
     pl = make_plan(*A2D8, 50e6, 60, tmp_path, storage='disk', chunk_s=3600.0)
     assert pl['chunk_mb'] <= 2 ** 30 / 1e6 + 1 and any('chunk limited' in w for w in pl['warnings'])
+
+
+# ------------------------------------------------------------------------------------------- interleaved loop
+def test_interleaved_rates_and_programs():
+    assert logger.max_rate(1, 0) == 400e6 and logger.max_rate(2, 4) == 200e6 and logger.max_rate(1, 3) == 200e6
+    assert logger.max_rate(3, 0) == 100e6 and logger.max_rate(0, 2) == 400e6 and logger.max_rate(0, 8) == 100e6
+    pl = make_plan(['A2'], [], 200e6, 10)
+    regs = dict(pl['_prog'])
+    assert pl['interleaved'] and regs[0x00] == 6 and regs[0x28] == 0x0102 and regs[0x15] == 2   # x4, divider 2
+    pl = make_plan([], ['D0', 'D7'], 400e6, 10)
+    regs = dict(pl['_prog'])
+    assert pl['verdict'] == 'sustained' and regs[0x20] == 0x0202 and regs[0x17] == 1
+    plain = make_plan(['A2'], [], 100e6, 1)
+    assert not plain['interleaved'] and dict(plain['_prog'])[0x28] == 0x0100      # DSWave's fold 0 up to 100 MSa/s
+    with pytest.raises(DscopeError) as ei:
+        make_plan(['A0', 'A1', 'A2'], [], 200e6, 1)
+    assert 'at most 100 MSa/s' in ei.value.message
+    with pytest.raises(DscopeError):
+        make_plan(['A2'], ['D0', 'D1', 'D2'], 400e6, 0.1)
+    assert make_plan(['A2'], [], 300e6, 0.5)['rate_hz'] == 200e6                   # snapped to a supported rate
+
+
+def test_interleaved_log_round_trip(tmp_path):
+    pl = make_plan(['A2'], ['D0'], 200e6, 0.01, tmp_path)
+    assert pl['interleaved']
+    layout, an, dg, stream = fake_signal(pl, 0.02)
+    assert layout.afold == 4 and layout.dfold == 4 and layout.digital_stale == 4
+    res = logger.run(FakeScope(stream, pl['packet_bytes']), settings(['A2'], ['D0']), pl, str(tmp_path / 'f'))
+    cap = load_capture(res['files']['npz'])
+    n = len(cap.analog['A2'])
+    assert n == 2_000_000 and cap.rate('A2') == 200e6
+    np.testing.assert_array_equal(cap.analog['A2'], an[2][:n])
+    np.testing.assert_array_equal(cap.digital['D0'][4:], dg[0][4:n])

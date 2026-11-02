@@ -599,7 +599,8 @@ class Scope:
 
     def record(self, st, rate, duration=None, every=1.0, out_stem=None, storage='ram', ram_budget=None, chunk_s=None,
             emit=None, stop_flag=None, heartbeat=None, keep_last=False, force=False):
-        """Gap-free recording over loop mode at one `rate` for every channel (<= 100 MSa/s), `duration` s or until
+        """Gap-free recording over loop mode at one `rate` for every channel (<= 100 MSa/s; 200/400 MSa/s
+        interleaved on 1-2 channels, see logger.max_rate), `duration` s or until
         stop_flag() is true (duration None). storage 'ram' (default: kept in RAM, written once to <out_stem>.npz),
         'disk' (chunks dumped while running), 'none'. Returns the result document (see dscope.logger)."""
         from . import logger

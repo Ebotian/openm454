@@ -202,6 +202,8 @@ class MsoConfig:
     # modes (UsbDevice_SetModes 0x340630)
     repeat_mode: bool = False       # :REPEATModeEnable  (bsp+0x34)
     loop_mode: bool = False         # :LOOPModeEnable    (bsp+0x36)
+    loop_fold: bool = False         # not DSWave (it always uses fold 0 in loop mode): interleave in loop mode as in
+                                    # the other modes; verified on hardware 2026-11-02 (docs/PROTOCOL.md 8.1)
     transfer_mode: bool = False     # :TRANSFERModeEnable (bsp+0x31; no effect on the setup block)
     usb3: bool = True               # profile prof_M454_usb3 (SuperSpeed) vs prof_M454_usb2
 
@@ -289,17 +291,17 @@ def _floor_log2(x: int) -> int:
 
 
 def analog_fold_log2(cfg: MsoConfig) -> int:
-    """mso+0x80 (FUN_1403502b0): floor(log2(4 / n_enabled)); 0 in loop mode or with no channel."""
+    """mso+0x80 (FUN_1403502b0): floor(log2(4 / n_enabled)); 0 in loop mode (unless loop_fold) or with no channel."""
     n = _n_analog(cfg)
-    if cfg.loop_mode or n == 0:
+    if (cfg.loop_mode and not cfg.loop_fold) or n == 0:
         return 0
     return _floor_log2(ANALOG_FOLD_UNITS // n)
 
 
 def digital_fold_log2(cfg: MsoConfig) -> int:
-    """mso+0x81 (Mso_SetDigitalEnable 0x350620): min(floor(log2(8 / n)), 2)."""
+    """mso+0x81 (Mso_SetDigitalEnable 0x350620): min(floor(log2(8 / n)), 2); 0 in loop mode unless loop_fold."""
     n = _n_digital(cfg)
-    if cfg.loop_mode or n == 0:
+    if (cfg.loop_mode and not cfg.loop_fold) or n == 0:
         return 0
     return min(_floor_log2(N_DIGITAL // n), DIGITAL_MAX_FOLD_LOG2)
 
