@@ -39,7 +39,8 @@ def to_mso(hal):
         cfg.loop_mode = True
         cfg.loop_fold = bool(hal.get('loop_fold'))   # interleave (rates above 100 MSa/s on 1-2 channels)
         cfg.auto_rate = False
-        cfg.analog_rate = cfg.digital_rate = int(hal['rate'])
+        cfg.analog_rate = cfg.digital_rate = int(round(hal['rate']))
+        cfg.divider = hal.get('divider')            # exact 100 MHz / N (rates that are not whole Hz, e.g. N = 3)
         cfg.trig_enable = False
         cfg.trig_mode = 0
     ar, ad, dr, dd = mso.rates_and_depths(cfg)

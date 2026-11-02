@@ -68,8 +68,12 @@ def test_verdicts_and_burst_limit():
 def test_rates():
     with pytest.raises(DscopeError):
         make_plan(['A2'], [], 800e6, 1)                                    # 400 MSa/s is the top (interleaved)
-    pl = make_plan(['A2'], [], 33e6, 1)
-    assert pl['rate_hz'] == 20_000_000 and 'verified dividers' in pl['warnings'][0]
+    pl = make_plan(['A2'], [], 33e6, 1)                                    # 100 MHz / 3 (any integer divider)
+    assert pl['divider'] == 3 and pl['rate_hz'] == pytest.approx(100e6 / 3) and '100 MHz / 3' in pl['warnings'][0]
+    regs = dict(pl['_prog'])
+    assert regs[0x15] == 3 and regs[0x16] == 0                             # not ceil(100M / 33333333) = 4
+    pl = make_plan(['A2'], [], 1e3, 1)
+    assert pl['divider'] == 100_000 and dict(pl['_prog'])[0x15] == 100_000 & 0xFFFF and dict(pl['_prog'])[0x16] == 1
     with pytest.raises(DscopeError):
         make_plan(['A2'], [], 500, 1)
 
@@ -575,3 +579,13 @@ def test_interleaved_log_round_trip(tmp_path):
     assert n == 2_000_000 and cap.rate('A2') == 200e6
     np.testing.assert_array_equal(cap.analog['A2'], an[2][:n])
     np.testing.assert_array_equal(cap.digital['D0'][4:], dg[0][4:n])
+
+
+def test_odd_divider_log_round_trip(tmp_path):
+    pl = make_plan(['A2'], ['D0'], 100e6 / 7, 0.01, tmp_path)               # 14.2857 MSa/s
+    assert pl['divider'] == 7
+    layout, an, dg, stream = fake_signal(pl, 0.02)
+    res = logger.run(FakeScope(stream, pl['packet_bytes']), settings(['A2'], ['D0']), pl, str(tmp_path / 'odd'))
+    cap = load_capture(res['files']['npz'])
+    assert cap.rate('A2') == pytest.approx(100e6 / 7) and len(cap.analog['A2']) == res['acq']['samples']
+    assert res['acq']['duration_s'] == pytest.approx(len(cap.analog['A2']) * 7 / 100e6, abs=1e-6)

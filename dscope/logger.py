@@ -7,7 +7,9 @@ What the hardware does (measured 2026-11-01/02, docs/PROTOCOL.md section 8.1):
     device overwrites unread data without any flag and the block alignment is lost for the rest of the run;
   * readout while acquiring: 196-266 MB/s depending on the channel set; 150 MB/s ran 3 min (27 GB) with a constant
     host lag;
-  * one rate for every channel: up to 100 MSa/s each; above that the converters are interleaved as in a normal
+  * nothing is read out after a stop: a run must keep acquiring until the host has read everything it wants, so
+    above the readout limit the backlog grows for the whole run (burst_max_s);
+  * one rate for every channel, 100 MHz / N for any integer N; above 100 MSa/s the converters are interleaved as in a normal
     capture (DSWave never does this in loop mode; verified on hardware 2026-11-02): 200 MSa/s with <= 2 analog and
     <= 4 digital channels, 400 MSa/s with <= 1 analog and <= 2 digital channels.
 
@@ -47,6 +49,7 @@ SUSTAINED_BPS = 150e6                # verified: 3 min, 27 GB, host lag constant
 CEILING_BPS = 190e6                  # planning ceiling; the readout while acquiring measured 196-266 MB/s
 MAX_RATE = 100_000_000               # one converter per channel (fold 0, DSWave's loop mode)
 FOLD_RATES = (200_000_000, 400_000_000)  # interleaved loop rates (loop_fold)
+MAX_DIVIDER = 100_000                # 100 MHz / N for any integer N up to this (1 kSa/s; all verified as dividers)
 
 
 def max_rate(n_analog, n_digital):
@@ -99,7 +102,7 @@ def default_ram_budget():
     return int(min(RAM_BUDGET_MAX, free // 4))
 
 
-def loop_hal(st, rate, fold=False):
+def loop_hal(st, rate, fold=False, divider=None):
     """HAL parameters of a loop run: the front-end settings of `st`, trigger off, one explicit rate; fold:
     interleave the converters (rates above 100 MSa/s)."""
     from .scope import hal_config
@@ -108,7 +111,7 @@ def loop_hal(st, rate, fold=False):
     s.duration, s.rate, s.trig_source, s.trig_mode = 1.0, None, None, 'force'
     hal, scale, warnings, _ = hal_config(s)
     hal['trigger']['enable'] = 0
-    hal.update(loop=1, loop_fold=int(bool(fold)), rate=int(rate), auto_rate=0, storage_depth=LOOP_DEPTH,
+    hal.update(loop=1, loop_fold=int(bool(fold)), rate=rate, divider=divider, auto_rate=0, storage_depth=LOOP_DEPTH,
                sample_time_ps=10 ** 12)
     return hal, scale, [w for w in warnings if 'samples' not in w and 'window' not in w]
 
@@ -120,7 +123,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     depending on the channel set); the backlog guard still stops the run before data could be lost.
     keep_last: a RAM log longer than the budget keeps the newest budget's worth (ring) instead of being refused.
     disk_budget: bytes a disk log may use (default: the owner's allowance in state/host.json, else 90 % of free)."""
-    from .scope import RATES, _cached_zero
+    from .scope import _cached_zero
     from . import mso_adapter, host
     na, nd = len(st.analog), len(st.digital)
     if not na and not nd:
@@ -136,18 +139,23 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
                           'digital channels' % (top // 10 ** 6, na, nd),
                           'above 100 MSa/s the converters are interleaved: 200 MSa/s needs <= 2 analog and <= 4 '
                           'digital channels, 400 MSa/s <= 1 analog and <= 2 digital channels')
-    r = max([x for x in tuple(RATES) + FOLD_RATES if x <= rate * (1 + 1e-9) and x <= top], default=None)
-    if r is None:
-        raise DscopeError('INVALID_ARG', 'the lowest log rate is %d Sa/s' % RATES[0])
+    divider = None
+    if rate > MAX_RATE * (1 + 1e-9):                 # interleaved: 200 or 400 MSa/s
+        r = max([x for x in FOLD_RATES if x <= rate * (1 + 1e-9) and x <= top])
+    else:                                            # 100 MHz / N, any integer N (the FPGA's divider)
+        divider = max(1, int(round(MAX_RATE / rate)))
+        if divider > MAX_DIVIDER:
+            raise DscopeError('INVALID_ARG', 'the lowest log rate is %d Sa/s' % (MAX_RATE // MAX_DIVIDER))
+        r = MAX_RATE / divider
     if abs(r - rate) > 1e-6 * rate:
-        warnings.append('rate set to %g Sa/s: only the 1-2-5 rates are verified dividers (a nominal 33.3 MSa/s '
-                        'samples at 25 MSa/s)' % r)
+        warnings.append('rate set to %.7g Sa/s (%s): the sample clock is 100 MHz divided by an integer'
+                        % (r, '100 MHz / %d' % divider if divider else 'interleaved'))
     if duration is not None and duration <= 0:
         raise DscopeError('INVALID_ARG', '--duration must be > 0 (or "forever")')
     if every <= 0:
         raise DscopeError('INVALID_ARG', '--every must be > 0')
     fold = r > MAX_RATE
-    hal, scale, fe_warnings = loop_hal(st, r, fold)
+    hal, scale, fe_warnings = loop_hal(st, r, fold, divider)
     warnings += fe_warnings
     prog, geom = mso_adapter.compile(hal, zero_info if zero_info is not None else _cached_zero())
     blk = geom['blk_bytes']
@@ -261,7 +269,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         'disk_free_gb': None if disk_free is None else round(disk_free / 1e9, 1),
         'max_duration_s': None if max_s is None else round(max_s, 1), 'every_s': round(every, 6),
         'small_packets': small, 'packet_bytes': geom['pkt_bytes'], 'transfers': geom['transfer_count'],
-        'interleaved': fold, 'max_rate_hz': top, 'warnings': warnings}
+        'interleaved': fold, 'divider': divider, 'max_rate_hz': top, 'warnings': warnings}
     return dict(pub, _hal=hal, _scale=scale, _prog=prog, _geom=geom, _every_blocks=every_blocks,
                 _chunk_blocks=chunk_blocks, _data_bps=data_bps, _pkt_s=pkt_s, _ram_budget=ram_budget,
                 _disk_bytes=disk_bytes)

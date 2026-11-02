@@ -189,6 +189,8 @@ class MsoConfig:
     auto_rate: bool = True          # :AUTORATEModeEnable (DSWave default on)
     analog_rate: Optional[int] = None    # :ANALOG:SAMPLE:Rate (only used when auto_rate is False)
     digital_rate: Optional[int] = None   # :DIGITAL:SAMPLE:Rate (only used when auto_rate is False)
+    divider: Optional[int] = None        # not DSWave: HORI_ADIV / HORI_DDIV written as is (any integer 1..2^24-1 works on
+                                         # the M454, hardware 2026-11-02); None = DSWave's ceil(fold x 100 MHz / rate)
     # trigger
     trig_enable: bool = False       # :TRIGger:Enable
     trig_mode: int = 0              # :TRIGger:Mode (0 = auto, else normal)
@@ -677,7 +679,7 @@ def setup_program(cfg: MsoConfig, zero_info, include_cross: bool = True) -> List
     w += [(0x23, den), (0x20, (g.dfold_log2 + g.n_digital * 0x100) & 0xFFFF), (0x22, 0)]
     # SetRates (+0x78)
     for (rate, fold, lo) in ((g.analog_rate, g.afold_log2, 0x15), (g.digital_rate, g.dfold_log2, 0x17)):
-        div = math.ceil(float((1 << fold) * ANALOG_BASE_RATE) / float(rate))
+        div = cfg.divider or math.ceil(float((1 << fold) * ANALOG_BASE_RATE) / float(rate))
         m = min(div, ANALOG_DIV_M) & 0xFFFFFFFF
         d = math.ceil(float(div & 0xFFFFFFFF) / float(ANALOG_DIV_M))
         w += [(lo, d & 0xFFFF), (lo + 1, (((m - 1) << 8) + (d >> 16)) & 0xFFFF)]

@@ -241,10 +241,24 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   165.32 / 165.81 / 165.34 / 165.01 codes vs 165.28 / 165.81 / 165.36 / 165.02). After the 4096-byte head (u32[2] = 0xC00000nn) the device sends plain blocks until the
   normal stop: no tails, no markers, every read full. Packets as in MODE 2 (20 ms of data, or floor(1 MiB / block)
   blocks with 16 reads at >= 102,400 kB/s); the host may read in larger multiples.
-* Rates are 100 MHz / ADIV. ADIV 1, 2, 4, 5, 10, 20, 100, 2000, 5000 and 100000 were checked; ADIV 3 (nominally
-  33.3 MSa/s) samples at 25 MSa/s like ADIV 4.
+* **Rates are fold x 100 MHz / N for any integer N** (HORI_ADIV / HORI_DDIV: the low register holds N's low 16
+  bits, the low byte of the next one its high 8 bits; its high byte (an "m" prescaler) is always 0 in DSWave).
+  DSWave only uses its 1-2-5 table. Verified in loop mode on the calibration square (hardware, 2026-11-02): N = 1-13,
+  16, 25, 37, 64, 99, 128, 333, 997, 1000, 1001, 2268, 4999 and 10000 sample at exactly 100 MHz / N (period ratios
+  within 0.06 %); N = 70000 (> 16 bits) runs near its 1.43 kSa/s, not at the 22 kSa/s its low 16 bits alone would
+  give. DSWave's HAL derives N as ceil(fold x 100 MHz / rate), so a rate in whole Hz that is not exact (33,333,333
+  for 100 MHz / 3) becomes N = 4; an earlier note here that "N = 3 samples at 25 MSa/s" was that rounding.
 * **Small packets** (20 ms of data <= 1023 bytes, i.e. below ~51 kB/s; HORI_BASE bit 3): each 4096-byte read
   carries one block (64 samples per channel) followed by 4032 bytes of filler; one read per block period.
+* **Nothing is read out after a stop.** After the stop handshake (CTRL = 0, ACTION = 8) the scope sends nothing
+  more, and the same after a handshake with CTRL = 0 alone (tested with ~250 MB in the ring at 400 MB/s): whatever
+  is still in the ring is lost. After CTRL = 0 alone the EP 0x84 handshake stops answering (byte 02 times out); the
+  next open recovers. So a loop run must keep acquiring until the host has read everything it wants. A burst of T s
+  at data rate D, read out at R < D, takes D x T / R to read and ends with a backlog of (D - R) x D x T / R, so
+  T <= ring x R / (D x (D - R)). A record (MODE 0 / 2) instead stops acquiring at its end and is read out
+  afterwards: T <= 512 MiB / D (and 400M samples per channel). At 500 MB/s with R = 200 MB/s: loop 0.72 s with the
+  whole 512 MiB, record 1.0 s; at 400 MB/s with R = 275 MB/s: loop 2.95 s, record 1.34 s (loop is longer when
+  R > D / 2, the record when R < D / 2).
 * **The 512 MiB DDR is a ring.** The host may fall behind by up to ~512 MiB without loss (host stalls of up to 10 s
   at 50 MB/s were absorbed and caught up). Past that the device overwrites unread data without any flag, and the
   stream stays misaligned until it is restarted. The host must track backlog = rate x (t - t_head) - bytes read.
