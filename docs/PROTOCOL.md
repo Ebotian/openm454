@@ -226,7 +226,10 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   above it, it records in MODE 0 and reads 1 MiB packets afterwards. Forced into MODE 2, 200 MB/s still streamed
   in real time; at 400 MB/s the readout ran at 270-290 MB/s and the record arrived complete and continuous (the
   DDR buffers one record). A finished MODE 0 record reads out at 250-265 MB/s. Every MODE 0/1/2 record is bounded
-  by `rd_bytes <= 512 MiB`; chaining MODE 2 records costs ~0.18 s per seam (stop, 100 ms quiet, setup, start).
+  by `rd_bytes <= 512 MiB`; chaining MODE 2 records costs ~0.18-0.22 s per seam. Measured between two 1 s records
+  (8 digital at 100 MSa/s): 43 ms until the last packet and the tail arrive, 3 ms stop handshake and cancel, 100 ms
+  quiet after the stop, 19 ms setup writes (62, including 15 ms after CTRL = 0), 4 ms to queue the reads, 50 ms
+  before the start: 223 ms. A record cannot be extended: the FPGA stops at its end and has to be set up again.
 * **Loop mode** (`:LOOPModeEnable 1`; DSWave's Data Acquisition / 记录仪 mode) is an endless stream: the setup of
   a MODE 2 run with trigger off and explicit rates (AUTORATE off; `:SAMPLEtime` is ignored), fold 0
   (VERT_AFOLD / VERT_DFOLD = 0x100 x channels, so at most 100 MSa/s per channel), HORI_RWORDS = one packet - 1
