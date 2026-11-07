@@ -3,10 +3,11 @@
 Wiring-free checks run on any wiring (inputs are only read, the generator is not touched): V01 device info, V12 a
 forced capture of all 12 channels at 100 MSa/s, V13 the 400/200 MSa/s fold modes, V11 capture latency.
 
-Signal checks need the standard bench fixture, because the scope has no internal test signal or loopback (its
-auto-zero even wants the inputs floating):
-  A0 <- AWG output;  A1 (1x probe), A2 (10x probe), A3 (1x probe) <- ~2.8 Vpp 1 kHz calibration square;
-  D0, D2, D5, D7 <- the same square;  D1, D3, D4, D6 floating.
+Signal checks need the standard bench fixture: the scope has no internal loopback, so its own two outputs are wired to
+its inputs with cables / probes (no other instrument needed):
+  A0 <- signal-generator output;  A1 (1x probe), A2 (10x probe), A3 (1x probe) <- the 1 kHz calibration output
+  (~2.8 V square, slow ~8 us rising edge, fast falling edge);  D0, D2, D5, D7 <- the same calibration output;
+  D1, D3, D4, D6 open.
 They run only when state/fixture.json (openm454.fixture) says the analog / digital leads are on that fixture, or
 for one run with --fixture standard; otherwise they are reported as skipped. V10 (needs the analog fixture and no
 --no-awg) drives the generator into A0: a 2 Vpp sine and a 0-3 V square.
@@ -215,7 +216,10 @@ def run(scope, quick=False, awg=True, fx=None):
     def v08():
         cap = scope.capture(_st(analog=['A1'], digital=['D5'], trig_source='D5', trig_edge='fall'))
         t = _t_of_first_edge_near_zero(cap, 'D5', rising=False)
-        return cap.meta['acq']['triggered'] and t is not None and abs(t) < 1e-6, {'D5_fall_t_s': t}, 'D5 falling edge at t=0 +-1 us'
+        acq = cap.meta['acq']
+        ok = acq['triggered'] and t is not None and abs(t) < 1e-6 and acq.get('trigger_check') != 'mismatch'
+        return ok, {'D5_fall_t_s': t, 'trigger_check': acq.get('trigger_check'),
+                    'trigger_misfires': acq.get('trigger_misfires', 0)},             'D5 falling edge at t=0 +-1 us (the slow rising edge of the calibration output chatters: misfires on it '             'are re-armed, trigger_check not mismatch)'
     check('V08', 'digital trigger source (D5 falling)', v08, needs='digital')
 
     def v09():
@@ -272,9 +276,9 @@ def run(scope, quick=False, awg=True, fx=None):
            'seconds': round(time.time() - t_all, 1), 'items': items}
     missing = [k for k in ('analog', 'digital') if fx.get(k) != 'standard']
     if missing and not fatal:
-        res['note'] = ('the signal checks for the %s leads were skipped: they need the standard fixture (the scope has '
-                       'no internal test signal). Wire it, then record it in state/fixture.json or run with '
-                       '--fixture standard' % ' and '.join(missing))
+        res['note'] = ('the signal checks for the %s leads were skipped: they need the standard fixture (the scope '
+                       'calibration and generator outputs wired to the inputs). Wire it, then record it in '
+                       'state/fixture.json or run with --fixture standard' % ' and '.join(missing))
         if fx.get('error'):
             res['note'] = fx['error'] + '; ' + res['note']
     if fatal:

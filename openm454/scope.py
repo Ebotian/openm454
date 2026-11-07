@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, asdict
 
 import numpy as np
 
-from . import mso
+from . import mso, trigcheck
 from .errors import DscopeError
 from .capture import Capture, CODES_PER_DIV, CODE_MIN, CODE_MAX
 
@@ -60,6 +60,7 @@ class Settings:
     timeout: float = 5.0
     holdoff: float = 0.0
     sensitivity: int = 5
+    trig_retries: int = 4             # digital rise/fall trigger: re-arms after a misfire on the other edge
 
 
 def settings_from_args(a):
@@ -177,6 +178,11 @@ def _timing_from_args(st, a):
     st.timeout = si(a.timeout, 's', '--timeout')
     st.holdoff = si(a.holdoff, 's', '--holdoff')
     st.sensitivity = a.sensitivity
+    r = getattr(a, 'trig_retries', None)
+    if r is not None:
+        st.trig_retries = int(si(r, None, '--trig-retries'))
+        if st.trig_retries < 0:
+            raise DscopeError('INVALID_ARG', '--trig-retries must be >= 0')
     return st
 
 
@@ -222,7 +228,10 @@ def hal_config(st):
         vpc = vdiv_v / CODES_PER_DIV
         zero = int(round(128 - (st.offset.get(ch, 0.0) / probe) / vpc))
         if not 0 <= zero <= 255 and ch in st.analog:
-            warnings.append('%s: offset %.3g V out of range at %g V/div; clamped' % (ch, st.offset.get(ch, 0.0), vdiv_v * probe))
+            lo, hi = -127 * vpc * probe, 128 * vpc * probe          # the offset DAC: about -4.32 .. +4.36 divisions
+            used = (128 - min(max(zero, 0), 255)) * vpc * probe
+            warnings.append('%s: offset %.3g V out of range at %g V/div (allowed %.4g .. %.4g V, about +-4.3 div); '
+                            'clamped to %.4g V' % (ch, st.offset.get(ch, 0.0), vdiv_v * probe, lo, hi, used))
         zero = min(max(zero, 0), 255)
         lvl = None
         if st.trig_source == ch:
@@ -230,6 +239,8 @@ def hal_config(st):
             if lv is None:
                 lv = st.offset.get(ch, 0.0)
             code = int(round(zero + (lv / probe) / vpc))
+            if not CODE_MIN <= code <= CODE_MAX and st.trig_mode == 'force':
+                code = min(max(code, CODE_MIN), CODE_MAX)          # force mode never uses the trigger: no refusal
             if not CODE_MIN <= code <= CODE_MAX:
                 lo, hi = ((c - zero) * vpc * probe for c in (CODE_MIN, CODE_MAX))
                 raise DscopeError('TRIGGER_OUT_OF_RANGE', 'trigger level %.4g V is outside the visible range of %s: '
@@ -524,10 +535,73 @@ class Scope:
                 'retry once; if it repeats, check the USB 3 connection')
         frame = _decode(raw, geom, hal)
         self._overdriven = _saturated(frame)
+        check, misfires = 'unchecked', 0
+        if attempts[-1] == 'triggered' and trigcheck.checked_edge(st.trig_edge) and st.trig_source.startswith('D'):
+            raw, frame, check, misfires = self._edge_retries(st, hal, prog, geom, collect, wait, raw, frame,
+                                                             attempts, warnings, hints)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin)
+        meta['acq']['trigger_check'] = check
+        meta['acq']['trigger_misfires'] = misfires
         cap = Capture(meta, frame['analog'], frame['digital'])
         cap.meta['hints'] = _hints(cap) + hints
         return cap
+
+    def _edge_retries(self, st, hal, prog, geom, collect, wait, raw, frame, attempts, warnings, hints):
+        """Digital rise/fall trigger (see openm454.trigcheck): a capture whose settled levels around t = 0 show the
+        opposite edge is a misfire on comparator chatter; it is discarded and the trigger re-armed, at most
+        st.trig_retries times and only while the trigger wait of the request (`wait`, counted over all runs) lasts
+        (a re-armed run waits for the holdoff again).
+        -> (raw, frame, check, misfires discarded); check 'ok' | 'misfire_retried' | 'mismatch' | 'inconclusive'
+        ('unchecked' when the head reports no trigger)."""
+        def verdict(raw, frame):
+            rate = geom.get('digital_rate')
+            bits = frame['digital'].get(st.trig_source)
+            if not raw.triggered:
+                return 'unchecked'
+            if bits is None or not rate:
+                return 'inconclusive'
+            return trigcheck.edge_check(bits, int(round(-frame['t0_digital'] * rate)), rate, st.trig_edge)
+        check = verdict(raw, frame)
+        budget = wait - _trigger_wait(raw, geom)
+        retries, tries, misfires, why = max(int(st.trig_retries or 0), 0), 0, 0, None
+        while check == 'mismatch':
+            attempts[-1] = 'misfire'
+            why = ('not re-armed: trig_retries=0' if not retries else
+                   'all %d re-arms (trig_retries) used' % retries if tries >= retries else
+                   'the %.3g s trigger wait is used up' % wait if budget <= max(st.holdoff, 0.0) else None)
+            if why:
+                break
+            tries += 1
+            nxt = self._run(prog, geom, self._head_wait(geom, budget), collect)
+            if nxt.head is None:
+                self._overdriven = True
+                if nxt.aborted:
+                    raise DscopeError('TIMEOUT_WATCHDOG', 'capture aborted while re-arming after a trigger misfire')
+                attempts.append('no-trigger')
+                why = 'the re-armed trigger did not fire within the remaining %.3g s' % budget
+                break
+            attempts.append('triggered')
+            if not self._check_complete(nxt, geom):
+                raise DscopeError('TIMEOUT_DATA', 'incomplete record: %d of %d data bytes (%s)' % (
+                    len(nxt.data), geom['need_bytes'], 'aborted' if nxt.aborted else 'data stopped arriving'),
+                    'retry once; if it repeats, check the USB 3 connection')
+            budget -= _trigger_wait(nxt, geom)
+            raw, frame, misfires = nxt, _decode(nxt, geom, hal), misfires + 1
+            self._overdriven = _saturated(frame)
+            check = verdict(raw, frame)
+        edge, other = ('falling', 'rising') if trigcheck.checked_edge(st.trig_edge) == 'fall' else ('rising', 'falling')
+        name = '%s %s-edge trigger' % (st.trig_source, edge)
+        if check == 'mismatch':
+            warnings.append('%s fired inside a %s edge (comparator chatter), so t = 0 is not a %s edge; %s (%s)'
+                            % (name, other, edge, 'all %d captures misfired, the last is returned' % (misfires + 1)
+                               if misfires else 'the capture is returned anyway', why))
+            hints.append('%s misfired: %s' % (name, trigcheck.HINT))
+        elif misfires:
+            hints.append('%s: %d misfire(s) inside a %s edge were discarded and re-armed (comparator chatter, no '
+                         'hysteresis); the other edge or an analog trigger avoids them' % (name, misfires, other))
+            if check == 'ok':
+                check = 'misfire_retried'
+        return raw, frame, check, misfires
 
     def _run(self, prog, geom, trigger_timeout, collect_timeout, **kw):
         """Engine run with CROSS-table caching: the 4 x 257 CROSS writes are skipped when identical to the
@@ -738,6 +812,15 @@ class Scope:
 
 
 CROSS_REGS = (0x44, 0x54, 0x64, 0x74)
+
+
+def _trigger_wait(raw, geom):
+    """Seconds a run waited for its trigger: head arrival - start - record time (outside roll mode the head comes
+    after the whole record); 0 when the times are unknown."""
+    t0, th = getattr(raw, 't_start', None), getattr(raw, 't_head', None)
+    if t0 is None or th is None:
+        return 0.0
+    return max(0.0, th - t0 - (0.0 if geom.get('roll') else geom.get('record_s', 0.0)))
 
 
 def _saturated(frame):

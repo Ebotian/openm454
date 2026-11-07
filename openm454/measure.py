@@ -115,28 +115,31 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
     if vamp > max(4 * noise, 3 * lsb) and vamp > 0:
         mid = (vtop + vbase) / 2
         rises, falls = crossings(v, mid - hyst / 2, mid + hyst / 2)
-        iv = np.diff(rises) if len(rises) >= 2 else np.array([])
+        # periods from rise to rise; a window with fewer than two rises but two falls (about two periods, cut just
+        # after a rise) is measured from fall to fall instead
+        by_rise = len(rises) >= 2 or len(falls) < 2
+        ref, other = (rises, falls) if by_rise else (falls, rises)
+        iv = np.diff(ref) if len(ref) >= 2 else np.array([])
         if len(iv) >= 8 and np.std(iv) > 0.6 * np.mean(iv):
             res['period_irregular'] = True          # crossings of noise, not a periodic signal: no frequency
             res['noise_like'] = True
-        elif len(rises) >= 2:
+        elif len(ref) >= 2:
             med = float(np.median(iv))
             if len(iv) >= 3 and np.max(np.abs(iv - med)) > 0.1 * med:      # glitches: use the median period
                 period_s = med / rate
                 res['period_irregular'] = True
             else:
-                period_s = (rises[-1] - rises[0]) / (len(rises) - 1) / rate
+                period_s = (ref[-1] - ref[0]) / (len(ref) - 1) / rate
             freq, period = 1.0 / period_s, period_s
-            hi = 0.0
-            # high time per period: from each rise to the next fall
-            fi = 0
-            highs = []
-            for k in range(len(rises) - 1):
-                fs = falls[(falls > rises[k]) & (falls < rises[k + 1])]
-                if fs.size:
-                    highs.append(fs[0] - rises[k])
-            if highs:
-                duty = float(np.mean(highs)) / (period_s * rate) * 100
+            # time per period from each reference edge to the next opposite one: high time from rises, low from falls
+            spans = []
+            for k in range(len(ref) - 1):
+                os_ = other[(other > ref[k]) & (other < ref[k + 1])]
+                if os_.size:
+                    spans.append(os_[0] - ref[k])
+            if spans:
+                frac = float(np.mean(spans)) / (period_s * rate) * 100
+                duty = frac if by_rise else 100 - frac
     # the spectral peak test below rejects noise; a noise term here would block fast sines (few samples per period
     # inflate the difference-based noise estimate)
     if freq is None and n >= 64 and (vmax - vmin) > 4 * lsb:

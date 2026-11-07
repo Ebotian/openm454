@@ -6,6 +6,7 @@ Analog volts = (code - zero_code) * volts_per_code * probe, volts_per_code = vdi
 """
 import json
 import os
+import re
 import time
 
 import numpy as np
@@ -155,19 +156,30 @@ def new_path(out_dir, tag='cap'):
     return os.path.join(out_dir, '%s_%s' % (base, tag))
 
 
-def prune(out_dir, keep=200):
+CAPTURE_NAME = re.compile(r'^(\d{8}-\d{6}-\d{3}_[^\\/]+?)(_decode\.json|\.npz|\.png)$')   # new_path() + extension
+
+
+def prune(out_dir, keep=200, tag=None):
+    """Keep the newest `keep` captures in out_dir. Only files named the way new_path() names them (with .npz, .png or
+    _decode.json), and with tag only that tag's, are ever removed: other files in a user's --out folder, and log or
+    stream recordings saved there under their own tags, are left alone."""
     try:
-        fs = sorted((os.path.join(out_dir, f) for f in os.listdir(out_dir)), key=os.path.getmtime)
+        names = os.listdir(out_dir)
     except OSError:
         return
-    stems = []
-    for f in fs:
-        st = os.path.splitext(f)[0]
-        if st not in stems:
-            stems.append(st)
-    for st in stems[:-keep]:
-        for ext in ('.npz', '.png', '.json'):
+    groups = {}
+    for n in names:
+        m = CAPTURE_NAME.match(n)
+        if m and (tag is None or m.group(1).split('_', 1)[1] == tag):
+            p = os.path.join(out_dir, n)
             try:
-                os.remove(st + ext)
+                groups.setdefault(m.group(1), []).append((os.path.getmtime(p), p))
+            except OSError:
+                continue
+    stems = sorted(groups, key=lambda s: max(t for t, _ in groups[s]))
+    for st in stems[:-keep] if keep > 0 else stems:
+        for _, p in groups[st]:
+            try:
+                os.remove(p)
             except OSError:
                 pass

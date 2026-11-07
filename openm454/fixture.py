@@ -2,7 +2,8 @@
 
 {"analog": "standard", "digital": "standard"} is the self-test fixture (openm454/selftest.py). Any other value names
 what is connected (e.g. a {channel: source} map); the self-test then skips the checks that need the calibration
-square there. The scope has no internal test signal, so those checks always need this wiring.
+square there. The scope has no internal loopback, so those checks always need this wiring (its own 1 kHz
+calibration output and signal-generator output cabled to its inputs).
 A missing file (e.g. a fresh pip install) means the wiring is unknown: only the wiring-free checks run.
 """
 import json

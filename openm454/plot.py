@@ -1,7 +1,11 @@
 """Render a Capture to PNG (matplotlib Agg). Designed to be read by an agent: one shared volts axis for
 analog channels (fixed categorical colours A0..A3), digital channels as labelled lanes, trigger marker at t=0,
-legend carries each channel's key numbers. Min/max decimation keeps edges and glitches visible."""
+legend carries each channel's key numbers. Min/max decimation keeps edges and glitches visible.
+Nothing is drawn over the data: the analog legend is a row above the plot (title above it), the digital lane
+labels sit in the right margin."""
 import numpy as np
+
+from .capture import CODES_PER_DIV
 
 SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']        # A0..A3 (dataviz reference slots 1-4)
 DIGITAL = '#6250d6'
@@ -41,7 +45,26 @@ def _time_unit(span):
     return 1e-9, 'ns'
 
 
+def _legend(ax, ncol):
+    """Analog legend as a frameless row just above the axes (it used to sit in the upper right corner, over the
+    traces)."""
+    leg = ax.legend(loc='lower left', bbox_to_anchor=(0, 1.0), ncol=ncol, borderaxespad=0.4, frameon=False,
+                    fontsize=8.5, labelcolor=INK, handlelength=1.6, columnspacing=2.2)
+    for h in leg.legend_handles:
+        h.set_linewidth(2.5)
+    return leg
+
+
 def plot(cap, path, window=None, title=None, summary=None, channels=None):
+    import matplotlib.pyplot as plt
+    fig = render(cap, window, title, summary, channels)
+    fig.savefig(path, facecolor=SURFACE)
+    plt.close(fig)
+    return path
+
+
+def render(cap, window=None, title=None, summary=None, channels=None):
+    """The figure plot() saves (the caller closes it)."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -60,7 +83,7 @@ def plot(cap, path, window=None, title=None, summary=None, channels=None):
     hr = [3] if an else []
     if dg:
         hr.append(max(1.0, 0.35 * len(dg)))
-    fig, axes = plt.subplots(len(hr), 1, figsize=(14, 4.2 + 0.45 * len(dg) if an else 1.5 + 0.45 * len(dg)),
+    fig, axes = plt.subplots(len(hr), 1, figsize=(14, (4.5 if an else 1.5) + 0.45 * len(dg)),
                              dpi=100, sharex=True, gridspec_kw={'height_ratios': hr}, squeeze=False)
     axes = axes[:, 0]
     fig.patch.set_facecolor(SURFACE)
@@ -71,6 +94,7 @@ def plot(cap, path, window=None, title=None, summary=None, channels=None):
         ax.tick_params(colors=INK2, labelsize=9)
         ax.grid(True, color=GRID, lw=0.6)
         ax.axvline(0, color=INK2, lw=0.8, ls='--')
+    pad = 6                                                             # title offset above the top axes (points)
     if an:
         ax = axes[0]
         for c in an:
@@ -79,14 +103,20 @@ def plot(cap, path, window=None, title=None, summary=None, channels=None):
                 sel = (t >= t_lo) & (t <= t_hi); t, v = t[sel], v[sel]
             tt, vv = _decimate(t, v)
             m = summary['analog'].get(c, {})
-            lab = '%s  %s/div  Vpp %s  f %s' % (c, _si(cap.scale(c)['vdiv_v'] * cap.scale(c).get('probe', 1), 'V'),
+            s = cap.scale(c)
+            vdiv = s.get('vdiv_v', s['volts_per_code'] * CODES_PER_DIV)
+            lab = '%s  %s/div  Vpp %s  f %s' % (c, _si(vdiv * s.get('probe', 1), 'V'),
                                                _si(m.get('vpp_v'), 'V'), _si(m.get('freq_hz'), 'Hz'))
             ax.plot(tt / f, vv, color=SERIES[int(c[1])], lw=1.0, label=lab)
         trig = cap.meta.get('trigger', {})
         if (trig.get('source') or '').startswith('A') and trig.get('level_v') is not None:
             ax.axhline(trig['level_v'], color=INK2, lw=0.7, ls=':')
         ax.set_ylabel('V', color=INK2)
-        ax.legend(loc='upper right', fontsize=8.5, frameon=True, facecolor=SURFACE, edgecolor=GRID, labelcolor=INK)
+        leg = _legend(ax, len(an))
+        r = fig.canvas.get_renderer()
+        if len(an) > 2 and leg.get_window_extent(r).width > 0.9 * fig.bbox.width:
+            leg.remove(); leg = _legend(ax, 2)                          # labels too long for one row: two rows
+        pad += leg.get_window_extent(r).height * 72 / fig.dpi + 4      # title above the legend row
     if dg:
         ax = axes[-1]
         for i, c in enumerate(dg):
@@ -98,15 +128,13 @@ def plot(cap, path, window=None, title=None, summary=None, channels=None):
             ax.fill_between(tt / f, y0, y0 + bb, step='post', color=DIGITAL, alpha=0.18, lw=0)
             ax.step(tt / f, y0 + bb, where='post', color=DIGITAL, lw=0.9)
             m = summary['digital'].get(c, {})
-            ax.text(1.002, (y0 + 0.5) / (len(dg) * 1.4), '%s %s %s' % (c, m.get('state', ''), _si(m.get('freq_hz'), 'Hz') if m.get('freq_hz') else ''),
-                    transform=ax.transAxes, fontsize=8.5, color=INK, va='center')
+            ax.text(1.004, y0 + 0.5, '%s %s %s' % (c, m.get('state', ''), _si(m.get('freq_hz'), 'Hz') if m.get('freq_hz') else ''),
+                    transform=ax.get_yaxis_transform(), fontsize=8.5, color=INK, va='center')   # x: axes, y: lane
         ax.set_yticks([])
         ax.set_ylim(-0.3, len(dg) * 1.4)
     axes[-1].set_xlabel('time (%s), 0 = trigger' % tu, color=INK2)
     axes[-1].set_xlim(t_lo / f, t_hi / f)
     if title:
-        axes[0].set_title(title, fontsize=10, color=INK, loc='left')
+        axes[0].set_title(title, fontsize=10, color=INK, loc='left', pad=pad)
     fig.tight_layout()
-    fig.savefig(path, facecolor=SURFACE)
-    plt.close(fig)
-    return path
+    return fig

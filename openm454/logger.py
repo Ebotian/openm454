@@ -455,8 +455,11 @@ class _Writer(threading.Thread):
     """Decodes queued raw blocks, prints a statistics line per block, keeps (RAM) or dumps (disk) the samples."""
 
     def __init__(self, layout, rate, scale, storage, chunk_blocks, stem, meta_base, emit, heartbeat,
-                 ram_budget=None, ring=False, every_blocks=1):
+                 ram_budget=None, ring=False, every_blocks=1, hook=None):
         super().__init__(daemon=True)
+        self.hook = hook                  # openm454.hook.Hook: user code called with every piece
+        self.live_s = None                # callable: signal time of the newest sample the scope has taken
+        self.t0_wall = None               # time.time() of the run start (t_wall_s)
         self.layout, self.rate, self.scale = layout, rate, scale
         self.storage, self.chunk_blocks, self.stem = storage, chunk_blocks, stem
         self.meta_base, self.emit, self.heartbeat = meta_base, emit, heartbeat
@@ -502,7 +505,10 @@ class _Writer(threading.Thread):
         self.join()
         info = dict(info or {})
         if self.error is not None:
-            info.update(status='error', stop_reason=info.get('stop_reason') or 'writer_error')
+            why = info.get('stop_reason')
+            if type(self.error).__name__ == 'HookError':
+                why = 'hook_error' if why in (None, 'duration', 'stop_request', 'hook') else why     # an earlier error stop stays named
+            info.update(status='error', stop_reason=why or 'writer_error')
         try:
             if self.error is None:
                 self._emit_line(final=True)
@@ -521,7 +527,7 @@ class _Writer(threading.Thread):
             try:
                 if self.error is None:
                     self._process(bufs, info)
-            except Exception as e:                   # noqa: BLE001 - stops the run (stop_flag sees it)
+            except BaseException as e:               # noqa: BLE001 - stops the run (stop_flag sees it)
                 self.error = e
             finally:
                 with self.lock:
@@ -530,6 +536,8 @@ class _Writer(threading.Thread):
     def _process(self, bufs, info):
         L = self.layout
         bb = L.block_bytes
+        if self.hook is not None and self.hook.stop:
+            return                                   # the hook ended the recording: nothing after that piece is kept
         raw = self.carry + b''.join(bufs)
         nb = len(raw) // bb
         self.carry = raw[nb * bb:]
@@ -537,6 +545,7 @@ class _Writer(threading.Thread):
             return
         B = np.frombuffer(raw, np.uint8, count=nb * bb).reshape(nb, bb)
         first = self.blocks == 0
+        t0_piece = self.blocks * packet.BLOCK_SAMPLES / self.rate
         an, dg = packet._decode_blocks(B, L, packed=True)
         out = {}
         for i, c in zip(L.analog, self.an):
@@ -549,6 +558,8 @@ class _Writer(threading.Thread):
                 bits[:L.digital_stale] = bits[L.digital_stale]   # stale level from the previous run
                 p[:8] = np.packbits(bits, bitorder='little')
             out[c] = p
+        for x in out.values():
+            x.flags.writeable = False                # the hook sees the stored arrays: an in-place edit raises
         per = {c: x.size // nb for c, x in out.items()}              # array elements per block
         if self.storage == 'ram':
             nbytes = sum(int(x.size) for x in out.values())
@@ -585,6 +596,18 @@ class _Writer(threading.Thread):
             b += take
             if self.line_blocks >= self.every_blocks:
                 self._emit_line()
+        if self.hook is not None and not self.hook.stop:   # after storing: data up to a hook error is kept
+            from . import hook as hookmod
+            n_s = nb * packet.BLOCK_SAMPLES
+            r = self.hook.call(hookmod.Block(out, t0_piece, n_s, self.rate, self.scale, self.an, self.dg))
+            t_end = t0_piece + n_s / self.rate
+            lag = None if self.live_s is None else max(0.0, self.live_s() - t_end)
+            if lag is not None:
+                self.hook.note_delay(lag)
+            if r is not None and self.emit:
+                self.emit({'event': r, 'k': self.hook.events - 1, 't_signal_s': round(t_end, 6),
+                           'lag_s': None if lag is None else round(lag, 4),
+                           't_wall_s': round(time.time() - (self.t0_wall or time.time()), 3)})
         if self.heartbeat:
             self.heartbeat()
 
@@ -630,6 +653,9 @@ class _Writer(threading.Thread):
         if self.ring:
             line['ram_kept_s'] = round((min(self.blocks, self.stored_blocks) - self.dropped_blocks)
                                        * packet.BLOCK_SAMPLES / self.rate, 3)
+        if self.hook is not None:         # time spent in the hook since the last line
+            line['hook_ms'] = round(self.hook.line_seconds * 1e3, 2)
+            self.hook.line_seconds = 0.0
         line.update(extra or {})
         if final:
             line['final'] = True
@@ -741,7 +767,7 @@ STOP_ERRORS = {
 }
 
 
-def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None, on_final=None):
+def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None, on_final=None, hook=None):
     """Run a planned log on an open Scope. Returns the result document (ok False with an error on a data-safety
     stop; the data up to the stop is kept). Device errors raise DscopeError after the files were closed.
     out_stem None: nothing is written (RAM data is dropped at the end). on_final(nbytes) is called before the
@@ -755,6 +781,16 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
         geom['transfer_count'] = max(4, geom['transfer_count'])   # DSWave queues 1 read of one block
     data_bps = pl['_data_bps']
     piece_bytes = max(blk, min(pl['_every_blocks'] * blk, PIECE_BYTES // blk * blk))
+    if hook is not None:                             # the hook reacts within about PIECE_S of signal
+        from . import hook as hookmod
+        piece_bytes = max(blk, min(piece_bytes, int(hookmod.PIECE_S * data_bps) // blk * blk))
+        try:
+            hook.setup({'rate_hz': rate, 'analog': list(st.analog), 'digital': list(st.digital),
+                        'scale': {c: dict(pl['_scale'][c]) for c in st.analog}, 'every_s': pl['every_s'],
+                        'duration_s': pl['duration_s'], 'storage': pl['storage'], 'block_samples': packet.BLOCK_SAMPLES,
+                        'piece_s': piece_bytes // blk * packet.BLOCK_SAMPLES / rate})
+        except hookmod.HookError as e:
+            raise DscopeError('HOOK_ERROR', str(e), 'fix the hook file (nothing was recorded)') from None
     disk_limit = pl.get('_disk_bytes') if pl['storage'] == 'disk' else None
     ram_limit = pl.get('_ram_limit')
     target = None if pl['duration_s'] is None else int(math.ceil(pl['duration_s'] * rate / packet.BLOCK_SAMPLES)) * blk
@@ -772,7 +808,10 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                          'digital_rate_hz': rate if st.digital else None, 'triggered': False},
                  'trigger': {'source': None, 'mode': 'force'}, 'warnings': list(pl['warnings'])}
     w = _Writer(layout, rate, pl['_scale'], storage, pl['_chunk_blocks'], stem, meta_base, emit, heartbeat,
-                pl['_ram_budget'], pl['ram_ring'], pl['_every_blocks'])
+                pl['_ram_budget'], pl['ram_ring'], pl['_every_blocks'], hook=hook)
+    w.t0_wall = t0_wall
+    # how far behind live the hook is: the scope's newest sample = what arrived + its unread backlog (BacklogMeter)
+    w.live_s = lambda: (s['n_data'] + s['backlog']) / data_bps
     w.start()
     s = {'head': False, 't_head': None, 't_last': None, 'n_usb': 0, 'n_data': 0, 'pend': [], 'pend_n': 0,
          'reason': None, 'backlog': 0, 'backlog_max': 0, 'queued_at_stop': 0, 'meter': None, 'tripped': False,
@@ -824,7 +863,10 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
 
     def stop():
         if w.error is not None:
-            s['reason'] = 'writer_error'
+            s['reason'] = 'hook_error' if type(w.error).__name__ == 'HookError' else 'writer_error'
+            return True
+        if hook is not None and hook.stop:
+            s['reason'] = 'hook'                     # the hook asked to stop: a normal end
             return True
         if stop_flag is not None and stop_flag():
             s['reason'] = 'stop_request'
@@ -869,14 +911,20 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
     if isinstance(err, KeyboardInterrupt):
         status, reason = 'interrupted', 'interrupted'
     else:
-        status = 'error' if err is not None or s['reason'] in STOP_ERRORS or s['reason'] == 'writer_error' else 'done'
+        status = 'error' if err is not None or s['reason'] in STOP_ERRORS or s['reason'] in ('writer_error',
+                                                                                            'hook_error') else 'done'
         reason = s['reason'] or ('device_error' if err else None)
     if on_final is not None and storage == 'ram' and stem:
         on_final(w.kept_bytes + w.queued)
     werr = w.finish({'status': status, 'stop_reason': reason})
+    if werr is not None and type(werr).__name__ == 'HookError' and s['reason'] in (None, 'duration', 'stop_request', 'hook'):
+        s['reason'] = 'hook_error'                   # the data kept ends where the hook failed
     if err is not None:
         try:
             err.log_files = _files(storage, w, stem, rate)
+            if hook is not None:                     # the hook still hears the end, and its report is kept
+                err.hook_report = _hook_close(hook, w.blocks * packet.BLOCK_SAMPLES, rate, reason,
+                                              finish=werr is None)[0]
         except Exception:                            # noqa: BLE001 - only an annotation
             pass
         raise err
@@ -898,8 +946,15 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
            'elapsed_s': round(time.time() - t0_wall, 3)}
     res = {'ok': True, 'cmd': 'log', 'plan': public(pl), 'acq': acq}
     res.update(w.summary())
+    if hook is not None:
+        res['hook'], ferr = _hook_close(hook, n_samples, rate, s['reason'], finish=werr is None)
+        werr = werr or ferr
     res['files'] = _files(storage, w, stem, rate)
     res['warnings'] = list(pl['warnings'])
+    if hook is not None and ((res['hook']['load'] or 0) > 1.0 or (res['hook']['lag_max_s'] or 0) > 1.0):
+        res['warnings'].append('the hook fell behind: it needed %.2f s per second of signal and was up to %.1f s '
+                               'behind live; keep it lighter (numpy on block.codes() / packed(), less work per piece) '
+                               'or lower --rate' % (res['hook']['load'] or 0, res['hook']['lag_max_s'] or 0.0))
     if s['reason'] == 'ring_full':
         res['warnings'].append('--force: stopped after %.2f s of gap-free signal when the scope was %.0f MB ahead; the '
                                'unread part (acquired after that) is lost' % (n_samples / rate, s['backlog'] / 1e6))
@@ -911,7 +966,11 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
     if s['reason'] == 'disk_allowance':
         res['warnings'].append('stopped at the disk allowance (%.1f GB); raise it with openm454 bench --disk'
                                % (disk_limit / 1e9))
-    if werr is not None:
+    if werr is not None and type(werr).__name__ == 'HookError':
+        res['ok'] = False
+        res['error'] = {'code': 'HOOK_ERROR', 'message': '%s (data up to the stop is kept)' % werr,
+                        'hint': 'fix the hook file; its traceback is in error.trace', 'trace': werr.trace}
+    elif werr is not None:
         res['ok'] = False
         res['error'] = {'code': 'WRITE_FAILED', 'message': 'writing the log failed: %r' % (werr,),
                         'hint': 'check the free space and permissions of --out'}
@@ -924,6 +983,23 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
         res['ok'] = False
         res['error'] = {'code': code, 'message': msg % val + ' (data up to the stop is kept)', 'hint': hint}
     return res
+
+
+def _hook_close(hook, n_samples, rate, reason, finish=True):
+    """The hook's report, with finish(summary) called first (not after a process() error). -> (report, HookError or
+    None); a finish() error is also noted in the report."""
+    from . import hook as hookmod
+    rep, ferr = hook.report(n_samples / rate), None
+    if finish:
+        try:
+            r = hook.finish({'samples': n_samples, 'duration_s': n_samples / rate, 'stop_reason': reason,
+                             'calls': hook.calls, 'events': hook.events})
+            if r is not None:
+                rep['result'] = r
+        except hookmod.HookError as e:
+            ferr = e
+            rep['finish_error'] = str(e)
+    return rep, ferr
 
 
 def _remember_readout(pl, meter, run_bps, data_bps):

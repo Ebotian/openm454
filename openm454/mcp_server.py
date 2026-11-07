@@ -10,7 +10,10 @@ NOT_FOUND (scope not connected), BUSY (DSWave or another openm454 process holds 
 triggered within timeout_s), TRIGGER_OUT_OF_RANGE, INVALID_ARG, TIMEOUT_WATCHDOG, USB_ERROR ... (README).
 
 Run:          python -m openm454.mcp_server      (or the openm454-mcp script)
-Claude Code:  claude mcp add openm454 -- python -m openm454.mcp_server
+Claude Code:  claude mcp add -s user openm454 openm454-mcp     (works in every shell: no "--" needed)
+              DSWave for the FPGA bitstream is found by itself (registry, Program Files) or recorded once with
+              `openm454 setup --dswave <folder>`; an env var would have to be given at registration instead
+              (-e OPENM454_DSWAVE=<folder> -- openm454-mcp; in PowerShell the -- must be quoted: '--').
 """
 import ctypes
 import itertools
@@ -37,8 +40,8 @@ INSTRUCTIONS = """Measure and generate real signals with the DSCope M454 oscillo
 A0-A3 up to 400 MSa/s, 8 digital D0-D7, signal generator 0-3 V). Start with `status`. `capture` takes one triggered
 (or untriggered) record and returns measurements per channel (frequency, Vpp, duty, rise/fall times...) plus the
 saved file; `analyze` / `plot` work on saved files. Long continuous recordings: `log_plan`, then `record_start`,
-`record_status`, `record_stop`. `selftest` checks the scope itself (its signal checks need the user's bench
-fixture: the scope has no internal test signal). Choose the lowest rate and fewest channels that answer the question.
+`record_status`, `record_stop`. `selftest` checks the scope itself (its signal checks need the scope's own
+calibration and generator outputs cabled to its inputs: there is no internal loopback). Choose the lowest rate and fewest channels that answer the question.
 Ask the user before connecting probes or the generator output to their circuit. Errors have a code: NOT_FOUND = not
 connected, BUSY = another program holds the scope, TIMEOUT_NO_TRIGGER = no trigger within timeout_s."""
 
@@ -85,6 +88,10 @@ TOOLS = [
                        'description': 'normal (default with a trigger): wait up to timeout_s; auto: free-run after '
                                       '0.3 s without a trigger; force (default without one): no trigger'},
          'timeout_s': {'type': 'number', 'default': 5, 'description': 'how long to wait for the trigger'},
+         'trig_retries': {'type': 'integer', 'description': 'digital rise/fall trigger: re-arm up to N times when '
+                                                            'a slow edge chattered and the capture fired on the '
+                                                            'opposite edge (default 4; 0 = only check); '
+                                                            'acq.trigger_check reports it'},
          'trig_pos': {'type': 'string', 'description': "trigger position in the window, e.g. '10%' (default 50%)"},
          'holdoff': {'type': 'string', 'description': "trigger holdoff, e.g. '1ms'"},
          'decode': DECODE,
@@ -136,6 +143,10 @@ TOOLS = [
                                   'every': {'type': 'string', 'description': "signal time per status line, '1s'"},
                                   'storage': {'type': 'string', 'enum': ['ram', 'disk', 'none']},
                                   'keep_last': {'type': 'boolean'}, 'force': {'type': 'boolean'},
+                                  'hook': {'type': 'string', 'description': 'log only: path of a Python file with '
+                                           'process(block) run on every ~10 ms piece as it arrives (see the README '
+                                           '"Live processing hook"); its returned dicts appear as events in '
+                                           'record_status, {"stop": true} ends the recording'},
                                   'decode': DECODE}, **VERTICAL), ['mode'])},
     {'name': 'record_status', 'title': 'Recording status',
      'description': 'The latest status lines of a recording (backlog, live statistics) and its result once done.',
@@ -154,9 +165,9 @@ TOOLS = [
      'description': 'Is the scope itself healthy? Wiring-free checks always run and only read the inputs: device '
                     'info, all 12 channels at 100 MSa/s, the 400/200 MSa/s top rates, capture latency (~5 s). The '
                     'signal checks (calibration square, V/div, triggers, thresholds, timeout) need the standard bench '
-                    'fixture, because the scope has no internal test signal: A0 <- generator output; A1, A3 (1x) and '
-                    'A2 (10x probe) <- a ~2.8 Vpp 1 kHz square; D0, D2, D5, D7 <- the same square; D1, D3, D4, D6 '
-                    'open. They are skipped (listed with the reason) unless state/fixture.json declares that wiring or '
+                    'fixture: the two outputs of the scope cabled to its inputs (there is no internal loopback): A0 <- '
+                    'generator output; A1, A3 (1x probes) and A2 (10x probe) <- the 1 kHz calibration output (~2.8 V '
+                    'square); D0, D2, D5, D7 <- the same calibration output; D1, D3, D4, D6 open. They are skipped (listed with the reason) unless state/fixture.json declares that wiring or '
                     'fixture is standard: ask the user to wire it and confirm first. Fails with SELFTEST_FAILED and '
                     'the failed checks (measured vs expected).',
      'inputSchema': _schema({
@@ -339,8 +350,9 @@ class Job:
 # ------------------------------------------------------------------------------------------------ summaries
 A_KEYS = ('freq_hz', 'vpp_v', 'vmin_v', 'vmax_v', 'vmean_v', 'duty_pct', 'rise_s', 'fall_s')
 D_KEYS = ('state', 'freq_hz', 'duty_pct', 'edges', 'high_frac')
-ACQ_KEYS = ('triggered', 'mode', 'analog_rate_hz', 'digital_rate_hz', 'rate_hz', 'samples', 'duration_s',
-            'complete', 'stop_reason', 'host_mb_s', 'backlog_max_mb', 'unread_at_stop_mb')
+ACQ_KEYS = ('triggered', 'trigger_check', 'trigger_misfires', 'mode', 'analog_rate_hz', 'digital_rate_hz', 'rate_hz',
+            'samples', 'duration_s', 'complete', 'stop_reason', 'host_mb_s', 'backlog_max_mb', 'unread_at_stop_mb')
+ACQ_SKIP = {'trigger_check': ('unchecked',), 'trigger_misfires': (0,)}       # left out of summaries when uneventful
 LONG_TEXT = 400
 PLAN_KEYS = ('rate_hz', 'channels', 'data_mb_s', 'verdict', 'readout_mb_s', 'gapfree_max_s', 'recommendation',
              'storage', 'max_duration_s', 'file_mb', 'ram_ring', 'interleaved', 'divider', 'warnings')
@@ -423,7 +435,8 @@ def summarize(doc):
         if applied.get('trigger'):
             out['trigger'] = {k: v for k, v in applied['trigger'].items() if v is not None}
     if doc.get('acq'):
-        out['acq'] = {k: doc['acq'][k] for k in ACQ_KEYS if doc['acq'].get(k) is not None}
+        out['acq'] = {k: doc['acq'][k] for k in ACQ_KEYS
+                      if doc['acq'].get(k) is not None and doc['acq'][k] not in ACQ_SKIP.get(k, ())}
     for group, keys in (('analog', A_KEYS), ('digital', D_KEYS)):
         if doc.get(group):
             out[group] = {}
@@ -434,7 +447,7 @@ def summarize(doc):
                 out[group][ch] = d
     if doc.get('decode'):
         out['decode'] = [_trim_decode(r) for r in doc['decode']]
-    for k in ('error', 'files', 'plan', 'device', 'awg', 'awg_last', 'persists_after_exit', 'note', 'records',
+    for k in ('error', 'files', 'plan', 'hook', 'device', 'awg', 'awg_last', 'persists_after_exit', 'note', 'records',
               'signal_s', 'seams_s', 'stopped_by', 'warnings', 'hints'):
         if doc.get(k) not in (None, {}, []):
             out[k] = doc[k]
@@ -475,6 +488,8 @@ def capture_args(a):
         raise ToolError('INVALID_ARG', 'trig_mode %s needs a trigger' % mode, "e.g. trigger 'A1:rise:1.4V'")
     timeout = float(a.get('timeout_s', 5.0))
     args += ['--trig-mode', mode, '--timeout', '%gs' % timeout]
+    if a.get('trig_retries') is not None:
+        args += ['--trig-retries', str(int(a['trig_retries']))]
     if a.get('edges'):
         args += ['--edges', str(int(a['edges']))]
     for spec in a.get('decode') or ():
@@ -526,8 +541,13 @@ def record_args(a, plan=False):
     args = [mode, '-c', a.get('channels') or 'A0-A3,D0-D7'] + _vertical(a)
     for k in ('rate', 'duration', 'every'):
         args += _opt(a, k)
+    if a.get('hook') and mode != 'log':
+        raise ToolError('INVALID_ARG', 'hook is a log option', 'record with mode log')
+    if a.get('hook') and not os.path.isabs(str(a['hook'])):
+        raise ToolError('INVALID_ARG', 'hook needs an absolute path (the recording runs in the MCP server\'s folder, '
+                        'not yours)', 'give the full path of the .py file')
     if mode == 'log':
-        args += _opt(a, 'storage')
+        args += _opt(a, 'storage') + _opt(a, 'hook')
         if a.get('keep_last'):
             args.append('--keep-last')
         if a.get('force'):
@@ -562,7 +582,12 @@ def capture_wall(args):
         else:
             n = 100e3
         n = min(n, 400e6) * max(1, len(an) + len(dg))
-        return 180.0 + si(opt('--timeout', '5s'), 's') + 3.0 * dur + 2e-6 * n
+        extra = 0.0
+        trig = (opt('--trig') or '').split(':')
+        if trig[0].upper().startswith('D') and len(trig) > 1 and trig[1].lower() in ('rise', 'rising', 'fall', 'falling') \
+                and opt('--trig-mode', 'auto') != 'force':     # misfire re-arms, as in the CLI's _budget
+            extra = max(0, int(opt('--trig-retries', 4))) * (max(dur + 11.5, 2.5 * dur + 3.5) + 1.0 + 2e-7 * n)
+        return 180.0 + si(opt('--timeout', '5s'), 's') + 3.0 * dur + 2e-6 * n + extra
     except Exception:                       # noqa: BLE001 - the CLI reports bad arguments itself, at once
         return 180.0
 
@@ -794,7 +819,13 @@ class Server:
         out = {'ok': True, 'job': j.job, 'running': running, 'mode': j.mode,
                'elapsed_s': round(time.time() - j.t0, 1)}
         stats = [l for l in lines if 'i' in l and 'ok' not in l]     # the live statistics lines
+        if not stats and any('event' in l for l in lines):           # hook events crowd the tail: look further back
+            stats = [l for l in _read_lines(j.path, 16 * 2 ** 20) if 'i' in l and 'ok' not in l]
         out['last'] = stats[-min(20, max(1, int(a.get('lines', 3)))):]
+        events = [l for l in lines if 'event' in l]                  # what a log --hook reported
+        if events:
+            out['events'] = events[-min(20, max(1, int(a.get('lines', 3)))):]
+            out['events_seen'] = len(events)
         final = j.final()
         if not running:
             out['result'] = summarize(final) if final else {
@@ -867,13 +898,13 @@ def _stdin_lines():
     yield from iter(sys.stdin.buffer.readline, b'')
 
 
-def _read_lines(path):
+def _read_lines(path, tail=256 * 1024):
     out = []
     try:
         with open(path, 'rb') as f:
             f.seek(0, 2)
             size = f.tell()
-            f.seek(max(0, size - 256 * 1024))
+            f.seek(max(0, size - tail))
             data = f.read().decode('utf-8', 'replace')
     except OSError:
         return out
