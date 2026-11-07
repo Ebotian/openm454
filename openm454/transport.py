@@ -90,7 +90,7 @@ class Transport:
             self.h.close()
             self.h = None
             raise DscopeError('BUSY', 'cannot claim the USB interface (%s)' % e,
-                              'close DSWave or a running "dscope watch", then retry')
+                              'close DSWave or a running "openm454 watch", then retry')
         return self
 
     def close(self):

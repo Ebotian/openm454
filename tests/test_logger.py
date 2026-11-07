@@ -1,4 +1,4 @@
-"""Loop-mode logging (dscope/logger.py) and the refreshing stream, without hardware."""
+"""Loop-mode logging (openm454/logger.py) and the refreshing stream, without hardware."""
 import json
 import math
 import os
@@ -7,12 +7,12 @@ import types
 import numpy as np
 import pytest
 
-from dscope import cli, host, logger, mso_adapter, packet
-from dscope import scope as scopemod
-from dscope.acquire import RawCapture
-from dscope.capture import load_capture
-from dscope.errors import DscopeError
-from dscope.units import si
+from openm454 import cli, host, logger, mso_adapter, packet
+from openm454 import scope as scopemod
+from openm454.acquire import RawCapture
+from openm454.capture import load_capture
+from openm454.errors import DscopeError
+from openm454.units import si
 
 A2D8 = (['A2', 'A3'], ['D%d' % i for i in range(8)])
 
@@ -90,7 +90,7 @@ def test_stream_better_is_refused():
     with pytest.raises(DscopeError) as ei:
         make_plan(*A4D8, 100e6, 10)
     e = ei.value
-    assert e.code == 'STREAM_BETTER' and 'dscope stream' in e.hint and e.plan['recommendation'] == 'stream'
+    assert e.code == 'STREAM_BETTER' and 'openm454 stream' in e.hint and e.plan['recommendation'] == 'stream'
     args = cli.build_parser().parse_args(['stream', '-c', 'A0-A3,D0-D7', '--rate', '100M', '--duration', '10s'])
     assert e.plan['stream_alternative']['record_s'] == pytest.approx(cli.stream_plan(args)[2], rel=1e-3)   # 1.02 s
     assert e.plan['stream_alternative']['same_rates'] and 'measured' in e.plan['readout_source']

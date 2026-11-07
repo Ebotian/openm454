@@ -4,9 +4,9 @@ import os
 
 import numpy as np
 
-from dscope import protosim as sim
-from dscope.capture import Capture
-from dscope.decode import decode
+from openm454 import protosim as sim
+from openm454.capture import Capture
+from openm454.decode import decode
 
 SCHEMA = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'docs', 'schemas',
                                      'decode.json'), encoding='utf-8'))

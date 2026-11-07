@@ -77,7 +77,7 @@ DTHR_FACTOR = 0.7575757575757576   # MsoUsbController+0x10 = 0x3FE83E0F83E0F83E 
 PKT_TIME_MS = 20             # FUN_140340e20
 XFER_TIME_MS = 200           # FUN_140340e40
 
-# register addresses (dscope/regs.py names)
+# register addresses (openm454/regs.py names)
 HW_BASE_MODE, HW_BASE_CTRL, TRIG_ADDR, TRIG_DATA, TRIG_SHFT, FLUSH_DATA = 0x00, 0x01, 0x09, 0x0A, 0x0B, 0xF9
 
 # :ACROSS lookup by enabled-analog mask (MsoCtl_SetAnalogFoldCross 0x3544b0, stack table)

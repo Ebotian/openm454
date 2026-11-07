@@ -4,8 +4,8 @@ import json, os
 import numpy as np
 import pytest
 
-from dscope import scope as scopemod
-from dscope.acquire import RawCapture
+from openm454 import scope as scopemod
+from openm454.acquire import RawCapture
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SESS = os.path.join(ROOT, 're', 'traces', 'S01_warm')

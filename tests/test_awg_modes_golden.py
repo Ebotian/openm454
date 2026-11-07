@@ -1,4 +1,4 @@
-"""dscope.awg_modes (AWG modulation / sweep / burst) against DSWave 1.2.1.
+"""openm454.awg_modes (AWG modulation / sweep / burst) against DSWave 1.2.1.
 
 Golden part: compares tests/fixtures/scenarios/corpus5.json with DSWave's recorded register programs. The recorded programs come
 from tests/fixtures/awg_modes_programs.json (committed, like tests/fixtures/awg_programs.json for corpus3), made after
@@ -25,8 +25,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from dscope import awg, awg_modes as M  # noqa: E402
-from dscope.errors import DscopeError  # noqa: E402
+from openm454 import awg, awg_modes as M  # noqa: E402
+from openm454.errors import DscopeError  # noqa: E402
 
 CORPUS_PATH = os.path.join(ROOT, 'tests', 'fixtures', 'scenarios', 'corpus5.json')
 FIXTURE_PATH = os.path.join(ROOT, 'tests', 'fixtures', 'awg_modes_programs.json')
@@ -35,7 +35,7 @@ NAMES = [s['name'] for s in CORPUS]
 BY_NAME = {s['name']: s for s in CORPUS}
 
 #: AWG SCPI tokens from DSWave.exe's token table, an independent source
-#: for the spellings in dscope.awg_modes.SCPI (which come from the GUI parameter table, RVA 0xBABBC0).
+#: for the spellings in openm454.awg_modes.SCPI (which come from the GUI parameter table, RVA 0xBABBC0).
 DSWAVE_AWG_TOKENS = (
     'Enable TRIGGERdelay TRIGGERoutput TRIGGERedge TRIGGERsource BURSTperiod BURSTgatePolarity BURSTcounter '
     'BURSTcyclesNum BURSTncycleMode BURSTmode SWEEPfrequencyMark SWEEPtime SWEEPendFrequency SWEEPstartFrequency '

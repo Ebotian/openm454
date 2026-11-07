@@ -18,9 +18,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def candidate_exes():
-    """Where DSWave.exe may be: $DSCOPE_DSWAVE (the exe or its folder), then a copy in DSWave/ next to dscope/."""
+    """Where DSWave.exe may be: $OPENM454_DSWAVE (the exe or its folder; $DSCOPE_DSWAVE, the old name, also works),
+    then a copy in DSWave/ next to openm454/."""
     out = []
-    env = os.environ.get('DSCOPE_DSWAVE')
+    env = os.environ.get('OPENM454_DSWAVE') or os.environ.get('DSCOPE_DSWAVE')
     if env:
         out.append(env if env.lower().endswith('.exe') else os.path.join(env, 'DSWave.exe'))
     out.append(os.path.join(ROOT, 'DSWave', 'DSWave.exe'))
@@ -88,8 +89,8 @@ def bitstream():
             open(CACHE, 'wb').write(raw)
             return raw
     raise DscopeError('FIRMWARE_SOURCE', 'DSWave 1.2.1 not found; needed once to extract the FPGA bitstream',
-                      'set DSCOPE_DSWAVE to DSWave.exe (or its folder), or copy the DSWave 1.2.1 folder to '
-                      'DSWave/ next to the dscope package')
+                      'set OPENM454_DSWAVE to DSWave.exe (or its folder), or copy the DSWave 1.2.1 folder to '
+                      'DSWave/ next to the openm454 package')
 
 
 if __name__ == '__main__':

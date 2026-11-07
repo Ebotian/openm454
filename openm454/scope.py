@@ -300,7 +300,7 @@ class Scope:
 
     # ------------------------------------------------------------ lifecycle
     def open(self, reload_fpga=False):
-        """reload_fpga: reset and reconfigure the FPGA first (`dscope recover`, see Device.open)."""
+        """reload_fpga: reset and reconfigure the FPGA first (`openm454 recover`, see Device.open)."""
         from .lock import DeviceLock
         from .device import Device
         from .acquire import Engine
@@ -513,7 +513,7 @@ class Scope:
             attempts.append('forced')
             if raw.head is None:
                 raise DscopeError('PROTOCOL_ERROR', 'device returned no data even for a forced capture',
-                                  'run "dscope release"; if it persists replug the scope')
+                                  'run "openm454 release"; if it persists replug the scope')
         if not self._check_complete(raw, geom):
             raise DscopeError('TIMEOUT_DATA', 'incomplete record: %d of %d data bytes (%s)' % (
                 len(raw.data), geom['need_bytes'], 'aborted' if raw.aborted else 'data stopped arriving'),
@@ -669,7 +669,7 @@ class Scope:
         """Gap-free recording over loop mode at one `rate` for every channel (<= 100 MSa/s; 200/400 MSa/s
         interleaved on 1-2 channels, see logger.max_rate), `duration` s or until
         stop_flag() is true (duration None). storage 'ram' (default: kept in RAM, written once to <out_stem>.npz),
-        'disk' (chunks dumped while running), 'none'. Returns the result document (see dscope.logger).
+        'disk' (chunks dumped while running), 'none'. Returns the result document (see openm454.logger).
         probe: None measures the readout of this channel set first when it is unknown and the rate is above the
         sustained one; True always; False never (plans with the cached readout or the 190 MB/s ceiling).
         Raises STREAM_BETTER / NEEDS_FORCE (with .plan) for a log longer than its gap-free limit."""
@@ -783,12 +783,12 @@ def _cached_zero():
 # ------------------------------------------------------------------------------------------------ adapters
 def _compile(hal, zero_info):
     """-> (program [(addr, val)], geometry dict with pkt_bytes, need_bytes, transfer_count, analog_rate,
-    digital_rate, ...). Bound to dscope.mso."""
+    digital_rate, ...). Bound to openm454.mso."""
     from . import mso_adapter
     return mso_adapter.compile(hal, zero_info)
 
 
 def _decode(raw, geom, hal):
-    """-> {'analog': {ch: uint8}, 'digital': {ch: uint8}, 't0_analog': s, 't0_digital': s}. Bound to dscope.packet."""
+    """-> {'analog': {ch: uint8}, 'digital': {ch: uint8}, 't0_analog': s, 't0_digital': s}. Bound to openm454.packet."""
     from . import mso_adapter
     return mso_adapter.decode(raw, geom, hal)

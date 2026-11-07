@@ -99,7 +99,7 @@ class Capture:
         return out
 
     def decode(self, spec, window=None, limit=None):
-        """Protocol decoder on captured lines, e.g. 'uart:rx=D4,baud=115200' (see dscope.decode)."""
+        """Protocol decoder on captured lines, e.g. 'uart:rx=D4,baud=115200' (see openm454.decode)."""
         from .decode import decode
         return decode(self, spec, window, limit)
 

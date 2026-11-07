@@ -1,4 +1,4 @@
-# DSClaude
+# openm454
 
 An open driver and command-line interface for the **DreamSourceLab DSCope M454** USB mixed-signal oscilloscope
 (4 analog channels up to 400 MSa/s, 8 digital channels, built-in 0-3 V signal generator), written so that an AI
@@ -12,17 +12,17 @@ by USB tracing; see `docs/PROTOCOL.md`.
 
 Requirements: Windows, Python 3.10+, `pip install libusb1 numpy matplotlib lz4`, the scope bound to WinUSB (it is by
 default), and DSWave 1.2.1, needed once to extract the FPGA bitstream (it is never redistributed): point
-`DSCOPE_DSWAVE` at its `DSWave.exe` (or folder), or copy the DSWave folder to `DSWave/` next to `dscope/`. The
+`OPENM454_DSWAVE` at its `DSWave.exe` (or folder), or copy the DSWave folder to `DSWave/` next to `openm454/`. The
 bitstream is then cached in `firmware/`. Close DSWave before using the driver: the scope accepts one USB client.
 
 ```
-python -m dscope info
-python -m dscope capture -c A1,D0 --vdiv 1V --offset 1.5V --timebase 200us --trig A1:rise:1.4V
-python -m dscope watch -c A1 --every 0.5s --count 10 --fields A1.freq_hz,A1.vpp_v
-python -m dscope awg set --wave sine --freq 10k --low 0V --high 2V
-python -m dscope analyze captures/<file>.npz --window -1ms:1ms
-python -m dscope capture -c D0,D1 --rate 20M --duration 2ms --trig D0:pulse>:200us --decode "i2c:scl=D0,sda=D1"
-python -m dscope selftest
+python -m openm454 info
+python -m openm454 capture -c A1,D0 --vdiv 1V --offset 1.5V --timebase 200us --trig A1:rise:1.4V
+python -m openm454 watch -c A1 --every 0.5s --count 10 --fields A1.freq_hz,A1.vpp_v
+python -m openm454 awg set --wave sine --freq 10k --low 0V --high 2V
+python -m openm454 analyze captures/<file>.npz --window -1ms:1ms
+python -m openm454 capture -c D0,D1 --rate 20M --duration 2ms --trig D0:pulse>:200us --decode "i2c:scl=D0,sda=D1"
+python -m openm454 selftest
 ```
 
 ## Recording modes and measured speeds
@@ -31,7 +31,7 @@ python -m dscope selftest
 |---|---|---|---|
 | `capture` | into the 512 MiB sample memory, read out afterwards (250-265 MB/s) | one record: 400M samples per channel / 512 MiB | up to 400 MSa/s (1 channel) |
 | `stream` | every record is sent while it is acquired, at any data rate (`--record-first`: above 102.4 MB/s acquire it first and read it out afterwards, as DSWave does); longer than one record or `--duration forever`: record after record, each refreshing the previous one | unlimited; between records ~0.2 s while the readout keeps up, plus the rest of the record above it (0.7 s at 250 MB/s; 2.4 s with `--record-first`); the last record is kept (`--save-each`: all) | as `capture`: analog and digital at their own rates |
-| `log` | loop mode: one endless gap-free stream, kept in RAM (default; written once at the end; a RAM ring keeps the newest part of longer runs) or, with `--storage disk`, dumped in chunk files while running | until `dscope stop` or the duration; RAM budget / disk allowance | one rate for all channels, 100 MHz / N for any integer N (1 kSa/s..100 MSa/s, e.g. 33.333 MSa/s); interleaved 200 MSa/s (<= 2 analog, <= 4 digital channels) and 400 MSa/s (<= 1 analog, <= 2 digital) |
+| `log` | loop mode: one endless gap-free stream, kept in RAM (default; written once at the end; a RAM ring keeps the newest part of longer runs) or, with `--storage disk`, dumped in chunk files while running | until `openm454 stop` or the duration; RAM budget / disk allowance | one rate for all channels, 100 MHz / N for any integer N (1 kSa/s..100 MSa/s, e.g. 33.333 MSa/s); interleaved 200 MSa/s (<= 2 analog, <= 4 digital channels) and 400 MSa/s (<= 1 analog, <= 2 digital) |
 
 Measured on the M454 over USB 3 with every input on a 1 kHz square, every period checked for gaps (2026-11-01/02):
 
@@ -123,16 +123,16 @@ continuous recording; `stream` for different analog and digital rates, decoding 
 limit when `log` says `STREAM_BETTER` or the whole time matters more than one long gap-free piece.
 
 ```
-python -m dscope bench --ram 8GB --disk 50GB --dir logs
-python -m dscope log --plan -c A0,D0-D7 --rate 1M --duration 10min
-python -m dscope log -c A0,D0-D7 --rate 1M --duration 10min                   # kept in RAM, one .npz at the end
-python -m dscope log -c A0,D0-D7 --rate 1M --duration forever                 # RAM ring; end it with: python -m dscope stop
-python -m dscope stream -c D0-D7 --rate 100M --duration 60s --every 1s
+python -m openm454 bench --ram 8GB --disk 50GB --dir logs
+python -m openm454 log --plan -c A0,D0-D7 --rate 1M --duration 10min
+python -m openm454 log -c A0,D0-D7 --rate 1M --duration 10min                   # kept in RAM, one .npz at the end
+python -m openm454 log -c A0,D0-D7 --rate 1M --duration forever                 # RAM ring; end it with: python -m openm454 stop
+python -m openm454 stream -c D0-D7 --rate 100M --duration 60s --every 1s
 ```
 
 Every command prints one JSON document (measurements, applied settings, file paths); captures are saved as `.npz`
-(raw codes + scaling) and `.png`. `python -m dscope <command> --help` lists every option. Python API:
-`dscope.scope.Scope`, `dscope.capture.load_capture`, `Capture.decode()`.
+(raw codes + scaling) and `.png`. `python -m openm454 <command> --help` lists every option. Python API:
+`openm454.scope.Scope`, `openm454.capture.load_capture`, `Capture.decode()`.
 
 Protocol decoders (`--decode SPEC`, repeatable, on `capture`, `watch`, `stream` and `analyze`):
 `uart:rx=D4,baud=115200|auto,bits=8,parity=none,stop=1,invert=0`, `spi:clk=..,mosi=..,miso=..,cs=..,mode=0..3`,
@@ -144,7 +144,7 @@ generated by a microcontroller, including deep captures and decoded streams.
 
 ## Layout
 
-- `dscope/` driver: USB transport with a safety whitelist, device bring-up (FPGA, security handshake, calibration),
+- `openm454/` driver: USB transport with a safety whitelist, device bring-up (FPGA, security handshake, calibration),
   register compiler (`mso.py`, reproduces DSWave's register programs exactly), stream decoder (`packet.py`),
   acquisition engine, loop-mode logger (`logger.py`), measurements, plots, AWG, CLI, self-test, protocol decoders
   (`decode.py`) and synthetic bus traffic for tests (`protosim.py`).

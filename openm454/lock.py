@@ -5,7 +5,7 @@ import subprocess
 from .errors import DscopeError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOCK_PATH = os.path.join(ROOT, 'state', 'dscope.lock')
+LOCK_PATH = os.path.join(ROOT, 'state', 'openm454.lock')
 
 
 def dswave_pids():
@@ -39,8 +39,8 @@ class DeviceLock:
         except OSError:
             self.fh.close()
             self.fh = None
-            raise DscopeError('BUSY', 'another dscope process is using the scope',
-                              'wait for it (e.g. a running "dscope watch") or stop it, then retry')
+            raise DscopeError('BUSY', 'another openm454 process is using the scope',
+                              'wait for it (e.g. a running "openm454 watch") or stop it, then retry')
         pids = dswave_pids()
         if pids:
             self.release()
@@ -50,7 +50,7 @@ class DeviceLock:
             self.fh.seek(0); self.fh.truncate(); self.fh.write(str(os.getpid())); self.fh.flush()
         except OSError:
             self.release()
-            raise DscopeError('BUSY', 'another dscope process is using the scope', 'wait for it, then retry')
+            raise DscopeError('BUSY', 'another openm454 process is using the scope', 'wait for it, then retry')
         return self
 
     def release(self):

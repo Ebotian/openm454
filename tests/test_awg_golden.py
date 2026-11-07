@@ -1,7 +1,7 @@
-"""dscope.awg reproduces DSWave 1.2.1's AWG register programs (recorded in tests/fixtures/awg_programs.json)."""
+"""openm454.awg reproduces DSWave 1.2.1's AWG register programs (recorded in tests/fixtures/awg_programs.json)."""
 import json, os
 import pytest
-from dscope import awg
+from openm454 import awg
 
 FIX = json.load(open(os.path.join(os.path.dirname(__file__), 'fixtures', 'awg_programs.json')))
 

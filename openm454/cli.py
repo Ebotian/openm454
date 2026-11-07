@@ -1,6 +1,6 @@
-"""dscope command line. Every command prints ONE JSON document on stdout (watch: one JSON line per capture).
+"""openm454 command line. Every command prints ONE JSON document on stdout (watch: one JSON line per capture).
 
-Exit codes: 0 ok, 2 bad argument, 3 device not found, 4 busy (DSWave / another dscope), 5 no trigger / timeout,
+Exit codes: 0 ok, 2 bad argument, 3 device not found, 4 busy (DSWave / another openm454), 5 no trigger / timeout,
 6 device or protocol error, 7 refused as unsafe, 1 other.
 """
 import argparse
@@ -42,7 +42,7 @@ def stream_settings(args):
 
 
 def stop_requested():
-    """True once 'dscope stop' was run (watch/stream delete stale requests when they start)."""
+    """True once 'openm454 stop' was run (watch/stream delete stale requests when they start)."""
     return os.path.exists(STOP_REQUEST)
 
 
@@ -144,7 +144,7 @@ def _decode_args(g):
 
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog='dscope', description='DSCope M454 oscilloscope / logic analyzer / AWG for agents')
+    ap = argparse.ArgumentParser(prog='openm454', description='DSCope M454 oscilloscope / logic analyzer / AWG for agents')
     ap.add_argument('--max-wall', default=None,
                     help='watchdog: stop and release the device after this time (default: computed from the command)')
     ap.add_argument('--verbose', action='store_true', help='wire log on stderr')
@@ -175,7 +175,7 @@ def build_parser():
                                                   '(1k..100M, e.g. 33.333M = 100M/3; default 1M); '
                                                   '200M with <= 2 analog and <= 4 digital channels, 400M with <= 1 analog '
                                                   'and <= 2 digital (interleaved)')
-    lg.add_argument('--duration', default='10s', help="e.g. 60s, 2h, or 'forever' (until dscope stop)")
+    lg.add_argument('--duration', default='10s', help="e.g. 60s, 2h, or 'forever' (until openm454 stop)")
     lg.add_argument('--every', default='1s', help='signal time per live statistics line')
     lg.add_argument('--storage', default='ram', choices=['ram', 'disk', 'none'],
                     help='ram (default): keep the samples in RAM, write one .npz at the end; disk: dump chunk files '
@@ -184,7 +184,7 @@ def build_parser():
     lg.add_argument('--keep-last', action='store_true', help='RAM log longer than the budget: keep the newest part '
                                                              '(a ring) instead of refusing ("forever" always does)')
     lg.add_argument('--chunk', default=None, help='disk storage: seconds per file (default: ~256 MB per file)')
-    lg.add_argument('--ram', default=None, help='RAM budget (default: the allowance set with dscope bench --ram, else '
+    lg.add_argument('--ram', default=None, help='RAM budget (default: the allowance set with openm454 bench --ram, else '
                                                  'min(4 GB, a quarter of the free RAM))')
     lg.add_argument('--plan', action='store_true', help='print the plan (rate verdict, max duration, storage) and exit '
                                                          'without touching the device')
@@ -195,7 +195,7 @@ def build_parser():
                                                          'or STREAM_BETTER when stream does better)')
     lg.add_argument('--remeasure', action='store_true', help='measure the readout of this channel set again before the run '
                                                          '(otherwise measured once, when unknown, and remembered)')
-    lg.add_argument('--out', default=None, help='output folder (default: the data folder set with dscope bench '
+    lg.add_argument('--out', default=None, help='output folder (default: the data folder set with openm454 bench '
                                                  '--dir, else captures/)')
     lg.add_argument('--tag', default='log')
     bn = sub.add_parser('bench', help="this PC's limits for recording: device status, free RAM, decode speed, disk "
@@ -623,7 +623,7 @@ def cmd_bench(args, scope=None):
                    'note': 'short logs: --storage ram (default); disk only for records needed in full'},
                file=_fwd(host.HOST_FILE))
     if not allow.get('ram_bytes'):
-        res['hint'] = 'ask the owner how much RAM / disk the logs may use and record it: dscope bench --ram 8GB --disk 50GB'
+        res['hint'] = 'ask the owner how much RAM / disk the logs may use and record it: openm454 bench --ram 8GB --disk 50GB'
     _emit(res)
 
 
@@ -650,7 +650,7 @@ def cmd_awg(args, scope):
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_dc(si(args.level, 'V', '--level')), 'persists_after_exit': True})
         return
     if args.awg_cmd == 'status':
-        _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_status(), 'note': 'last state set by dscope (device is write-only)'}); return
+        _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_status(), 'note': 'last state set by openm454 (device is write-only)'}); return
     if args.vpp is not None:
         vpp = si(args.vpp, 'V', '--vpp'); dc = si(args.dc, 'V', '--dc') if args.dc else vpp / 2
         high, low = dc + vpp / 2, dc - vpp / 2

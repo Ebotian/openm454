@@ -1,4 +1,4 @@
-"""Golden tests for dscope/mso.py against recorded DSWave 1.2.1 runs (no hardware).
+"""Golden tests for openm454/mso.py against recorded DSWave 1.2.1 runs (no hardware).
 
 The recorded runs live in re/traces/S01_warm/scen/*.json (git-ignored: they contain the device's
 security key) and the calibration blob in state/cache/zero_info_from_trace.bin; the tests skip when
@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from dscope import mso
-from dscope.regs import name as reg_name
+from openm454 import mso
+from openm454.regs import name as reg_name
 
 REPO = Path(__file__).resolve().parents[1]
 SCEN_DIR = REPO / 're' / 'traces' / 'S01_warm' / 'scen'

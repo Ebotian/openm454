@@ -1,8 +1,8 @@
 """Self-test on the bench fixture. Wiring (as of 2026-10-31):
   A0 <- AWG output;  A1 (1x probe), A2 (10x probe), A3 (1x probe) <- ~2.8 Vpp 1 kHz calibration square;
   D0, D2, D5, D7 <- the same square;  D1, D3, D4, D6 floating.
-Each check returns {id, desc, pass, measured, expected, gating}. Run: python -m dscope selftest [--quick]
-When state/fixture.json says the digital leads are wired to something else (dscope.fixture), the checks that need
+Each check returns {id, desc, pass, measured, expected, gating}. Run: python -m openm454 selftest [--quick]
+When state/fixture.json says the digital leads are wired to something else (openm454.fixture), the checks that need
 the square on D0-D7 are reported as skipped.
 
 Order = risk: device info, then one forced (untriggered) single-channel capture, then triggered captures. The first

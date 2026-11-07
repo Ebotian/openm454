@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "dscope/decode.json",
-  "title": "dscope protocol decoder result",
-  "description": "One element of the `decode` list printed by `python -m dscope capture|stream|analyze --decode SPEC` (all frames are written to files.decode, `*_decode.json`, a list of these objects; `watch` lines carry only protocol, count, errors and the first frames). Also the return value of dscope.capture.Capture.decode(). Times are seconds relative to the trigger.",
+  "$id": "openm454/decode.json",
+  "title": "openm454 protocol decoder result",
+  "description": "One element of the `decode` list printed by `python -m openm454 capture|stream|analyze --decode SPEC` (all frames are written to files.decode, `*_decode.json`, a list of these objects; `watch` lines carry only protocol, count, errors and the first frames). Also the return value of openm454.capture.Capture.decode(). Times are seconds relative to the trigger.",
   "type": "object",
   "required": ["protocol", "spec", "params", "count", "errors", "frames"],
   "properties": {

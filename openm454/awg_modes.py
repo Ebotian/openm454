@@ -19,7 +19,7 @@ Public API (all return ordered (awg_addr, value) writes that configure but do no
   program_modulation(kind, ...)   MODE 1, AM / FM / FSK (PM / ASK / PSK only with experimental=True)
   program_sweep(start, end, time, ...)  MODE 2, linear or log, up or down
   program_burst(...)              MODE 3, N-cycle or gated, internal / external / manual trigger
-The carrier registers (WAVE, FCW, RPAR/FPAR, PHASE, HIGH/LOW, DUTY, RSLOPE/FSLOPE) are `dscope.awg.program()`'s
+The carrier registers (WAVE, FCW, RPAR/FPAR, PHASE, HIGH/LOW, DUTY, RSLOPE/FSLOPE) are `openm454.awg.program()`'s
 writes, placed where DSWave sends them, so they inherit awg.py's formulas (which differ from the HAL by 1 LSB in
 some places: HIGH/LOW rounding, RSLOPE/FSLOPE, RPAR constant, fractional PHASE; see awg_burst.md section 7). The AM
 levels are the one exception: AMdepth rewrites HIGH/LOW with the HAL's own formula (am_levels()).
@@ -66,7 +66,7 @@ REG_NAMES = {
     0x52: 'BST_NMODE', 0x53: 'BST_NNUM', 0x54: 'BST_CNT', 0x55: 'BST_POLA', 0x60: 'TRIG_SRC', 0x61: 'TRIG_EDGE',
     0x62: 'TRIG_OUT', 0x63: 'TRIG_FCW0', 0x64: 'TRIG_FCW1', 0x65: 'TRIG_DELY0', 0x66: 'TRIG_DELY1'}
 
-#: carrier registers (written by dscope.awg.program); everything else is mode specific
+#: carrier registers (written by openm454.awg.program); everything else is mode specific
 CARRIER_REGS = frozenset(range(0x00, 0x12))
 
 # ---- enums (GUI enum tables in .rdata; HAL semantics in brackets) ---------------------------------------------------
@@ -678,7 +678,7 @@ def _check_carrier(wave, freq, high, low, duty, phase, pulse_freq=None):
 
 
 def _carrier_blocks(wave, freq, high, low, duty, phase):
-    """dscope.awg.program() split into the blocks DSWave sends per SCPI command (validates the carrier)."""
+    """openm454.awg.program() split into the blocks DSWave sends per SCPI command (validates the carrier)."""
     blocks = {k: [] for k in ('stop', 'mode', 'wave', 'freq', 'phase', 'levels', 'duty')}
     prog = awg.program(wave, freq, high, low, duty, phase)
     i = 0

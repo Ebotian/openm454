@@ -1,7 +1,7 @@
 """The transport only ever emits bRequest 0xB0/0xB1/0xB2 and refuses unsafe register writes."""
 import pytest
-from dscope.transport import Transport
-from dscope.errors import DscopeError
+from openm454.transport import Transport
+from openm454.errors import DscopeError
 
 
 class FakeHandle:
@@ -42,7 +42,7 @@ def test_ctrl_run_bit_only_from_the_engine(t):
 
 def test_debug_regs_write_refuses_run_registers():
     from types import SimpleNamespace
-    from dscope.scope import Scope
+    from openm454.scope import Scope
     s = Scope()
     s.dev = SimpleNamespace(t=Transport())
     s.dev.t.h = FakeHandle()

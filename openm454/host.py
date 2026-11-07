@@ -1,6 +1,6 @@
 """This PC's limits for recording: what the owner allows (RAM, disk, data folder) and what was measured.
 
-Stored in state/host.json (git-ignored). `python -m dscope bench` measures and records it; `log` takes its RAM budget,
+Stored in state/host.json (git-ignored). `python -m openm454 bench` measures and records it; `log` takes its RAM budget,
 disk allowance and default output folder from here.
 
   allow: {'ram_bytes', 'disk_bytes', 'data_dir'}          set by the owner (bench --ram / --disk / --dir)
@@ -66,7 +66,7 @@ def bench_disk(d, mb=256):
     """Sequential write speed into folder d (fsync'ed), MB/s; the test file is deleted. Writes `mb` MB once."""
     os.makedirs(d, exist_ok=True)
     block = np.random.default_rng(1).integers(0, 256, 8 << 20, dtype=np.uint8).tobytes()
-    fd, path = tempfile.mkstemp(prefix='dscope_bench_', suffix='.bin', dir=d)
+    fd, path = tempfile.mkstemp(prefix='openm454_bench_', suffix='.bin', dir=d)
     try:
         t0 = time.perf_counter()
         with os.fdopen(fd, 'wb', buffering=0) as f:

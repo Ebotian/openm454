@@ -4,7 +4,7 @@ Recovered on 2026-10-31 from DSWave 1.2.1 (closed source) by static analysis (Gh
 into DSWave's hardware layer and WinUSB tracing with Frida: a cold open, a warm open and ~125 scripted runs. The
 recordings (they contain the device's security key), the decompiled code and the working notes are not published;
 RVAs refer to DSWave.exe 1.2.1. What each recorded run configured is in `tests/fixtures/scenarios/*.json`. This file
-is the authority for the driver in `dscope/`.
+is the authority for the driver in `openm454/`.
 
 ## 1. Identification
 
@@ -61,7 +61,7 @@ PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. F
 | 0xFE | PROG_B | W 0xFFFE = FPGA PROG_B low, 0x0001 = high |
 | 0xFF | HW_STATUS | R: bit1 INIT_B, bit7 FPGA DONE |
 
-## 4. Open sequence (cold and warm; `dscope/device.py`)
+## 4. Open sequence (cold and warm; `openm454/device.py`)
 
 1. R 0xF0 (>= 0x3110), R 0xF2 (>= 0x3100). Older firmware would make DSWave run an ISP upgrade: the driver refuses.
 2. Claim interface 0. R 0xFF.
@@ -73,7 +73,7 @@ PULSE), per analog channel n at 0x40 + 0x10·n: BASE, VERT, VOFF, VPWM, CROSS. F
    running): W 0xFE=0xFFFE, ~10 ms, W 0xFE=1, poll R 0xFF bit1 (<= 11x),
    W 0xFC = len & 0xFFFF, W 0xFD = len >> 16, EP2 OUT the raw bitstream (466,408 bytes) in one transfer,
    poll R 0xFF bit7 (<= 11 x 50 ms). DSWave takes ~110 ms for this.
-   Recovery (`dscope recover`): the same configuration with DONE = 1, still as the
+   Recovery (`openm454 recover`): the same configuration with DONE = 1, still as the
    first write of the session. The PROG_B pulse clears the FPGA as at power-up. Verified on hardware: open
    0.86 s, security passes again, selftest passes after it. The AWG output is **not** reset by it.
 4. Wait 100 ms, R 0xF1 (>= 0x3100).
@@ -88,7 +88,7 @@ Embedded in DSWave.exe 1.2.1 (SHA-256 `A21A1D41...ECA42C`) at file offset 0xC471
 container: `b'DSLZ'`, u32 BE raw size (466,408), 32-byte SHA-256 of the raw data
 (`f45a97ea44ffda110cffc659eaba250d191985f7e60fdfcbd153b57372e9cfa1`), then one LZ4 block.
 The raw image starts with 16 x 0xFF and the byte-swapped Spartan-6 sync word `55 99 AA 66`.
-`dscope/firmware.py` extracts and verifies it from a local DSWave install; it is never redistributed.
+`openm454/firmware.py` extracts and verifies it from a local DSWave install; it is never redistributed.
 
 ## 5. Security handshake
 
@@ -104,7 +104,7 @@ The raw image starts with 16 x 0xFF and the byte-swapped Spartan-6 sync word `55
 
 DSWave's HAL is configured with SCPI-like commands (`:ANALOG:CHANNEL:Vdiv ch,uV`, `:SAMPLEtime ps`,
 `:STORAGEdepth S`, `:TRIGger:...`; the vocabulary is DSWave.exe's SCPI token table) and turns them into a
-register program at `:Work:RUN 0,0`. The driver reproduces that program (`dscope/mso.py`, golden-tested
+register program at `:Work:RUN 0,0`. The driver reproduces that program (`openm454/mso.py`, golden-tested
 against the recorded runs). Key facts:
 
 * **Channel enable**: ANAn_BASE bit0 = enable, 0x4 = DC (AC clears it), 0x8 = 20 MHz limit.
@@ -124,7 +124,7 @@ against the recorded runs). Key facts:
 * **Digital threshold**: VERT_DTHR = int(1023 x (volts / 5) x 25/33).
 
 Exact per-register formulas (verified write-for-write against 123 DSWave runs; implementation, with the RVA of
-every ported function, in `dscope/mso.py`):
+every ported function, in `openm454/mso.py`):
 
 | Register | Formula |
 |---|---|
@@ -155,7 +155,7 @@ up to 64 queued transfers; repeat mode (MODE 1) delivers one frame (data + 4 KiB
 
 ## 7. Run / stop
 
-Implementation (with the RVAs): `dscope/acquire.py`.
+Implementation (with the RVAs): `openm454/acquire.py`.
 
 1. At least 100 ms after the previous stop. Setup program: W 0x01 = 0, 1 ms, MSO writes, W 0x00 = MODE,
    W 0xF9 = 0. All of these are direct control transfers.
@@ -200,7 +200,7 @@ Implementation (with the RVAs): `dscope/acquire.py`.
    (non-roll) head arrives only after the whole record has been acquired, so trigger waits must include the record
    time.
 9. If the controller stops answering 0xB2 reads, nothing on the host recovers it: pipe resets and device resets
-   don't help, and DSWave has no reset path. Recovery is a power cycle (replug). `dscope recover` (§4) needs
+   don't help, and DSWave has no reset path. Recovery is a power cycle (replug). `openm454 recover` (§4) needs
    working register reads, so it can only help when the FPGA side is stuck but the controller still answers; it
    has not yet been tried on a hung device.
 10. **(hardware, 2026-10-31)** With the rules above, the driver ran the configuration that wedged the old engine
@@ -213,7 +213,7 @@ Implementation (with the RVAs): `dscope/acquire.py`.
   sample = (u32[2] & 0x3FFFFFFF) + pre-trigger offset (block-rounded `SAMPLEindex`).
 * **Single mode, 4 analog + 8 digital**: 320-byte blocks of 64 samples: 256 analog bytes = 8 groups of
   [A0 x8][A1 x8][A2 x8][A3 x8] (8-bit codes), then 64 digital bytes = 8 channels x u64 LE, bit i = sample i.
-  Other channel sets / folds: see `dscope/packet.py`.
+  Other channel sets / folds: see `openm454/packet.py`.
 * Only the first N samples (`MSO: send samples: N`) are valid; the device keeps streaming until stopped.
 * **Volts** = (code - VOFF) x V/div / 29.375 x probe factor; higher code = higher voltage.
 
@@ -297,7 +297,7 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
 
 ## 9. AWG (MCX output 0..3 V)
 
-Indirect: W 0x08 = awg register, W 0x07 = value. `dscope/awg.py` matches all 13 recorded DSWave programs.
+Indirect: W 0x08 = awg register, W 0x07 = value. `openm454/awg.py` matches all 13 recorded DSWave programs.
 
 | AWG reg | Meaning |
 |---|---|
@@ -312,8 +312,8 @@ Indirect: W 0x08 = awg register, W 0x07 = value. `dscope/awg.py` matches all 13 
 | 12/13 RSLOPE/FSLOPE | DUTY32 = trunc(duty x 4e9); RSLOPE = trunc(65472 / ((DUTY32 >> 22) & 0x3ff)), FSLOPE = trunc(65472 / ((4e9 - DUTY32) >> 22)) |
 | 14-17 RPAR/FPAR | trunc(3846153.0 / f_Hz + 0.5); 4 in sweep mode |
 
-Register names 0x00-0x66 (modulation, sweep, burst, trigger) are listed in `dscope/awg_modes.py` (`REG_NAMES`).
-The formulas above are DSWave's exact ones (`dscope/awg_modes.DswaveAwgHal` replays its AWG command handler and
+Register names 0x00-0x66 (modulation, sweep, burst, trigger) are listed in `openm454/awg_modes.py` (`REG_NAMES`).
+The formulas above are DSWave's exact ones (`openm454/awg_modes.DswaveAwgHal` replays its AWG command handler and
 reproduces every recorded program write for write).
 
 Measured output behaviour (2026-10-31, A0 loopback): stopped (ENABLE 2) the output holds LOW, so `awg off` writes
@@ -324,7 +324,7 @@ apart); its 0 V reads +5 mV; noise mode is Gaussian-like around (low+high)/2 wit
 ### 9.1 Modulation, sweep, burst (MODE 1 / 2 / 3)
 Register programs derived from the decompiled HAL and
 confirmed against DSWave for the 73 scenarios of `tests/fixtures/scenarios/corpus5.json` (`tests/test_awg_modes_golden.py`,
-fixture `tests/fixtures/awg_modes_programs.json`). Implementation: `dscope/awg_modes.py` (`program_modulation`,
+fixture `tests/fixtures/awg_modes_programs.json`). Implementation: `openm454/awg_modes.py` (`program_modulation`,
 `program_sweep`, `program_burst`), started with the basic START. Verified on A0:
 * Sweep: linear 1 -> 10 kHz in 10 ms ramps at 0.9 MHz/s and restarts every 10 ms; log 1 -> 100 kHz in 100 ms has
   d(ln f)/dt = 46.05 /s as programmed. Steps every TINC x 20 ns.

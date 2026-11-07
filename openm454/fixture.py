@@ -1,6 +1,6 @@
 """The bench wiring the self-test may assume (state/fixture.json; write it whenever the wiring changes).
 
-{"analog": "standard", "digital": "standard"} is the self-test fixture (dscope/selftest.py). Any other value names
+{"analog": "standard", "digital": "standard"} is the self-test fixture (openm454/selftest.py). Any other value names
 what is connected (e.g. a {channel: source} map); the self-test then skips the checks that need the calibration
 square there.
 A missing file means the standard fixture.

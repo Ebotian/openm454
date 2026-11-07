@@ -48,7 +48,7 @@ ACQ_ALIGN = 4096                     # UsbBsp3x alignment of the acquisition byt
 BASE_RATE = 100_000_000              # sample rate at fold 1, divider 1
 CODES_PER_DIV = 29.375               # 235 codes = 8 divisions
 
-# register addresses (dscope/regs.py names)
+# register addresses (openm454/regs.py names)
 R_HW_BASE_MODE = 0x00
 R_HORI_BASE = 0x10
 R_HORI_RWORDS0, R_HORI_RWORDS1 = 0x13, 0x14

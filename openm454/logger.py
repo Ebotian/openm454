@@ -105,7 +105,7 @@ def available_ram():
 
 
 def default_ram_budget():
-    """The owner's allowance (dscope bench --ram), capped by 80 % of the free RAM; else min(4 GB, free / 4)."""
+    """The owner's allowance (openm454 bench --ram), capped by 80 % of the free RAM; else min(4 GB, free / 4)."""
     from . import host
     free = available_ram()
     allowed = host.allow().get('ram_bytes')
@@ -246,7 +246,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     if too_long and recommendation == 'stream':
         warnings.append('stream would do better: %s' % alt['summary'])
     if hb.get('decode_mb_s') and data_bps > 0.8e6 * hb['decode_mb_s'] and storage != 'none':
-        warnings.append('%.0f MB/s is close to what this PC decodes (%.0f MB/s, dscope bench): the run may stop with '
+        warnings.append('%.0f MB/s is close to what this PC decodes (%.0f MB/s, openm454 bench): the run may stop with '
                         'HOST_TOO_SLOW' % (data_bps / 1e6, hb['decode_mb_s']))
 
     if ram_budget is None:
@@ -293,7 +293,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
             raise DscopeError('INVALID_ARG', 'not enough disk allowance in %s: %.1f GB hold %.0f s at %.1f MB/s'
                               % (d, budget / 1e9, disk_s, data_bps / 1e6),
                               'use RAM (--storage ram, --keep-last), a lower --rate, fewer channels, or raise the '
-                              'allowance with dscope bench --disk')
+                              'allowance with openm454 bench --disk')
         per_day = data_bps * 86400
         if (total if total is not None else per_day) > DISK_WEAR_BYTES:
             warnings.append('disk log writes %s to %s (%.0f GB per hour); SSDs are rated for a few hundred TB written: '
@@ -373,7 +373,7 @@ def stream_alternative(st, rate, data_bps, readout, duration):
     slower = ['%s at %s' % (k, _rate_arg(x)) for k, x in (('analog', ar), ('digital', dr))
               if x is not None and x < rate * (1 - 1e-6)]
     d_stream = (ar or 0) * na + (dr or 0) * nd / 8.0
-    cmd = ('python -m dscope stream -c %s --rate %s --duration %s %s' % (
+    cmd = ('python -m openm454 stream -c %s --rate %s --duration %s %s' % (
         ','.join(list(st.analog) + list(st.digital)), _rate_arg(s.rate),
         'forever' if duration is None else '%gs' % duration, vertical_flags(st))).strip()
     out = {'analog_rate_hz': ar, 'digital_rate_hz': dr, 'same_rates': not slower, 'command': cmd,
@@ -737,7 +737,7 @@ STOP_ERRORS = {
                                  'could overwrite unread data', 'use a lower --rate or fewer channels'),
     'host_slow': ('HOST_TOO_SLOW', 'decoding / writing fell behind (%.0f MB queued); the run was stopped',
                   'use RAM storage, a faster disk, a lower --rate or fewer channels'),
-    'stalled': ('TIMEOUT_DATA', 'no data from the scope for %.1f s', 'run "dscope release"; if it persists replug the scope'),
+    'stalled': ('TIMEOUT_DATA', 'no data from the scope for %.1f s', 'run "openm454 release"; if it persists replug the scope'),
 }
 
 
@@ -886,7 +886,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                 'note': 'stopped on request before any data arrived'}
     if raw is None or raw.head is None:
         raise DscopeError('PROTOCOL_ERROR', 'no data from the scope (no head within 3 s)',
-                          'run "dscope release"; if it persists replug the scope')
+                          'run "openm454 release"; if it persists replug the scope')
     n_samples = w.blocks * packet.BLOCK_SAMPLES
     span = (s['t_last'] - s['t_head']) if s['t_head'] and s['t_last'] else 0.0
     acq = {'mode': 'loop', 'rate_hz': rate, 'samples': n_samples, 'duration_s': round(n_samples / rate, 6),
@@ -909,7 +909,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
     if s['reason'] in ('duration', 'ring_full', 'backlog', 'stop_request') and data_bps > SUSTAINED_BPS and span >= 1.0:
         remembered = _remember_readout(pl, s['meter'], s['n_data'] / span, data_bps)
     if s['reason'] == 'disk_allowance':
-        res['warnings'].append('stopped at the disk allowance (%.1f GB); raise it with dscope bench --disk'
+        res['warnings'].append('stopped at the disk allowance (%.1f GB); raise it with openm454 bench --disk'
                                % (disk_limit / 1e9))
     if werr is not None:
         res['ok'] = False

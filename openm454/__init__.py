@@ -1,7 +1,7 @@
-"""dscope: driver and CLI for the DreamSourceLab DSCope M454 (USB 2A0E:0080, "v3" protocol).
+"""openm454: driver and CLI for the DreamSourceLab DSCope M454 (USB 2A0E:0080, "v3" protocol).
 
 Quick use:
-    from dscope import Scope
+    from openm454 import Scope
     with Scope() as s:
         cap = s.capture(channels="A1,D0", timebase=500e-6)
 """

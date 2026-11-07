@@ -1,4 +1,4 @@
-"""Golden tests for dscope.packet against the recorded DSWave runs (no hardware).
+"""Golden tests for openm454.packet against the recorded DSWave runs (no hardware).
 
 Recordings: re/traces/S01_warm/scen/*.json + bulk_in.bin (local only, not in git); the trace-based
 tests are skipped when they are absent.  The synthetic round-trip tests always run.
@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "re", "tools"))
 
-from dscope import packet as P  # noqa: E402
+from openm454 import packet as P  # noqa: E402
 
 try:
     import scen_load  # noqa: E402

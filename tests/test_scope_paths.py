@@ -3,9 +3,9 @@ import types
 
 import pytest
 
-from dscope import scope as scopemod
-from dscope.acquire import RawCapture
-from dscope.errors import DscopeError
+from openm454 import scope as scopemod
+from openm454.acquire import RawCapture
+from openm454.errors import DscopeError
 
 
 class FakeDev:
@@ -98,7 +98,7 @@ def test_out_of_range_settings_are_invalid_arg():
 
 
 def test_stream_defaults_avoid_small_packet_mode():
-    from dscope import cli
+    from openm454 import cli
     a = cli.build_parser().parse_args(['stream', '-c', 'A1', '--duration', '10s'])
     geom = scopemod.Scope().plan(cli.stream_settings(a))['geometry']
     assert not geom['small_pkt'] and geom['need_bytes'] == geom['acqu_bytes'] + 4096
@@ -128,7 +128,7 @@ def test_stream_user_stop_before_data_is_reported_as_stopped():
 
 
 def test_cli_output_has_one_owner_after_the_watchdog_fires(capsys):
-    from dscope import cli
+    from openm454 import cli
     cli._emit({'a': 1})
     cli._OUT['owner'] = 'watchdog'
     try:
@@ -145,7 +145,7 @@ def test_watchdog_exits_although_stdout_is_blocked(monkeypatch):
     watchdog must still stop the scope and exit (hot-unplug test, 2026-10-31)."""
     import threading
     import time
-    from dscope import cli
+    from openm454 import cli
     exited, stopped = threading.Event(), threading.Event()
 
     class ExitCalled(BaseException):
@@ -180,7 +180,7 @@ def test_watchdog_exits_although_stdout_is_blocked(monkeypatch):
 def test_watch_measures_only_the_channels_its_output_needs(capsys):
     """Deep records measure at ~4 s per 100M-sample channel: with --fields, watch measures only the named channels
     (plus those in --stop-when)."""
-    from dscope import cli
+    from openm454 import cli
     asked = []
 
     class Cap:
@@ -202,7 +202,7 @@ def test_watch_measures_only_the_channels_its_output_needs(capsys):
 
 
 def test_explicit_max_wall_only_extends_the_budget():
-    from dscope import cli
+    from openm454 import cli
     a = cli.build_parser().parse_args(['--max-wall', '5s', 'capture', '-c', 'A1'])
     computed, _ = cli._budget(a)
     assert computed >= 60.0                          # capture keeps a 60 s floor; main() uses max(given, computed)
@@ -220,8 +220,8 @@ def test_window_is_kept_when_the_rate_snaps_down():
 
 
 def test_digital_pulse_trigger_needs_no_level():
-    from dscope import cli
-    from dscope.scope import settings_from_args
+    from openm454 import cli
+    from openm454.scope import settings_from_args
     st = settings_from_args(cli.build_parser().parse_args(['capture', '-c', 'D4', '--trig', 'D4:npulse>:200us']))
     assert (st.trig_source, st.trig_edge, st.trig_level) == ('D4', 'npulse>', None)
     assert abs(st.trig_pulse - 200e-6) < 1e-12

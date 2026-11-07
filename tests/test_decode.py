@@ -1,11 +1,11 @@
-"""Protocol decoders on synthetic captures (dscope.protosim encodes, dscope.decode decodes)."""
+"""Protocol decoders on synthetic captures (openm454.protosim encodes, openm454.decode decodes)."""
 import numpy as np
 import pytest
 
-from dscope import protosim as sim
-from dscope.capture import Capture
-from dscope.decode import crc15, decode, deglitch, parse_spec
-from dscope.errors import DscopeError
+from openm454 import protosim as sim
+from openm454.capture import Capture
+from openm454.decode import crc15, decode, deglitch, parse_spec
+from openm454.errors import DscopeError
 
 
 def cap_of(rate, t0=0.0, **lines):
@@ -232,7 +232,7 @@ def test_protosim_release_slave_leaves_slave_bits_high():
 
 
 def test_plot_decimation_keeps_the_whole_record():
-    from dscope.plot import _decimate
+    from openm454.plot import _decimate
     for n in (6001, 11986, 100_000, 1_000_003):
         t = np.arange(n) / 1e6
         y = np.zeros(n)

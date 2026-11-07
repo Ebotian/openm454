@@ -11,10 +11,10 @@ import time
 import pytest
 import usb1
 
-from dscope import regs
-from dscope.acquire import Engine, HEAD_BYTES
-from dscope.errors import DscopeError
-from dscope.transport import Transport, REQ_WRITE, REQ_READ_SETUP, REQ_READ
+from openm454 import regs
+from openm454.acquire import Engine, HEAD_BYTES
+from openm454.errors import DscopeError
+from openm454.transport import Transport, REQ_WRITE, REQ_READ_SETUP, REQ_READ
 
 PKT = 8192
 
@@ -329,7 +329,7 @@ def test_runs_are_spaced_100ms():
 
 
 def test_device_close_sends_nothing_after_failure():
-    from dscope.device import Device
+    from openm454.device import Device
     sim = Sim()
     d = Device()
     d.t.h, d.t.ctx = FakeHandle(sim), FakeCtx(sim)
@@ -485,7 +485,7 @@ class OpenHandle:
 
 
 def test_open_stops_a_left_over_run_before_anything_else():
-    from dscope.device import Device
+    from openm454.device import Device
     d = Device()
     h = OpenHandle(done=True)
 
@@ -506,8 +506,8 @@ def test_open_stops_a_left_over_run_before_anything_else():
 
 
 def test_lock_excludes_a_second_holder(tmp_path, monkeypatch):
-    from dscope import lock
-    p = tmp_path / 'dscope.lock'
+    from openm454 import lock
+    p = tmp_path / 'openm454.lock'
     p.write_text('1234567890123')                  # longer than any pid: the old code locked the wrong byte
     monkeypatch.setattr(lock, 'LOCK_PATH', str(p))
     monkeypatch.setattr(lock, 'dswave_pids', lambda: [])
@@ -612,9 +612,9 @@ def test_abandon_detaches_libusb_finalizers():
 
 
 def test_cold_open_configures_the_fpga_first(monkeypatch):
-    from dscope import device as devmod
-    import dscope.firmware
-    monkeypatch.setattr(dscope.firmware, 'bitstream', lambda: b'\x00' * 1000)
+    from openm454 import device as devmod
+    import openm454.firmware
+    monkeypatch.setattr(openm454.firmware, 'bitstream', lambda: b'\x00' * 1000)
     d = devmod.Device()
     h = OpenHandle(done=False)
 
@@ -648,9 +648,9 @@ def test_register_access_after_a_stop_waits_like_dswave():
 
 
 def _open_with(monkeypatch, done, **kw):
-    from dscope import device as devmod
-    import dscope.firmware
-    monkeypatch.setattr(dscope.firmware, 'bitstream', lambda: b'\x00' * 1000)
+    from openm454 import device as devmod
+    import openm454.firmware
+    monkeypatch.setattr(openm454.firmware, 'bitstream', lambda: b'\x00' * 1000)
     d = devmod.Device()
     h = OpenHandle(done=done)
 
@@ -682,7 +682,7 @@ def test_warm_open_never_touches_prog_b(monkeypatch):
 
 
 def test_silent_mcu_gets_the_recover_then_replug_hint():
-    from dscope.device import Device
+    from openm454.device import Device
     d = Device()
 
     class Dead(OpenHandle):

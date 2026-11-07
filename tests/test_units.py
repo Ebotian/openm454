@@ -1,6 +1,6 @@
 import pytest
-from dscope.units import si, channel_list, per_channel, window
-from dscope.errors import DscopeError
+from openm454.units import si, channel_list, per_channel, window
+from openm454.errors import DscopeError
 
 
 def test_si():

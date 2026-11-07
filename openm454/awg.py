@@ -43,7 +43,7 @@ def program(wave='sine', freq=1000.0, high=3.0, low=0.0, duty=50.0, phase=0.0):
         period = 1.0 / freq
         if min(duty, 100 - duty) / 100 * period < MIN_PULSE_S * (1 - 1e-9):     # 380 ns itself is allowed
             raise DscopeError('INVALID_ARG', 'pulse narrower than 380 ns at this frequency/duty')
-    # DSWave's exact conversions (dscope/awg_modes.py replays its AWG handler write for write)
+    # DSWave's exact conversions (openm454/awg_modes.py replays its AWG handler write for write)
     from .awg_modes import edge_param, level_code, micro, slopes
     fcw = int((micro(freq) / 1e6) * 40.0)
     rpar = edge_param(freq)

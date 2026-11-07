@@ -1,5 +1,5 @@
 import numpy as np
-from dscope import measure
+from openm454 import measure
 
 
 def square(f=1000.0, rate=1e6, n=20000, hi=3.0, lo=0.0, duty=0.5, noise=0.01, seed=0):

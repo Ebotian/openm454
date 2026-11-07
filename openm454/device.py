@@ -30,7 +30,7 @@ class Device:
         left behind (error stop, killed process), so it is stopped before anything else is sent. An unconfigured
         FPGA cannot be running, and its configuration must stay the first write of the session.
 
-        reload_fpga=True (`dscope recover`): reset and reconfigure the FPGA even
+        reload_fpga=True (`openm454 recover`): reset and reconfigure the FPGA even
         when it reports DONE, as the first write of the session: PROG_B low clears it exactly like a power-up, then
         the verified bitstream is loaded. It cannot help when the MCU no longer answers register reads."""
         t0 = time.time()
@@ -44,7 +44,7 @@ class Device:
                 raise
             t.close()
             raise DscopeError('USB_ERROR', 'the scope does not answer register reads (%s)' % e.message,
-                              'run "python -m dscope recover" once; if that fails the same way, '
+                              'run "python -m openm454 recover" once; if that fails the same way, '
                               'unplug and replug the scope')
         panel = t.read16(regs.PANEL_VERSION)
         info['fw_version'], info['panel_version'] = '0x%04X' % fw, '0x%04X' % panel
