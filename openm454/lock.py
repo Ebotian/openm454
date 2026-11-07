@@ -23,8 +23,9 @@ def dswave_pids():
     if os.name != 'nt':
         return []
     try:
-        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq DSWave.exe', '/FO', 'CSV', '/NH'],
-                             capture_output=True, text=True, timeout=10).stdout
+        raw = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq DSWave.exe', '/FO', 'CSV', '/NH'],
+                             capture_output=True, timeout=10).stdout or b''
+        out = raw.decode('mbcs', errors='replace')    # the console code page (e.g. GBK), also under python -X utf8
     except Exception:
         return []
     pids = []

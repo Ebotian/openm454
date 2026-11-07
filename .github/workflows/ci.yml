@@ -34,6 +34,8 @@ jobs:
       # No scope on the runners: the tests run the driver against a simulated device (acquisition engine, stream
       # decoder, register programs, logger, MCP server); tests marked hw need the M454 and are skipped.
       - name: Tests
+        env:
+          OPENM454_NO_USB: "1"      # a test must never open a real scope
         run: python -m pytest tests -m "not hw" -q
 
   package:
@@ -45,7 +47,7 @@ jobs:
           python-version: "3.12"
       - name: Tracked files carry no local paths
         run: |
-          if git grep -nE '[A-Za-z]:[\\/](Users|Oscilloscope)' -- . ':!tests/fixtures'; then
+          if git grep -nE '(^|[^A-Za-z0-9%])[A-Za-z]:[\\/][A-Za-z0-9_]' -- . ':!tests/fixtures'; then
             echo "::error::local paths in tracked files"; exit 1
           fi
       - name: Build and check

@@ -205,7 +205,8 @@ Every error has a code, a message and a hint, so the next step is clear:
   simulated device, measurements, protocol decoders on synthetic traffic, the MCP server, safety rules
   (`python -m pytest tests`).
 - `docs/PROTOCOL.md` the recovered USB protocol.
-- `.github/workflows/`: CI (the offline tests on Windows and Linux, a package build) on every push; a tag `vX.Y.Z`
+- `.github/workflows/`: CI (the offline tests on Windows and Linux with `OPENM454_NO_USB=1`, which makes the driver
+  refuse to open USB, and a package build) on every push; a tag `vX.Y.Z`
   equal to `openm454.__version__` tests, builds and publishes to PyPI (trusted publishing) and creates a GitHub
   release.
 

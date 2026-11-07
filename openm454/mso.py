@@ -154,7 +154,8 @@ def parse_zero_info(blob: bytes) -> List[ProbeCal]:
 def load_zero_info(path=None) -> List[ProbeCal]:
     """Load the cached zero info (default: state/cache/zero_info_from_trace.bin)."""
     if path is None:
-        path = Path(__file__).resolve().parent.parent / 'state' / 'cache' / 'zero_info_from_trace.bin'
+        from .paths import ROOT
+        path = Path(ROOT) / 'state' / 'cache' / 'zero_info_from_trace.bin'
     return parse_zero_info(Path(path).read_bytes())
 
 

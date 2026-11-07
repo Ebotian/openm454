@@ -12,6 +12,7 @@ triggered within timeout_s), TRIGGER_OUT_OF_RANGE, INVALID_ARG, TIMEOUT_WATCHDOG
 Run:          python -m openm454.mcp_server      (or the openm454-mcp script)
 Claude Code:  claude mcp add openm454 -- python -m openm454.mcp_server
 """
+import ctypes
 import itertools
 import json
 import os
@@ -22,7 +23,7 @@ import time
 
 from . import __version__
 from .cli import STOP_REQUEST
-from .paths import ROOT
+from .paths import PKG_PARENT, ROOT
 
 PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
 STRUCTURED_SINCE = '2025-06-18'      # structuredContent in tool results
@@ -159,14 +160,20 @@ class ToolError(Exception):
 
 
 # ------------------------------------------------------------------------------------------------ CLI runner
-def _last_json(text):
+STOPPABLE = ('watch', 'stream', 'log')            # end cleanly on a stop request
+OFFLINE = ('analyze', 'plot')                     # never touch the scope: safe to kill
+
+
+def _last_json(text, need_ok=False):
     for line in reversed((text or '').splitlines()):
         line = line.strip()
         if line.startswith('{'):
             try:
-                return json.loads(line)
+                d = json.loads(line)
             except ValueError:
                 continue
+            if not need_ok or 'ok' in d:
+                return d
     return None
 
 
@@ -176,46 +183,132 @@ def request_stop():
         f.write('mcp\n')
 
 
+def _kind(args):
+    if args[0] in OFFLINE or '--plan' in args or args[:2] == ['debug', 'plan']:
+        return 'offline'
+    return 'stoppable' if args[0] in STOPPABLE else 'device'
+
+
+def _tail(path_or_bytes, n=3):
+    try:
+        data = path_or_bytes if isinstance(path_or_bytes, bytes) else open(path_or_bytes, 'rb').read()[-8192:]
+    except OSError:
+        return None
+    lines = [l for l in data.decode('utf-8', 'replace').strip().splitlines() if l.strip()]
+    return ' / '.join(lines[-n:]) or None
+
+
+def _pid_alive(pid):
+    if os.name == 'nt':
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, int(pid))          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        try:
+            return bool(k.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 class Cli:
-    """Runs openm454 CLI commands in child processes."""
+    """Runs openm454 CLI commands in child processes: the same package as this server (whatever the cwd or the
+    installed copies) and the same data folder, so stop requests and state are shared."""
 
     def __init__(self, argv0=None):
-        self.argv0 = list(argv0 or [sys.executable, '-X', 'utf8', '-m', 'openm454'])
+        boot = 'import sys; sys.path.insert(0, %r); from openm454.cli import main; sys.exit(main())' % PKG_PARENT
+        self.argv0 = list(argv0 or [sys.executable, '-X', 'utf8', '-c', boot])
 
-    def _popen(self, args, stdout):
+    def _popen(self, args, stdout, stderr):
         kw = {}
         if os.name == 'nt':
             kw['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-        return subprocess.Popen(self.argv0 + list(args), stdout=stdout, stderr=subprocess.PIPE,
-                                stdin=subprocess.DEVNULL, **kw)
+        return subprocess.Popen(self.argv0 + list(args), stdout=stdout, stderr=stderr, stdin=subprocess.DEVNULL,
+                                env=dict(os.environ, OPENM454_HOME=ROOT), **kw)
 
     def run(self, args, max_wall):
-        """-> the command's (last) JSON document. Never waits much longer than max_wall: past it the command is asked
-        to stop (stream/log/watch end cleanly) and, if it is still running, an error says so."""
-        p = self._popen(args, subprocess.PIPE)
+        """-> the command's (last) JSON document, within about max_wall: past it an offline command is killed, a
+        stream/log/watch is asked to stop (its result is returned), a scope command is left to the CLI's own
+        watchdog (which stops the scope cleanly) and an error says so."""
+        kind = _kind(args)
+        p = self._popen(args, subprocess.PIPE, subprocess.PIPE)
         try:
             out, err = p.communicate(timeout=max_wall)
         except subprocess.TimeoutExpired:
-            request_stop()
+            if kind == 'offline':
+                p.kill()
+                p.communicate()
+                raise ToolError('TIMEOUT_WATCHDOG', 'openm454 %s took longer than %.0f s and was stopped'
+                                % (args[0], max_wall), 'raise max_wall_s for large files')
+            if kind == 'stoppable':
+                request_stop()
             try:
                 out, err = p.communicate(timeout=STOP_GRACE_S)
             except subprocess.TimeoutExpired:
                 raise ToolError('TIMEOUT_WATCHDOG', 'openm454 %s did not finish within %.0f s' % (args[0], max_wall),
-                                'process %d keeps the scope until its own watchdog stops it; retry later, or raise '
-                                'max_wall_s for long captures' % p.pid)
-        doc = _last_json(out.decode('utf-8', 'replace'))
+                                'process %d keeps the scope until its own watchdog stops it (BUSY until then); '
+                                'raise max_wall_s for long captures' % p.pid)
+        doc = _last_json(out.decode('utf-8', 'replace'), need_ok=True)
         if doc is None:
-            tail = err.decode('utf-8', 'replace').strip().splitlines()[-3:]
             raise ToolError('INTERNAL', 'openm454 %s ended (exit %s) without a result' % (args[0], p.returncode),
-                            ' / '.join(tail) or None)
+                            _tail(err))
         return doc
 
-    def start(self, args, out_path):
-        f = open(out_path, 'wb')
+    def start(self, args, out_path, err_path):
+        with open(out_path, 'wb') as fo, open(err_path, 'wb') as fe:
+            return self._popen(args, fo, fe)
+
+
+class Job:
+    """A background recording; its metadata is kept in JOBS_DIR so a restarted server can still stop it."""
+
+    def __init__(self, job, pid, mode, args, t0, proc=None):
+        self.job, self.pid, self.mode, self.args, self.t0, self.proc = job, pid, mode, args, t0, proc
+        self.path = os.path.join(JOBS_DIR, job + '.jsonl')
+        self.err = os.path.join(JOBS_DIR, job + '.err')
+
+    def running(self):
+        if self.proc is not None:
+            return self.proc.poll() is None
+        return _pid_alive(self.pid) and self.final() is None
+
+    def wait(self, timeout):
+        t_end = time.time() + timeout
+        while self.running():
+            if time.time() >= t_end:
+                return False
+            time.sleep(0.1)
+        return True
+
+    def final(self):
+        lines = _read_lines(self.path)
+        return lines[-1] if lines and 'ok' in lines[-1] else None
+
+    def save(self):
+        with open(os.path.join(JOBS_DIR, self.job + '.json'), 'w') as f:
+            json.dump({'job': self.job, 'pid': self.pid, 'mode': self.mode, 'args': self.args, 't0': self.t0}, f)
+
+    @classmethod
+    def load_all(cls):
+        jobs = {}
         try:
-            return self._popen(args, f)
-        finally:
-            f.close()
+            names = [n for n in os.listdir(JOBS_DIR) if n.endswith('.json')]
+        except OSError:
+            return jobs
+        for n in names:
+            try:
+                d = json.load(open(os.path.join(JOBS_DIR, n)))
+                jobs[d['job']] = cls(d['job'], d['pid'], d['mode'], d['args'], d['t0'])
+            except (OSError, ValueError, KeyError):
+                continue
+        return jobs
 
 
 # ------------------------------------------------------------------------------------------------ summaries
@@ -223,25 +316,32 @@ A_KEYS = ('freq_hz', 'vpp_v', 'vmin_v', 'vmax_v', 'vmean_v', 'duty_pct', 'rise_s
 D_KEYS = ('state', 'freq_hz', 'duty_pct', 'edges', 'high_frac')
 ACQ_KEYS = ('triggered', 'mode', 'analog_rate_hz', 'digital_rate_hz', 'rate_hz', 'samples', 'duration_s',
             'complete', 'stop_reason', 'host_mb_s', 'backlog_max_mb', 'unread_at_stop_mb')
+LONG_TEXT = 400
+PLAN_KEYS = ('rate_hz', 'channels', 'data_mb_s', 'verdict', 'readout_mb_s', 'gapfree_max_s', 'recommendation',
+             'storage', 'max_duration_s', 'file_mb', 'ram_ring', 'interleaved', 'divider', 'warnings')
 
 
 def _trim_decode(r):
     r = dict(r)
-    frames = r.get('frames') or []
-    if len(frames) > DECODE_FRAMES:
-        r['frames'] = frames[:DECODE_FRAMES]
-        r['frames_listed'] = DECODE_FRAMES
-    for k in ('text', 'data_hex'):
-        if isinstance(r.get(k), str) and len(r[k]) > 400:
-            r[k] = r[k][:400] + '...'
+    for k in ('frames', 'error_frames'):
+        items = r.get(k) or []
+        if isinstance(items, list) and len(items) > DECODE_FRAMES:
+            r[k] = items[:DECODE_FRAMES]
+            r[k + '_listed'] = DECODE_FRAMES
+    for k in ('text', 'data_hex', 'mosi_hex', 'miso_hex'):
+        if isinstance(r.get(k), str) and len(r[k]) > LONG_TEXT:
+            r[k] = r[k][:LONG_TEXT] + '...'
     return r
 
 
+def short_plan(plan):
+    return {k: plan[k] for k in PLAN_KEYS if plan.get(k) not in (None, [], {})}
+
+
 def summarize(doc):
-    """The CLI document reduced to what an agent reads: settings, trigger, key measurements, files, warnings."""
-    if not doc.get('ok', False):
-        return {k: doc[k] for k in ('ok', 'cmd', 'error', 'plan', 'files', 'acq') if k in doc}
-    out = {'ok': True, 'cmd': doc.get('cmd')}
+    """The CLI document reduced to what an agent reads: settings, trigger, key measurements, files, warnings (and
+    the error, for a failed command: data up to a stop is kept and summarized too)."""
+    out = {'ok': bool(doc.get('ok', False)), 'cmd': doc.get('cmd')}
     applied = doc.get('applied') or {}
     if applied:
         out['applied'] = {k: v for k, v in applied.items()
@@ -260,12 +360,9 @@ def summarize(doc):
                 out[group][ch] = d
     if doc.get('decode'):
         out['decode'] = [_trim_decode(r) for r in doc['decode']]
-    for k in ('files', 'plan', 'device', 'awg', 'awg_last', 'persists_after_exit', 'note', 'records', 'signal_s',
-              'seams_s', 'stopped_by'):
+    for k in ('error', 'files', 'plan', 'device', 'awg', 'awg_last', 'persists_after_exit', 'note', 'records',
+              'signal_s', 'seams_s', 'stopped_by', 'warnings', 'hints'):
         if doc.get(k) not in (None, {}, []):
-            out[k] = doc[k]
-    for k in ('warnings', 'hints'):
-        if doc.get(k):
             out[k] = doc[k]
     if isinstance(out.get('plan'), dict):
         out['plan'] = {k: v for k, v in out['plan'].items() if not k.startswith('_')}
@@ -319,12 +416,18 @@ def analyze_args(a):
 
 def awg_args(a):
     act = a['action']
+    extra = [k for k in ('wave', 'freq', 'high', 'low', 'vpp', 'dc', 'duty', 'phase', 'level') if a.get(k)
+             not in (None, '')]
     if act in ('off', 'status'):
+        if extra:
+            raise ToolError('INVALID_ARG', 'awg %s takes no %s' % (act, ', '.join(extra)))
         return ['awg', act]
     if act == 'dc':
-        if not a.get('level'):
-            raise ToolError('INVALID_ARG', "awg dc needs level, e.g. '1.2V'")
+        if not a.get('level') or set(extra) - {'level'}:
+            raise ToolError('INVALID_ARG', "awg dc takes only level, e.g. '1.2V'")
         return ['awg', 'dc', '--level', str(a['level'])]
+    if a.get('level'):
+        raise ToolError('INVALID_ARG', 'level is for action dc', 'awg set takes wave, freq, high/low (or vpp, dc)')
     args = ['awg', 'set']
     for k in ('wave', 'freq', 'high', 'low', 'vpp', 'dc', 'duty', 'phase'):
         args += _opt(a, k)
@@ -333,6 +436,12 @@ def awg_args(a):
 
 def record_args(a, plan=False):
     mode = a.get('mode', 'log')
+    if mode == 'log' and a.get('decode'):
+        raise ToolError('INVALID_ARG', 'log has no live decoder', 'decode the saved file with analyze (decode), or '
+                                                                  'record with mode stream')
+    if mode == 'stream' and (a.get('force') or a.get('keep_last') or a.get('storage') in ('ram', 'disk')):
+        raise ToolError('INVALID_ARG', 'force, keep_last and storage ram/disk are log options',
+                        'stream keeps the last record (storage none: nothing saved)')
     args = [mode, '-c', a.get('channels') or 'A0-A3,D0-D7'] + _vertical(a)
     for k in ('rate', 'duration', 'every'):
         args += _opt(a, k)
@@ -352,15 +461,40 @@ def record_args(a, plan=False):
     return args
 
 
+def capture_wall(args):
+    """Backstop time limit for a capture, from the arguments alone: above the CLI's own watchdog budget (trigger wait
+    + ~1.5 x the record + 17 s, then 120 s + 1 us per sample value for the measurements), so the CLI always answers
+    first. Pure arithmetic: the server loads no numpy (a DLL load while the main thread reads the stdin pipe can
+    block on Windows)."""
+    from .units import si, channel_list
+
+    def opt(flag, default=None):
+        return args[args.index(flag) + 1] if flag in args else default
+    try:
+        an, dg = channel_list(opt('-c', 'A0-A3,D0-D7'))
+        dur = si(opt('--duration'), 's') if opt('--duration') else (10 * si(opt('--timebase'), 's')
+                                                                    if opt('--timebase') else 5e-3)
+        if opt('--samples'):
+            n = si(opt('--samples'))
+        elif opt('--rate'):
+            n = si(opt('--rate'), 'Hz') * dur
+        else:
+            n = 100e3
+        n = min(n, 400e6) * max(1, len(an) + len(dg))
+        return 180.0 + si(opt('--timeout', '5s'), 's') + 3.0 * dur + 2e-6 * n
+    except Exception:                       # noqa: BLE001 - the CLI reports bad arguments itself, at once
+        return 180.0
+
+
 # ------------------------------------------------------------------------------------------------ server
 class Server:
     def __init__(self, cli=None, out=None):
         self.cli = cli or Cli()
         self.out = out or sys.stdout.buffer
         self.wlock = threading.Lock()
-        self.device = threading.Lock()          # one scope command at a time
+        self.device = threading.Lock()          # one scope command at a time; also guards starting a recording
         self.version = PROTOCOL_VERSIONS[0]
-        self.jobs = {}                           # id -> {'proc', 'path', 'mode', 'args', 't0'}
+        self.jobs = Job.load_all()               # recordings started by this or an earlier server
         self.job_ids = itertools.count(1)
         self.cancelled = set()
 
@@ -371,31 +505,47 @@ class Server:
             self.out.write(data)
             self.out.flush()
 
+    def error(self, mid, code, message):
+        self.send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': code, 'message': message}})
+
     def serve(self, inp=None):
-        inp = inp or sys.stdin.buffer
-        for raw in iter(inp.readline, b''):
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                msg = json.loads(raw)
-            except ValueError:
-                self.send({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'parse error'}})
-                continue
-            for m in (msg if isinstance(msg, list) else [msg]):
-                self.dispatch(m)
-        self.shutdown()
+        lines = iter(inp.readline, b'') if inp is not None else _stdin_lines()
+        try:
+            for raw in lines:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    msg = json.loads(raw)
+                except ValueError:
+                    self.error(None, -32700, 'parse error')
+                    continue
+                for m in (msg if isinstance(msg, list) and msg else [msg]):
+                    try:
+                        self.dispatch(m)
+                    except Exception as e:      # noqa: BLE001 - one bad message never ends the server
+                        if isinstance(m, dict) and m.get('id') is not None:
+                            self.error(m['id'], -32603, 'internal error: %r' % e)
+        finally:
+            self.shutdown()
 
     def dispatch(self, m):
-        method, mid = m.get('method'), m.get('id')
+        if not isinstance(m, dict) or not isinstance(m.get('method', ''), str):
+            self.error(m.get('id') if isinstance(m, dict) else None, -32600, 'invalid request')
+            return
+        method, mid, params = m.get('method'), m.get('id'), m.get('params', {})
         if method is None:                       # a response to us (we send no requests): ignore
+            return
+        if not isinstance(params, dict):
+            if mid is not None:
+                self.error(mid, -32602, 'params must be an object')
             return
         if mid is None:                          # notification
             if method == 'notifications/cancelled':  # the call still finishes (bounded); its reply is dropped
-                self.cancelled.add((m.get('params') or {}).get('requestId'))
+                self.cancelled.add(params.get('requestId'))
             return
         if method == 'initialize':
-            want = (m.get('params') or {}).get('protocolVersion')
+            want = params.get('protocolVersion')
             self.version = want if want in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0]
             return self.reply(mid, {'protocolVersion': self.version,
                                     'capabilities': {'tools': {'listChanged': False}},
@@ -407,11 +557,12 @@ class Server:
         if method == 'tools/list':
             return self.reply(mid, {'tools': TOOLS})
         if method == 'tools/call':
-            p = m.get('params') or {}
-            threading.Thread(target=self.call, args=(mid, p.get('name'), p.get('arguments') or {}),
-                             daemon=True).start()
+            args = params.get('arguments') or {}
+            if not isinstance(args, dict):
+                return self.error(mid, -32602, 'arguments must be an object')
+            threading.Thread(target=self.call, args=(mid, params.get('name'), args), daemon=True).start()
             return
-        self.send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32601, 'message': 'unknown method %s' % method}})
+        self.error(mid, -32601, 'unknown method %s' % method)
 
     def reply(self, mid, result):
         self.send({'jsonrpc': '2.0', 'id': mid, 'result': result})
@@ -419,8 +570,7 @@ class Server:
     def call(self, mid, name, args):
         try:
             if name not in {t['name'] for t in TOOLS}:
-                self.send({'jsonrpc': '2.0', 'id': mid,
-                           'error': {'code': -32602, 'message': 'unknown tool %s' % name}})
+                self.error(mid, -32602, 'unknown tool %s' % name)
                 return
             doc = self.run_tool(name, args)
             err = not doc.get('ok', False)
@@ -447,18 +597,20 @@ class Server:
         return head + '\n' + body
 
     # ------------------------------------------------------------ tools
-    def jobs_running(self):
-        return [j for j, v in self.jobs.items() if v['proc'].poll() is None]
+    def running_jobs(self):
+        return [j for j in list(self.jobs.values()) if j.running()]
+
+    def _not_recording(self):
+        busy = self.running_jobs()
+        if busy:
+            raise ToolError('BUSY', 'recording %s holds the scope' % busy[0].job,
+                            'record_stop it first (or wait until it ends)')
 
     def run_tool(self, name, a):
-        if name in DEVICE_TOOLS:
-            busy = self.jobs_running()
-            if busy:
-                raise ToolError('BUSY', 'recording %s holds the scope' % busy[0],
-                                'record_stop it first (or wait until it ends)')
-        wall = float(a.get('max_wall_s') or 180.0)
+        wall = a.get('max_wall_s')
         if name == 'status':
             with self.device:
+                self._not_recording()
                 doc = self.cli.run(['info'], 60.0)
             if doc.get('ok'):
                 doc = {'ok': True, 'cmd': 'info', 'connected': True, 'device': doc.get('device'),
@@ -467,20 +619,25 @@ class Server:
         if name == 'capture':
             args = capture_args(a)
             with self.device:
-                doc = self.cli.run(args, wall + float(a.get('timeout_s', 5.0)))
+                self._not_recording()
+                doc = self.cli.run(args, float(wall) if wall else capture_wall(args))
             return doc if a.get('detail') == 'full' else summarize(doc)
         if name == 'analyze':
-            doc = self.cli.run(analyze_args(a), wall)
+            doc = self.cli.run(analyze_args(a), float(wall or 180.0))
             return doc if a.get('detail') == 'full' else summarize(doc)
         if name == 'plot':
-            return self.cli.run(['plot', a['file']] + _opt(a, 'window') + _opt(a, 'channels') + _opt(a, 'out'), wall)
+            return self.cli.run(['plot', a['file']] + _opt(a, 'window') + _opt(a, 'channels') + _opt(a, 'out'),
+                                float(wall or 180.0))
         if name == 'awg':
+            args = awg_args(a)
             with self.device:
-                return summarize(self.cli.run(awg_args(a), 60.0))
+                self._not_recording()
+                return summarize(self.cli.run(args, 60.0))
         if name == 'log_plan':
             return summarize(self.cli.run(record_args(dict(a, mode='log'), plan=True), 60.0))
         if name == 'release':
             with self.device:
+                self._not_recording()
                 return self.cli.run(['release'], 60.0)
         if name == 'record_start':
             return self.record_start(a)
@@ -493,80 +650,126 @@ class Server:
     def record_start(self, a):
         if a.get('mode') not in ('log', 'stream'):
             raise ToolError('INVALID_ARG', "mode must be 'log' or 'stream'")
-        os.makedirs(JOBS_DIR, exist_ok=True)
-        job = '%s-%d' % (time.strftime('%Y%m%d-%H%M%S'), next(self.job_ids))
-        path = os.path.join(JOBS_DIR, job + '.jsonl')
         args = record_args(a)
-        with self.device:
-            proc = self.cli.start(args, path)
-        self.jobs[job] = {'proc': proc, 'path': path, 'mode': a['mode'], 'args': args, 't0': time.time()}
+        os.makedirs(JOBS_DIR, exist_ok=True)
+        with self.device:                        # check and register together
+            self._not_recording()
+            job = '%s-%d-%d' % (time.strftime('%Y%m%d-%H%M%S'), os.getpid(), next(self.job_ids))
+            j = Job(job, None, a['mode'], args, time.time())
+            j.proc = self.cli.start(args, j.path, j.err)
+            j.pid = j.proc.pid
+            j.save()
+            self.jobs[job] = j
         t_end = time.time() + JOB_START_WAIT_S
         while time.time() < t_end:              # until the run started (or was refused)
-            lines = _read_lines(path)
-            if proc.poll() is not None or (lines and (lines[-1].get('started') or 'i' in lines[-1])):
+            lines = _read_lines(j.path)
+            if not j.running() or (lines and (lines[-1].get('started') or 'i' in lines[-1])):
                 break
             time.sleep(0.1)
-        lines = _read_lines(path)
-        if proc.poll() is not None:
-            final = lines[-1] if lines else None
+        lines = _read_lines(j.path)
+        if not j.running():
+            final = j.final()
             if final is None or not final.get('ok', False):
+                code, msg, hint = _err_parts(final, 'the recording ended at once without a result')
                 plan = ((final or {}).get('error') or {}).get('plan')
-                raise ToolError(*_err_parts(final, 'the recording ended at once'), extra={'plan': plan} if plan else None)
+                raise ToolError(code, msg, hint or _tail(j.err), extra={'plan': plan} if plan else None)
             return dict(summarize(final), job=job, running=False)
-        out = {'ok': True, 'job': job, 'running': True, 'pid': proc.pid, 'output': path.replace('\\', '/'),
+        out = {'ok': True, 'job': job, 'running': True, 'pid': j.pid, 'output': j.path.replace('\\', '/'),
                'args': args}
         for l in lines:
             if 'probe' in l:
                 out['probe'] = l['probe']
             if l.get('started'):
-                out['plan'] = {k: v for k, v in (l.get('plan') or {}).items() if not k.startswith('_')}
+                out['plan'] = short_plan(l.get('plan') or {})
                 out['out_stem'] = l.get('out_stem')
         return out
 
     def _job(self, a):
         if not self.jobs:
-            raise ToolError('INVALID_ARG', 'no recording was started by this server')
-        job = a.get('job') or max(self.jobs, key=lambda j: self.jobs[j]['t0'])
+            raise ToolError('INVALID_ARG', 'no recording is known to this server')
+        job = a.get('job') or max(self.jobs, key=lambda k: self.jobs[k].t0)
         if job not in self.jobs:
             raise ToolError('INVALID_ARG', 'unknown job %s' % job, 'jobs: %s' % ', '.join(sorted(self.jobs)))
-        return job, self.jobs[job]
+        return self.jobs[job]
 
     def record_status(self, a):
-        job, j = self._job(a)
-        lines = _read_lines(j['path'])
-        running = j['proc'].poll() is None
-        out = {'ok': True, 'job': job, 'running': running, 'mode': j['mode'],
-               'elapsed_s': round(time.time() - j['t0'], 1)}
-        stats = [l for l in lines if 'i' in l and 'ok' not in l]    # the live statistics lines
-        out['last'] = stats[-max(1, int(a.get('lines', 3))):]
-        if not running and lines:
-            out['result'] = summarize(lines[-1])
+        j = self._job(a)
+        lines = _read_lines(j.path)
+        running = j.running()
+        out = {'ok': True, 'job': j.job, 'running': running, 'mode': j.mode,
+               'elapsed_s': round(time.time() - j.t0, 1)}
+        stats = [l for l in lines if 'i' in l and 'ok' not in l]     # the live statistics lines
+        out['last'] = stats[-min(20, max(1, int(a.get('lines', 3)))):]
+        final = j.final()
+        if not running:
+            out['result'] = summarize(final) if final else {
+                'ok': False, 'error': {'code': 'INTERNAL', 'message': 'the recording ended without a result',
+                                       'hint': _tail(j.err)}}
         return out
 
     def record_stop(self, a):
-        job, j = self._job(a)
-        if j['proc'].poll() is None:
+        if not self.jobs and not a.get('job'):  # nothing known here: stop whatever stream/log/watch runs
             request_stop()
-            try:
-                j['proc'].wait(timeout=float(a.get('wait_s', 120)))
-            except subprocess.TimeoutExpired:
-                raise ToolError('TIMEOUT_WATCHDOG', 'recording %s has not finished %.0f s after the stop request'
-                                % (job, float(a.get('wait_s', 120))),
-                                'a large RAM log takes a while to write: call record_stop again with a longer wait_s')
-        lines = _read_lines(j['path'])
-        final = lines[-1] if lines else None
+            return {'ok': True, 'note': 'no recording is known to this server; a stop request was sent (a running '
+                                        'openm454 stream, log or watch ends cleanly)'}
+        j = self._job(a)
+        wait = float(a.get('wait_s', 120))
+        t_end = time.time() + wait
+        while j.running() and time.time() < t_end:
+            request_stop()                       # again each second: a run that is just starting clears old ones
+            j.wait(min(1.0, max(0.0, t_end - time.time())))
+        if j.running():
+            raise ToolError('TIMEOUT_WATCHDOG', 'recording %s has not finished %.0f s after the stop request'
+                            % (j.job, wait),
+                            'a large RAM log takes a while to write: call record_stop again with a longer wait_s')
+        final = j.final()
         if final is None:
-            raise ToolError('INTERNAL', 'recording %s left no result' % job)
-        return dict(summarize(final), job=job, running=False)
+            raise ToolError('INTERNAL', 'recording %s ended without a result' % j.job, _tail(j.err))
+        out = dict(summarize(final), job=j.job, running=False)
+        if isinstance(out.get('plan'), dict):
+            out['plan'] = short_plan(out['plan'])
+        return out
 
     def shutdown(self):
-        """stdin closed: a recording must not outlive the client unattended."""
-        for job in self.jobs_running():
+        """stdin closed (or the loop ended): a recording must not outlive the client unattended."""
+        for j in self.running_jobs():
+            if j.proc is None:
+                continue                         # started by an earlier server: left to its owner
             request_stop()
-            try:
-                self.jobs[job]['proc'].wait(timeout=120)
-            except subprocess.TimeoutExpired:
-                pass
+            j.wait(120)
+
+
+def _stdin_lines():
+    """Lines from stdin. On Windows a pipe is polled (PeekNamedPipe) and only data already there is read: a thread
+    blocked in a synchronous read of the stdin pipe would block other threads that touch the handle (DLL start-up
+    code does), and the server's tool calls run in threads."""
+    if os.name == 'nt':
+        import _winapi
+        import msvcrt
+        try:
+            h = msvcrt.get_osfhandle(sys.stdin.fileno())
+            _winapi.PeekNamedPipe(h, 0)
+        except (OSError, ValueError, AttributeError):
+            h = None
+        if h is not None:
+            buf = b''
+            while True:
+                try:
+                    avail = _winapi.PeekNamedPipe(h, 0)[0]
+                except OSError:                 # the client closed the pipe
+                    avail = -1
+                if avail > 0:
+                    buf += os.read(sys.stdin.fileno(), avail)
+                    while b'\n' in buf:
+                        line, buf = buf.split(b'\n', 1)
+                        yield line + b'\n'
+                elif avail < 0:
+                    if buf:
+                        yield buf
+                    return
+                else:
+                    time.sleep(0.01)
+    yield from iter(sys.stdin.buffer.readline, b'')
 
 
 def _read_lines(path):
@@ -583,9 +786,11 @@ def _read_lines(path):
         line = line.strip()
         if line.startswith('{'):
             try:
-                out.append(json.loads(line))
+                d = json.loads(line)
             except ValueError:
-                pass
+                continue
+            if isinstance(d, dict):
+                out.append(d)
     return out
 
 

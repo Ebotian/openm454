@@ -782,7 +782,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
     def projection():
         """Backlog growth over the last ~2 s and when the guard would stop the run (live lines)."""
         m = s['meter']
-        if m is None or m.growth <= 0.01 * data_bps:
+        if m is None or m.growth <= max(0.01 * data_bps, 0.25e6):     # not start-up noise at low rates
             return {}
         left = max(0.0, (BACKLOG_STOP - m.backlog) / m.growth)
         return {'growth': m.growth, 'guard_in': left,

@@ -19,6 +19,7 @@ Acquisition rules (DSWave UsbBsp3x):
   * after any failed handshake or failed control transfer while running the session is `failed` (DSWave
     "not ready"): nothing at all is sent to the device any more until it is reopened
 """
+import os
 import contextlib
 import threading
 import time
@@ -61,6 +62,8 @@ class Transport:
 
     # ---------------------------------------------------------------- open / close
     def open(self):
+        if os.environ.get('OPENM454_NO_USB'):          # set by tests / CI: never touch a real scope
+            raise DscopeError('NOT_FOUND', 'USB access is disabled (OPENM454_NO_USB is set)')
         self.ctx = usb1.USBContext()
         self.ctx.open()
         try:

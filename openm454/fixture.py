@@ -9,7 +9,9 @@ import json
 import os
 import time
 
-PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'state', 'fixture.json')
+from .paths import ROOT
+
+PATH = os.path.join(ROOT, 'state', 'fixture.json')
 STANDARD = {'analog': 'standard', 'digital': 'standard'}
 
 

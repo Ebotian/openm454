@@ -36,7 +36,7 @@ jobs:
           python -m twine check --strict dist/*
       - uses: actions/upload-artifact@v4
         with:
-          name: dist
+          name: release-dist
           path: dist/
 
   pypi:
@@ -50,7 +50,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: dist
+          name: release-dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
@@ -62,7 +62,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: dist
+          name: release-dist
           path: dist/
       - name: Create the GitHub release
         env:

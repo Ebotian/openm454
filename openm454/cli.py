@@ -804,8 +804,6 @@ def main(argv=None):
         _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERNAL', 'message': repr(e),
                                                          'trace': traceback.format_exc().splitlines()[-6:]}})
         return 1
-    if args.cmd in ('watch', 'stream', 'log'):
-        _clear_stop_request()                # a request left from an earlier run must not stop this one
     scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
     done = threading.Event()
     deadline = [time.time() + max_wall]
@@ -827,6 +825,8 @@ def main(argv=None):
     stale = False
     try:
         scope.open(reload_fpga=args.cmd == 'recover')
+        if args.cmd in ('watch', 'stream', 'log'):   # once this process holds the scope (a BUSY one must not clear
+            _clear_stop_request()                    # a request meant for the run that holds it)
         try:
             if args.cmd == 'info':
                 _emit({'ok': True, 'cmd': 'info', **scope.info()})

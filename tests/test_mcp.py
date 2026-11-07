@@ -52,14 +52,19 @@ FAKE = textwrap.dedent(r'''
     if cmd == 'sleep':
         time.sleep(float(args[1]))
         out({'ok': True, 'cmd': 'sleep'})
+    if cmd == 'analyze' and os.environ.get('FAKE_SLOW'):
+        time.sleep(30)
     if cmd == 'awg':
         out({'ok': True, 'cmd': 'awg', 'awg': {'wave': 'sine'}, 'persists_after_exit': True})
     if cmd in ('log', 'stream'):
         if '--rate' in args and args[args.index('--rate') + 1] == '100M':
             out({'ok': False, 'cmd': 'log', 'error': {'code': 'NEEDS_FORCE', 'message': 'gap-free for 2.9 s only',
                  'hint': 'add --force', 'plan': {'gapfree_max_s': 2.9, 'recommendation': 'log --force'}}}, 2)
+        if '--rate' in args and args[args.index('--rate') + 1] == 'crash':
+            sys.stderr.write('Traceback ...\nRuntimeError: simulated crash\n')
+            sys.exit(1)
         print(json.dumps({'ok': True, 'cmd': cmd, 'started': True, 'plan': {'verdict': 'sustained', '_x': 1},
-                          'out_stem': 'D:/data/x'}), flush=True)
+                          'out_stem': 'data/x'}), flush=True)
         i = 0
         while not os.path.exists(os.environ['FAKE_STOP']):
             print(json.dumps({'i': i, 't_signal_s': i * 0.05, 'backlog_mb': 0.5}), flush=True)
@@ -67,7 +72,7 @@ FAKE = textwrap.dedent(r'''
             time.sleep(0.05)
         out({'ok': True, 'cmd': cmd, 'acq': {'mode': 'loop', 'samples': 1000, 'duration_s': i * 0.05,
                                               'stop_reason': 'stop_request'},
-             'analog': {'A1': {'vmin_v': 0.0, 'vmax_v': 2.9, 'vmean_v': 1.4}}, 'files': {'npz': 'D:/data/x.npz'}})
+             'analog': {'A1': {'vmin_v': 0.0, 'vmax_v': 2.9, 'vmean_v': 1.4}}, 'files': {'npz': 'data/x.npz'}})
     out({'ok': False, 'cmd': cmd, 'error': {'code': 'INVALID_ARG', 'message': 'unknown'}}, 2)
 ''')
 
@@ -170,10 +175,18 @@ def test_errors_are_explicit(fake, monkeypatch):
 def test_a_hung_command_never_hangs_the_call(fake, monkeypatch):
     monkeypatch.setattr(M, 'STOP_GRACE_S', 0.3)
     t0 = time.time()
-    with pytest.raises(M.ToolError) as ei:
+    with pytest.raises(M.ToolError) as ei:                        # a scope command: left to the CLI's watchdog
         fake.cli.run(['sleep', '3'], 0.5)
     assert time.time() - t0 < 2.5 and ei.value.doc['error']['code'] == 'TIMEOUT_WATCHDOG'
-    assert os.path.exists(M.STOP_REQUEST)                         # a stream/log would have ended cleanly
+    assert 'watchdog' in ei.value.doc['error']['hint'] and not os.path.exists(M.STOP_REQUEST)
+    monkeypatch.setenv('FAKE_SLOW', '1')
+    t0 = time.time()
+    with pytest.raises(M.ToolError) as ei:                        # offline: killed, a recording is not disturbed
+        fake.cli.run(['analyze', 'x.npz'], 0.5)
+    assert time.time() - t0 < 2.5 and 'stopped' in ei.value.doc['error']['message']
+    assert not os.path.exists(M.STOP_REQUEST)
+    doc = fake.cli.run(['stream', '-c', 'D0', '--duration', 'forever'], 0.5)   # stoppable: ends cleanly
+    assert doc['ok'] and doc['acq']['stop_reason'] == 'stop_request'
 
 
 def test_background_recording(fake):
@@ -189,11 +202,73 @@ def test_background_recording(fake):
     assert st['running'] and len(st['last']) == 2 and 'i' in st['last'][-1]
     stop = call(fake, 'record_stop', {}, mid=4)['structuredContent']
     assert stop['ok'] and not stop['running'] and stop['acq']['stop_reason'] == 'stop_request'
-    assert stop['files']['npz'] == 'D:/data/x.npz'
+    assert stop['files']['npz'] == 'data/x.npz'
     assert call(fake, 'record_status', {}, mid=5)['structuredContent']['result']['ok']
     refused = call(fake, 'record_start', {'mode': 'log', 'rate': '100M', 'duration': '1h'}, mid=6)
     e = refused['structuredContent']
     assert refused['isError'] and e['error']['code'] == 'NEEDS_FORCE' and e['plan']['gapfree_max_s'] == 2.9
+
+
+def test_bad_messages_never_end_the_server(fake):
+    lines = [b'1', b'[]', b'{"jsonrpc":"2.0","id":7,"method":"initialize","params":[1]}',
+             b'{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"status","arguments":[1]}}',
+             b'{"jsonrpc":"2.0","id":9,"method":7}', b'{"jsonrpc":"2.0","id":10,"method":"ping"}']
+    fake.serve(io.BytesIO(b'\n'.join(lines) + b'\n'))
+    r = replies(fake)
+    assert [m['error']['code'] for m in r if m.get('id') is None] == [-32600, -32600]
+    by_id = {m['id']: m for m in r if m.get('id') is not None}
+    assert by_id[7]['error']['code'] == -32602 and by_id[8]['error']['code'] == -32602
+    assert by_id[9]['error']['code'] == -32600 and by_id[10]['result'] == {}
+
+
+def test_recordings_survive_a_server_restart(fake, tmp_path):
+    fake.version = '2025-06-18'
+    job = call(fake, 'record_start', {'mode': 'stream', 'channels': 'D0', 'duration': 'forever'})['structuredContent']
+    other = M.Server(cli=fake.cli, out=io.BytesIO())              # e.g. the client restarted the server
+    other.version = '2025-06-18'
+    assert job['job'] in other.jobs and other.jobs[job['job']].running()
+    busy = call(other, 'status', mid=2)
+    assert busy['isError'] and busy['structuredContent']['error']['code'] == 'BUSY'
+    stop = call(other, 'record_stop', {}, mid=3)['structuredContent']
+    assert stop['ok'] and stop['job'] == job['job'] and not other.jobs[job['job']].running()
+
+
+def test_a_crashed_recording_reports_its_stderr(fake):
+    fake.version = '2025-06-18'
+    res = call(fake, 'record_start', {'mode': 'log', 'rate': 'crash'})
+    e = res['structuredContent']['error']
+    assert res['isError'] and e['code'] == 'INTERNAL' and 'simulated crash' in e['hint']
+
+
+def test_stop_without_a_known_recording_still_sends_a_stop_request(fake):
+    fake.version = '2025-06-18'
+    res = call(fake, 'record_stop', {})['structuredContent']
+    assert res['ok'] and 'stop request' in res['note'] and os.path.exists(M.STOP_REQUEST)
+
+
+def test_arguments_that_would_be_ignored_are_refused(fake):
+    fake.version = '2025-06-18'
+    for i, (tool, a) in enumerate((('record_start', {'mode': 'log', 'rate': '1M', 'decode': ['uart:rx=D0']}),
+                                   ('record_start', {'mode': 'stream', 'force': True}),
+                                   ('record_start', {'mode': 'stream', 'storage': 'disk'}),
+                                   ('awg', {'action': 'set', 'level': '1V'}),
+                                   ('awg', {'action': 'off', 'freq': '1k'}))):
+        res = call(fake, tool, a, mid=i + 1)
+        assert res['isError'] and res['structuredContent']['error']['code'] == 'INVALID_ARG', (tool, a)
+
+
+def test_capture_time_limit_covers_the_cli_budget():
+    small = M.capture_wall(M.capture_args({'channels': 'A1', 'timebase': '1ms'}))
+    deep = M.capture_wall(M.capture_args({'channels': 'A1', 'rate': '400M', 'duration': '1s', 'samples': '400M'}))
+    assert 150 < small < deep and deep > 120 + 400 + 30               # 400M values need the post-processing time
+
+
+def test_summary_trims_long_decoder_output():
+    r = M._trim_decode({'mosi_hex': 'ab' * 4096, 'error_frames': list(range(50)), 'frames': list(range(5))})
+    assert len(r['mosi_hex']) < 500 and len(r['error_frames']) == M.DECODE_FRAMES and r['frames'] == list(range(5))
+    doc = M.summarize({'ok': False, 'cmd': 'log', 'error': {'code': 'HOST_TOO_SLOW', 'message': 'x'},
+                       'warnings': ['w'], 'analog': {'A1': {'vmin_v': 0.0}}})
+    assert doc['warnings'] == ['w'] and doc['analog'] == {'A1': {'vmin_v': 0.0}} and not doc['ok']
 
 
 def test_log_plan_and_awg_arguments(fake):
@@ -215,7 +290,8 @@ def real(tmp_path, monkeypatch):
     return srv
 
 
-def test_real_cli_offline_commands(real, tmp_path):
+def test_real_cli_offline_commands(real, tmp_path, monkeypatch):
+    monkeypatch.setenv('OPENM454_NO_USB', '1')                    # whatever happens, the scope is never opened
     plan = call(real, 'log_plan', {'channels': 'A2,D0-D7', 'rate': '1M', 'duration': '10min', 'storage': 'none'})
     assert not plan['isError'] and plan['structuredContent']['plan']['verdict'] == 'sustained'
     rate = 1e6
@@ -233,3 +309,6 @@ def test_real_cli_offline_commands(real, tmp_path):
     res = call(real, 'capture', {'channels': 'A1', 'vdiv': '1V', 'trigger': 'A1:rise:9V'}, mid=3)
     err = res['structuredContent']['error']
     assert res['isError'] and err['code'] == 'TRIGGER_OUT_OF_RANGE' and 'visible range of A1' in err['message']
+    res = call(real, 'status', mid=4)                              # the guard itself: refused, not opened
+    err = res['structuredContent']['error']                         # (BUSY first when DSWave runs on this PC)
+    assert res['isError'] and (err['code'] == 'BUSY' or 'OPENM454_NO_USB' in err['message'])
