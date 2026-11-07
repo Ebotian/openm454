@@ -14,7 +14,7 @@ import time
 
 import numpy as np
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from .paths import ROOT
 HOST_FILE = os.path.join(ROOT, 'state', 'host.json')
 
 

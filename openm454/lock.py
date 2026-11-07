@@ -4,11 +4,24 @@ import subprocess
 
 from .errors import DscopeError
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from .paths import ROOT
 LOCK_PATH = os.path.join(ROOT, 'state', 'openm454.lock')
 
 
+def _lock(fh, on):
+    """Non-blocking lock / unlock of byte 0 (msvcrt on Windows, flock elsewhere); OSError when it is held."""
+    if os.name == 'nt':
+        import msvcrt
+        fh.seek(0)                   # 'a+' starts at the end of the file: always lock byte 0
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK if on else msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fh.fileno(), (fcntl.LOCK_EX | fcntl.LOCK_NB) if on else fcntl.LOCK_UN)
+
+
 def dswave_pids():
+    if os.name != 'nt':
+        return []
     try:
         out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq DSWave.exe', '/FO', 'CSV', '/NH'],
                              capture_output=True, text=True, timeout=10).stdout
@@ -30,12 +43,10 @@ class DeviceLock:
         self.fh = None
 
     def acquire(self):
-        import msvcrt
         os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
         self.fh = open(LOCK_PATH, 'a+')
-        self.fh.seek(0)              # 'a+' starts at the end of the file: always lock byte 0 (release unlocks byte 0)
         try:
-            msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
+            _lock(self.fh, True)
         except OSError:
             self.fh.close()
             self.fh = None
@@ -55,10 +66,8 @@ class DeviceLock:
 
     def release(self):
         if self.fh:
-            import msvcrt
             try:
-                self.fh.seek(0)
-                msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
+                _lock(self.fh, False)
             except OSError:
                 pass
             self.fh.close()

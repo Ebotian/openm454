@@ -14,12 +14,12 @@ RAW_SIZE = 466408
 RAW_SHA256 = 'f45a97ea44ffda110cffc659eaba250d191985f7e60fdfcbd153b57372e9cfa1'
 BIN_VERSION = 0x3100
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from .paths import ROOT
 
 
 def candidate_exes():
     """Where DSWave.exe may be: $OPENM454_DSWAVE (the exe or its folder; $DSCOPE_DSWAVE, the old name, also works),
-    then a copy in DSWave/ next to openm454/."""
+    then a copy in DSWave/ in the openm454 folder (the checkout, or the data folder of an installed copy)."""
     out = []
     env = os.environ.get('OPENM454_DSWAVE') or os.environ.get('DSCOPE_DSWAVE')
     if env:
@@ -90,7 +90,7 @@ def bitstream():
             return raw
     raise DscopeError('FIRMWARE_SOURCE', 'DSWave 1.2.1 not found; needed once to extract the FPGA bitstream',
                       'set OPENM454_DSWAVE to DSWave.exe (or its folder), or copy the DSWave 1.2.1 folder to '
-                      'DSWave/ next to the openm454 package')
+                      '%s' % os.path.join(ROOT, 'DSWave'))
 
 
 if __name__ == '__main__':

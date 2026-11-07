@@ -13,7 +13,7 @@ import traceback
 
 from .errors import DscopeError
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from .paths import ROOT
 DEFAULT_OUT = os.path.join(ROOT, 'captures')
 STOP_REQUEST = os.path.join(ROOT, 'state', 'stop.request')
 STREAM_MIN_RATE = 100e3          # default stream rate floor (samples/s per channel) when --samples/--rate are not given
@@ -148,6 +148,8 @@ def build_parser():
     ap.add_argument('--max-wall', default=None,
                     help='watchdog: stop and release the device after this time (default: computed from the command)')
     ap.add_argument('--verbose', action='store_true', help='wire log on stderr')
+    ap.add_argument('--json', action='store_true', help='JSON output (always on: every command prints JSON; the flag is '
+                                                         'accepted so scripts can say so)')
     sub = ap.add_subparsers(dest='cmd', required=True)
     sub.add_parser('info', help='device, firmware, calibration, limits')
     c = sub.add_parser('capture', help='single triggered capture -> JSON measurements + PNG + NPZ')

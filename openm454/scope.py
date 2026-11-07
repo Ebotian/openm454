@@ -22,7 +22,7 @@ from . import mso
 from .errors import DscopeError
 from .capture import Capture, CODES_PER_DIV, CODE_MIN, CODE_MAX
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from .paths import ROOT
 STATE = os.path.join(ROOT, 'state')
 VDIVS_UV = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000]
 RATES = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000,
@@ -231,8 +231,12 @@ def hal_config(st):
                 lv = st.offset.get(ch, 0.0)
             code = int(round(zero + (lv / probe) / vpc))
             if not CODE_MIN <= code <= CODE_MAX:
-                warnings.append('trigger level %.3g V is outside the visible range of %s; clamped' % (lv, ch))
-            lvl = min(max(code, CODE_MIN), CODE_MAX)
+                lo, hi = ((c - zero) * vpc * probe for c in (CODE_MIN, CODE_MAX))
+                raise DscopeError('TRIGGER_OUT_OF_RANGE', 'trigger level %.4g V is outside the visible range of %s: '
+                                  '%.4g..%.4g V at %g V/div, offset %g V' % (lv, ch, lo, hi, vdiv_v * probe,
+                                                                             st.offset.get(ch, 0.0)),
+                                  'set --offset near the level, or a larger --vdiv (the screen is 8 divisions)')
+            lvl = code
         ana.append({'enable': int(ch in st.analog), 'coupling': st.coupling.get(ch, 'dc'), 'bw20': int(ch in st.bw20),
                     'invert': int(ch in st.invert), 'vdiv_uv': hw, 'voff_code': zero, 'trig_level_code': lvl if lvl is not None else zero})
         scale[ch] = {'zero_code': zero, 'vdiv_v': vdiv_v, 'volts_per_code': vpc, 'probe': probe}

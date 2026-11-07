@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:          # the release workflow runs the same checks first
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: libusb (Linux; Windows wheels of libusb1 bundle it)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+      # No scope on the runners: the tests run the driver against a simulated device (acquisition engine, stream
+      # decoder, register programs, logger, MCP server); tests marked hw need the M454 and are skipped.
+      - name: Tests
+        run: python -m pytest tests -m "not hw" -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tracked files carry no local paths
+        run: |
+          if git grep -nE '[A-Za-z]:[\\/](Users|Oscilloscope)' -- . ':!tests/fixtures'; then
+            echo "::error::local paths in tracked files"; exit 1
+          fi
+      - name: Build and check
+        run: |
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
