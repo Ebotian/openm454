@@ -244,8 +244,13 @@ def build_parser():
     an.add_argument('file'); an.add_argument('--window', default=None); an.add_argument('--edges', type=int, default=0)
     an.add_argument('--dump', type=int, default=0); an.add_argument('--channels', default=None)
     _decode_args(an)
-    st = sub.add_parser('selftest', help='verify driver + bench fixture')
-    st.add_argument('--quick', action='store_true'); st.add_argument('--no-awg', action='store_true')
+    st = sub.add_parser('selftest', help='verify the scope: wiring-free checks on any wiring, signal checks on the '
+                                         'standard bench fixture')
+    st.add_argument('--quick', action='store_true', help='fewer repetitions (about half the time)')
+    st.add_argument('--no-awg', action='store_true', help='never touch the signal generator (skips V10)')
+    st.add_argument('--fixture', choices=['file', 'standard'], default='file',
+                    help='file (default): the wiring recorded in state/fixture.json; standard: the standard bench '
+                         'fixture is wired right now (this run only)')
     sub.add_parser('release', help='make sure the device is idle and released')
     sub.add_parser('recover', help='reset and reload the FPGA (like a power-up) when the scope hangs; a scope '
                                    'that does not answer register reads still needs a replug')
@@ -849,7 +854,9 @@ def main(argv=None):
                        'note': 'FPGA reset and reloaded; the signal generator is not reset by this (use awg off)'})
             elif args.cmd == 'selftest':
                 from .selftest import run as selftest
-                res = selftest(scope, quick=args.quick, awg=not args.no_awg)
+                from .fixture import STANDARD
+                res = selftest(scope, quick=args.quick, awg=not args.no_awg,
+                               fx=STANDARD if args.fixture == 'standard' else None)
                 _emit(res)
                 code = 0 if res.get('ok') else 1
             elif args.cmd == 'debug':

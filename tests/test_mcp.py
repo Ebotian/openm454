@@ -56,6 +56,22 @@ FAKE = textwrap.dedent(r'''
         time.sleep(30)
     if cmd == 'awg':
         out({'ok': True, 'cmd': 'awg', 'awg': {'wave': 'sine'}, 'persists_after_exit': True})
+    if cmd == 'selftest':
+        skip = {'skipped': 'analog leads are not declared as the standard fixture'}
+        items = [{'id': 'V01', 'desc': 'device info', 'pass': True, 'gating': True, 'measured': {}, 'ms': 1},
+                 {'id': 'V12', 'desc': 'all 12 channels', 'pass': True, 'gating': True, 'measured': {}, 'ms': 500},
+                 {'id': 'V02', 'desc': 'square', 'pass': None, 'gating': False, 'skipped': True, 'measured': skip},
+                 {'id': 'V03', 'desc': 'V/div', 'pass': None, 'gating': False, 'skipped': True, 'measured': skip}]
+        fail = os.environ.get('FAKE_SELFTEST')
+        if fail == 'check':
+            items[1].update({'pass': False, 'measured': {'samples_min': 10}, 'expected': '>= 495000 samples'})
+        doc = {'ok': not fail, 'cmd': 'selftest', 'passed': 2 - bool(fail), 'failed': int(bool(fail)),
+               'skipped': 2, 'fixture': {'analog': {'A1': 'cal square'}, 'digital': 'unknown'}, 'seconds': 4.1,
+               'items': items, 'note': 'the signal checks for the analog and digital leads were skipped'}
+        if fail == 'device':
+            items[1].update({'pass': False, 'measured': {'error': {'code': 'USB_ERROR'}}})
+            doc.update(stopped_at='V12', device_error={'code': 'USB_ERROR', 'message': 'transfer failed'})
+        out(doc, 1 if fail else 0)
     if cmd in ('log', 'stream'):
         if '--rate' in args and args[args.index('--rate') + 1] == '100M':
             out({'ok': False, 'cmd': 'log', 'error': {'code': 'NEEDS_FORCE', 'message': 'gap-free for 2.9 s only',
@@ -281,6 +297,57 @@ def test_log_plan_and_awg_arguments(fake):
     assert res['isError']
 
 
+def test_selftest_tool(fake, monkeypatch):
+    fake.version = '2025-06-18'
+    res = call(fake, 'selftest')
+    doc = res['structuredContent']
+    assert fake.argv()[-1] == ['selftest', '--quick', '--no-awg']          # defaults: quick, generator untouched
+    assert not res['isError'] and 'items' not in doc
+    assert doc['passed_checks'] == ['V01', 'V12'] and doc['fixture'] == {'analog': 'other', 'digital': 'unknown'}
+    assert doc['skipped_checks'] == {'analog leads are not declared as the standard fixture': ['V02', 'V03']}
+    assert 'failed_checks' not in doc and doc['note'].startswith('the signal checks')
+    call(fake, 'selftest', {'quick': False, 'fixture': 'standard', 'awg': True}, mid=2)
+    assert fake.argv()[-1] == ['selftest', '--fixture', 'standard']
+    assert call(fake, 'selftest', {'detail': 'full'}, mid=3)['structuredContent']['items'][0]['id'] == 'V01'
+    res = call(fake, 'selftest', {'fixture': 'bench'}, mid=4)
+    assert res['isError'] and res['structuredContent']['error']['code'] == 'INVALID_ARG'
+    monkeypatch.setenv('FAKE_SELFTEST', 'check')
+    res = call(fake, 'selftest', mid=5)
+    doc = res['structuredContent']
+    assert res['isError'] and res['content'][0]['text'].startswith('SELFTEST_FAILED: check(s) failed: V12')
+    assert doc['failed_checks'] == [{'id': 'V12', 'desc': 'all 12 channels', 'measured': {'samples_min': 10},
+                                     'expected': '>= 495000 samples', 'gating': True}]
+    monkeypatch.setenv('FAKE_SELFTEST', 'device')
+    res = call(fake, 'selftest', mid=6)
+    assert res['isError'] and res['structuredContent']['error']['code'] == 'USB_ERROR'
+    assert res['structuredContent']['stopped_at'] == 'V12'
+    full = call(fake, 'selftest', {'detail': 'full'}, mid=7)             # the raw document still names the error
+    assert full['isError'] and full['content'][0]['text'].startswith('USB_ERROR: transfer failed')
+    monkeypatch.delenv('FAKE_SELFTEST')                            # an error before any check: a plain summary
+    assert M.summarize_selftest({'ok': False, 'cmd': 'selftest', 'error': {'code': 'NOT_FOUND', 'message': 'x'}}) \
+        == {'ok': False, 'cmd': 'selftest', 'error': {'code': 'NOT_FOUND', 'message': 'x'}}
+
+
+def test_selftest_summary_counts_and_hints():
+    def item(cid, p, skipped=None):
+        d = {'id': cid, 'desc': cid, 'pass': p, 'gating': p is not None, 'measured': {}, 'expected': 'x'}
+        if skipped:
+            d.update(skipped=True, measured={'skipped': skipped})
+        return d
+    # a device failure at V12: V13/V11 were not run (CLI counts them as failed); the summary lists them as skipped
+    doc = {'ok': False, 'items': [item('V01', True), item('V12', False), item('V13', False, 'device failed in V12'),
+                                  item('V11', False, 'device failed in V12')],
+           'stopped_at': 'V12', 'device_error': {'code': 'USB_ERROR', 'message': 'gone'}, 'failed': 3}
+    s = M.summarize_selftest(doc)
+    assert (s['passed'], s['failed'], s['skipped']) == (1, 1, 2) and s['error']['code'] == 'USB_ERROR'
+    assert s['skipped_checks'] == {'device failed in V12': ['V13', 'V11']}
+    s = M.summarize_selftest({'ok': False, 'items': [item('V01', True), item('V13', False)]})
+    assert s['error']['code'] == 'SELFTEST_FAILED' and 'not the wiring' in s['error']['hint']
+    s = M.summarize_selftest({'ok': False, 'items': [item('V12', True), item('V02', False), item('V13', False)]})
+    assert s['error']['message'] == 'check(s) failed: V02, V13' and 'wiring differs' in s['error']['hint']
+    assert set(M.WIRING_FREE_CHECKS) == set(__import__('openm454.selftest', fromlist=['x']).WIRING_FREE)
+
+
 # ------------------------------------------------------------------------------------------------ the real CLI
 @pytest.fixture
 def real(tmp_path, monkeypatch):
@@ -312,3 +379,16 @@ def test_real_cli_offline_commands(real, tmp_path, monkeypatch):
     res = call(real, 'status', mid=4)                              # the guard itself: refused, not opened
     err = res['structuredContent']['error']                         # (BUSY first when DSWave runs on this PC)
     assert res['isError'] and (err['code'] == 'BUSY' or 'OPENM454_NO_USB' in err['message'])
+
+
+def test_values_starting_with_a_dash_reach_the_cli():
+    # argparse before Python 3.13 reads a separate '-1ms:1ms' / '-1.5V' as an option and refuses the command
+    from openm454.cli import build_parser
+    args = M.capture_args({'channels': 'A1', 'window': '-1ms:1ms', 'offset': '-1.5V', 'vdiv': '500mV'})
+    assert '--window=-1ms:1ms' in args and '--offset=-1.5V' in args and args[args.index('--vdiv') + 1] == '500mV'
+    ns = build_parser().parse_args(args)
+    assert (ns.window, ns.offset, ns.vdiv) == ('-1ms:1ms', '-1.5V', '500mV')
+    ns = build_parser().parse_args(M.analyze_args({'file': 'x.npz', 'window': '-2ms:0'}))
+    assert ns.window == '-2ms:0'
+    ns = build_parser().parse_args(M.record_args({'mode': 'log', 'rate': '1M', 'offset': '-0.5V'}, plan=True))
+    assert ns.offset == '-0.5V'

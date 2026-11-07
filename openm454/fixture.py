@@ -2,8 +2,8 @@
 
 {"analog": "standard", "digital": "standard"} is the self-test fixture (openm454/selftest.py). Any other value names
 what is connected (e.g. a {channel: source} map); the self-test then skips the checks that need the calibration
-square there.
-A missing file means the standard fixture.
+square there. The scope has no internal test signal, so those checks always need this wiring.
+A missing file (e.g. a fresh pip install) means the wiring is unknown: only the wiring-free checks run.
 """
 import json
 import os
@@ -13,15 +13,22 @@ from .paths import ROOT
 
 PATH = os.path.join(ROOT, 'state', 'fixture.json')
 STANDARD = {'analog': 'standard', 'digital': 'standard'}
+UNKNOWN = {'analog': 'unknown', 'digital': 'unknown'}
 
 
 def load(path=PATH):
+    """-> {'analog': .., 'digital': .., ...}; unknown wiring when the file is missing, and also when it cannot be read
+    (then with an 'error' saying why). A UTF-8 byte-order mark (PowerShell's Out-File) is accepted."""
     try:
-        with open(path, encoding='utf-8') as f:
+        with open(path, encoding='utf-8-sig') as f:
             d = json.load(f)
-    except (OSError, ValueError):
-        return dict(STANDARD)
-    return {**STANDARD, **d}
+    except FileNotFoundError:
+        return dict(UNKNOWN)
+    except (OSError, ValueError) as e:
+        return dict(UNKNOWN, error='%s could not be read (%s): wiring treated as unknown' % (os.path.basename(path), e))
+    if not isinstance(d, dict):
+        return dict(UNKNOWN, error='%s is not a JSON object: wiring treated as unknown' % os.path.basename(path))
+    return {**UNKNOWN, **d}
 
 
 def save(analog='standard', digital='standard', note=None, path=PATH):

@@ -29,6 +29,7 @@ PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')
 STRUCTURED_SINCE = '2025-06-18'      # structuredContent in tool results
 STOP_GRACE_S = 15.0                  # after a timeout: time for a stopped stream/log to finish cleanly
 JOB_START_WAIT_S = 20.0              # record_start waits this long for the first line (a log may probe ~2 s first)
+SELFTEST_WALL_S = 1260.0             # above the CLI's own selftest watchdog (1200 s), so the CLI answers first
 DECODE_FRAMES = 20                   # frames per decoder in a summary (all of them are in files.decode)
 JOBS_DIR = os.path.join(ROOT, 'state', 'mcp_jobs')
 
@@ -36,9 +37,10 @@ INSTRUCTIONS = """Measure and generate real signals with the DSCope M454 oscillo
 A0-A3 up to 400 MSa/s, 8 digital D0-D7, signal generator 0-3 V). Start with `status`. `capture` takes one triggered
 (or untriggered) record and returns measurements per channel (frequency, Vpp, duty, rise/fall times...) plus the
 saved file; `analyze` / `plot` work on saved files. Long continuous recordings: `log_plan`, then `record_start`,
-`record_status`, `record_stop`. Choose the lowest rate and fewest channels that answer the question. Ask the user
-before connecting probes or the generator output to their circuit. Errors have a code: NOT_FOUND = not connected,
-BUSY = another program holds the scope, TIMEOUT_NO_TRIGGER = no trigger within timeout_s."""
+`record_status`, `record_stop`. `selftest` checks the scope itself (its signal checks need the user's bench
+fixture: the scope has no internal test signal). Choose the lowest rate and fewest channels that answer the question.
+Ask the user before connecting probes or the generator output to their circuit. Errors have a code: NOT_FOUND = not
+connected, BUSY = another program holds the scope, TIMEOUT_NO_TRIGGER = no trigger within timeout_s."""
 
 VERTICAL = {
     'vdiv': {'type': 'string', 'description': "volts/div at the probe tip: '1V' or per channel 'A0=500mV,A2=2V'"},
@@ -148,8 +150,31 @@ TOOLS = [
     {'name': 'release', 'title': 'Release the scope',
      'description': 'Stop and release a scope left running or in a bad state by a crashed program.',
      'inputSchema': _schema({})},
+    {'name': 'selftest', 'title': 'Self-test the scope',
+     'description': 'Is the scope itself healthy? Wiring-free checks always run and only read the inputs: device '
+                    'info, all 12 channels at 100 MSa/s, the 400/200 MSa/s top rates, capture latency (~5 s). The '
+                    'signal checks (calibration square, V/div, triggers, thresholds, timeout) need the standard bench '
+                    'fixture, because the scope has no internal test signal: A0 <- generator output; A1, A3 (1x) and '
+                    'A2 (10x probe) <- a ~2.8 Vpp 1 kHz square; D0, D2, D5, D7 <- the same square; D1, D3, D4, D6 '
+                    'open. They are skipped (listed with the reason) unless state/fixture.json declares that wiring or '
+                    'fixture is standard: ask the user to wire it and confirm first. Fails with SELFTEST_FAILED and '
+                    'the failed checks (measured vs expected).',
+     'inputSchema': _schema({
+         'quick': {'type': 'boolean', 'default': True, 'description': 'fewer repetitions (false: the full run)'},
+         'fixture': {'type': 'string', 'enum': ['file', 'standard'], 'default': 'file',
+                     'description': "file: the wiring recorded in state/fixture.json; standard: the user confirmed "
+                                    "the standard bench fixture is wired right now (this run only)"},
+         'awg': {'type': 'boolean', 'default': False,
+                 'description': 'also test the signal generator (needs the standard fixture): drives a 2 Vpp sine '
+                                'and a 0-3 V square into A0, then turns it off. Only when the generator output goes '
+                                'to A0 and nothing else'},
+         'detail': DETAIL,
+         'max_wall_s': {'type': 'number', 'description': "hard limit for the call in seconds (default 1260, above the "
+                                                         "CLI's own 1200 s watchdog); a shorter limit returns "
+                                                         "TIMEOUT_WATCHDOG while the run goes on and keeps the scope "
+                                                         "busy until it ends"}})},
 ]
-DEVICE_TOOLS = {'status', 'capture', 'awg', 'record_start', 'release'}
+DEVICE_TOOLS = {'status', 'capture', 'awg', 'record_start', 'release', 'selftest'}
 
 
 class ToolError(Exception):
@@ -338,6 +363,55 @@ def short_plan(plan):
     return {k: plan[k] for k in PLAN_KEYS if plan.get(k) not in (None, [], {})}
 
 
+WIRING_FREE_CHECKS = ('V01', 'V11', 'V12', 'V13')     # openm454/selftest.py WIRING_FREE (no numpy import here)
+
+
+def selftest_error(doc, failed):
+    if doc.get('device_error'):
+        return doc['device_error']
+    ids = [i['id'] for i in failed if i.get('gating')] or [i['id'] for i in failed]
+    if any(i not in WIRING_FREE_CHECKS for i in ids):
+        hint = ('see failed_checks (measured vs expected); a failed signal check usually means the wiring differs '
+                'from the standard fixture')
+    else:
+        hint = ('a wiring-free check failed, so the scope or its USB link has a problem (not the wiring): run release '
+                'and selftest again; recover if the scope hangs')
+    return {'code': 'SELFTEST_FAILED', 'message': 'check(s) failed: %s' % (', '.join(ids) or 'see the items'),
+            'hint': hint}
+
+
+def summarize_selftest(doc):
+    """A selftest result reduced to the ids that passed, the failed checks (measured vs expected) and the skipped
+    ones grouped by reason, with counts that match those lists (checks not run after a device failure count as
+    skipped here). A failed run gets an error (SELFTEST_FAILED, or the device error that stopped it)."""
+    if not isinstance(doc.get('items'), list):
+        return summarize(doc)                    # NOT_FOUND, BUSY ... before any check ran
+    items = doc['items']
+    passed = [i['id'] for i in items if i.get('pass')]
+    failed = [i for i in items if i.get('pass') is False and not i.get('skipped')]
+    by_reason = {}
+    for i in items:
+        if i.get('skipped'):
+            reason = (i.get('measured') or {}).get('skipped', 'skipped')
+            by_reason.setdefault(reason, []).append(i['id'])
+    out = {'ok': bool(doc.get('ok')), 'cmd': 'selftest', 'passed': len(passed), 'failed': len(failed),
+           'skipped': sum(len(v) for v in by_reason.values())}
+    for k in ('seconds', 'note', 'stopped_at'):
+        if doc.get(k) not in (None, ''):
+            out[k] = doc[k]
+    fx = doc.get('fixture') or {}
+    out['fixture'] = {k: fx.get(k) if fx.get(k) in ('standard', 'unknown') else 'other' for k in ('analog', 'digital')}
+    out['passed_checks'] = passed
+    if failed:
+        out['failed_checks'] = [{k: i.get(k) for k in ('id', 'desc', 'measured', 'expected', 'gating')}
+                                for i in failed]
+    if by_reason:
+        out['skipped_checks'] = by_reason
+    if not out['ok']:
+        out['error'] = selftest_error(doc, failed)
+    return out
+
+
 def summarize(doc):
     """The CLI document reduced to what an agent reads: settings, trigger, key measurements, files, warnings (and
     the error, for a failed command: data up to a stop is kept and summarized too)."""
@@ -370,17 +444,24 @@ def summarize(doc):
 
 
 # ------------------------------------------------------------------------------------------------ argument mapping
+def _flag(flag, value):
+    """[flag, value], or [flag=value] for a value starting with '-' (a window '-1ms:1ms', an offset '-1.5V'):
+    argparse before Python 3.13 takes a separate '-...' argument for an option and refuses the command."""
+    value = str(value)
+    return [flag + '=' + value] if value.startswith('-') else [flag, value]
+
+
 def _vertical(a):
     out = []
     for k in ('vdiv', 'offset', 'probe', 'coupling', 'bw20', 'threshold'):
         if a.get(k) not in (None, ''):
-            out += ['--' + k, str(a[k])]
+            out += _flag('--' + k, a[k])
     return out
 
 
 def _opt(a, key, flag=None):
     v = a.get(key)
-    return [] if v in (None, '') else [flag or '--' + key.replace('_', '-'), str(v)]
+    return [] if v in (None, '') else _flag(flag or '--' + key.replace('_', '-'), v)
 
 
 def capture_args(a):
@@ -639,6 +720,20 @@ class Server:
             with self.device:
                 self._not_recording()
                 return self.cli.run(['release'], 60.0)
+        if name == 'selftest':
+            if a.get('fixture') not in (None, 'file', 'standard'):
+                raise ToolError('INVALID_ARG', "fixture must be 'file' or 'standard'")
+            args = ['selftest'] + (['--quick'] if a.get('quick', True) else []) + \
+                ([] if a.get('awg') else ['--no-awg']) + (['--fixture', 'standard'] if a.get('fixture') == 'standard'
+                                                          else [])
+            with self.device:
+                self._not_recording()
+                doc = self.cli.run(args, float(wall) if wall else SELFTEST_WALL_S)
+            if a.get('detail') != 'full':
+                return summarize_selftest(doc)
+            if not doc.get('ok') and not doc.get('error') and isinstance(doc.get('items'), list):
+                doc = dict(doc, error=summarize_selftest(doc)['error'])
+            return doc
         if name == 'record_start':
             return self.record_start(a)
         if name == 'record_status':

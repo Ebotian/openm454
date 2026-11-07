@@ -20,8 +20,8 @@ jobs:
         os: [windows-latest, ubuntu-latest]
         python: ["3.10", "3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
       - name: libusb (Linux; Windows wheels of libusb1 bundle it)
@@ -41,8 +41,8 @@ jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Tracked files carry no local paths
@@ -55,7 +55,7 @@ jobs:
           python -m pip install build twine
           python -m build
           python -m twine check --strict dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
