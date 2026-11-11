@@ -34,6 +34,7 @@ EDGES = {'rise': 0, 'rising': 0, 'fall': 1, 'falling': 1, 'any': 2, 'both': 2,
 ANALOG_WAKE_SETTLE = 0.15
 OVERDRIVE_SETTLE = 0.3           # measured: 1500 div of overdrive at 1 mV/div needs ~215 ms to settle within 0.5 LSB
 MAX_SAMPLES = 400_000_000     # per channel; the 4 Gbit sample memory is the real bound (checked by mso)
+EP_MAX_PACKET = 1024          # EP 0x86 wMaxPacketSize; the USB 2 (high-speed) profile's 512 divides it
 
 
 @dataclass
@@ -616,7 +617,13 @@ class Scope:
         if analog_on and not self._analog_awake:     # analog side idle before (or unknown): front end recovers
             settle = max(settle, ANALOG_WAKE_SETTLE)
         self._analog_awake = analog_on
-        raw = self.engine.run(send, pkt_bytes=geom['pkt_bytes'], need_bytes=geom['need_bytes'],
+        pkt = geom['pkt_bytes']
+        if not geom.get('repeat'):        # repeat: one frame per transfer, a larger read would merge two frames
+            # Linux/xHCI: an EP 0x86 read that is not a multiple of the max packet ends in -EOVERFLOW as soon as a
+            # 1024-byte packet no longer fits the remaining buffer (the stream is byte-continuous, so a larger read
+            # is harmless)
+            pkt = (pkt + EP_MAX_PACKET - 1) // EP_MAX_PACKET * EP_MAX_PACKET
+        raw = self.engine.run(send, pkt_bytes=pkt, need_bytes=geom['need_bytes'],
                               n_transfers=geom.get('transfer_count', 16), trigger_timeout=trigger_timeout,
                               collect_timeout=collect_timeout, settle=settle, **kw)
         if cross:

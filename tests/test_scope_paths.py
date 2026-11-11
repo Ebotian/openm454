@@ -83,6 +83,16 @@ def test_trigger_wait_includes_the_record_time():
     assert waited >= 0.5 + 1.0                   # the head of a 1 s non-roll record cannot come sooner
 
 
+def test_bulk_reads_are_padded_to_the_endpoint_max_packet():
+    s = scope_with(RawCapture())
+    st = st_a1()
+    want = s.plan(st)['geometry']['pkt_bytes']
+    assert want % 1024                                   # the geometry really produces an unaligned read
+    with pytest.raises(DscopeError):
+        s.capture(st)
+    assert s.engine.calls[0]['pkt_bytes'] == (want + 1023) // 1024 * 1024
+
+
 def test_usb2_link_is_refused_before_any_run():
     s = scope_with(RawCapture(), speed='high')
     with pytest.raises(DscopeError) as ei:
