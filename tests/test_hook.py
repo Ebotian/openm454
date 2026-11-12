@@ -223,7 +223,9 @@ def test_a_hook_stop_ends_the_recording_at_that_piece(tmp_path):
                 T['t'] = block.t1_s
                 return {'stop': True}
     """))
-    res = logger.run(FakeScope(stream, pl['packet_bytes']), settings(*A2D8), pl, None, hook=h)   # unpaced: floods
+    # paced like a real scope: unpaced, a slow CI runner let the fake flood 768 MiB into the queue before the writer
+    # reached the stopping piece, and the queue guard (HOST_TOO_SLOW) ended the run first
+    res = logger.run(FakeScope(stream, pl['packet_bytes'], clock=Paced()), settings(*A2D8), pl, None, hook=h)
     t_stop = h.process.__globals__['T']['t']
     assert res['ok'] and res['acq']['stop_reason'] == 'hook'
     assert res['acq']['duration_s'] == pytest.approx(t_stop, abs=1e-9)  # nothing after the stopping piece
