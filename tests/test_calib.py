@@ -105,6 +105,7 @@ def test_unit_binding():
     zi = bytes(range(256)) * 2
     uid = calib.unit_id(zi)
     assert len(uid) == 16 and calib.unit_id(zi) == uid
+    assert calib.unit_id(None) is None and calib.unit_id([object()]) is None    # no raw block: unknown, no crash
     calib.check_unit(dict(table(), unit_id=None), zi)              # unbound: any unit
     calib.check_unit(dict(table(), unit_id=uid), zi)
     with pytest.raises(DscopeError) as e:
@@ -362,6 +363,7 @@ def test_log_cal_refuses_another_unit_before_anything_runs(capsys, tmp_path, mon
     import test_logger as tl
     monkeypatch.setattr(host, 'HOST_FILE', str(tmp_path / 'host.json'))
     monkeypatch.setattr(cli, 'STOP_REQUEST', str(tmp_path / 'stop.request'))
+    monkeypatch.setattr(calib, 'unit_id', lambda zi: 'f' * 16)    # this "scope" is unit ffff..., independent of state/
     install(dict(table(), unit_id='0' * 16))
     args = cli.build_parser().parse_args(['log', '-c', 'A0,D0', '--vdiv', '1V', '--rate', '1M', '--duration', '0.05s',
                                           '--no-save', '--cal'])

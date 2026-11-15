@@ -182,8 +182,8 @@ def save(doc, path=None):
 
 def unit_id(zero_info):
     """Identity of a unit: sha256 of its EEPROM zero-info block (not secret; the security key is never used)."""
-    if not zero_info:
-        return None
+    if not isinstance(zero_info, (bytes, bytearray, memoryview)) or not len(zero_info):
+        return None                      # no raw block (e.g. a parsed default offline): the unit is unknown
     return hashlib.sha256(bytes(zero_info)).hexdigest()[:16]
 
 
