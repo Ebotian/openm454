@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, asdict
 
 import numpy as np
 
-from . import mso, trigcheck
+from . import calib, mso, trigcheck
 from .errors import DscopeError
 from .capture import Capture, CODES_PER_DIV, CODE_MIN, CODE_MAX
 
@@ -62,6 +62,8 @@ class Settings:
     holdoff: float = 0.0
     sensitivity: int = 5
     trig_retries: int = 4             # digital rise/fall trigger: re-arms after a misfire on the other edge
+    cal: bool = False                 # opt-in PC-side calibration (openm454.calib); off: values exactly as before
+    cal_mode: str = None              # calibration table mode override ('34' for loop logs without interleave)
 
 
 def settings_from_args(a):
@@ -129,6 +131,8 @@ def vertical_flags(st):
             out.append('%s %s' % (flag, ','.join(chans)))
     if st.digital and abs(st.threshold - 1.4) > 1e-9:
         out.append('--threshold %gV' % st.threshold)
+    if st.cal:
+        out.append('--cal')
     return ' '.join(out)
 
 
@@ -149,6 +153,7 @@ def vertical_from_args(a):
     st.probe = per_channel(a.probe, None, '--probe', '1x')
     st.probe = {k: si(v, None, '--probe') for k, v in st.probe.items()}
     st.threshold = si(a.threshold, 'V', '--threshold')
+    st.cal = bool(getattr(a, 'cal', False))
     return st
 
 
@@ -218,6 +223,8 @@ def hal_config(st):
         raise DscopeError('INVALID_ARG', 'edge must be one of %s' % ', '.join(EDGES))
     ana = []
     scale = {}
+    doc = calib.active() if st.cal else None
+    cal_mode = (st.cal_mode or calib.mode_key(len(st.analog))) if doc else None
     for i in range(4):
         ch = 'A%d' % i
         probe = float(st.probe.get(ch) or 1.0)
@@ -234,16 +241,27 @@ def hal_config(st):
             warnings.append('%s: offset %.3g V out of range at %g V/div (allowed %.4g .. %.4g V, about +-4.3 div); '
                             'clamped to %.4g V' % (ch, st.offset.get(ch, 0.0), vdiv_v * probe, lo, hi, used))
         zero = min(max(zero, 0), 255)
+        sc = {'zero_code': zero, 'vdiv_v': vdiv_v, 'volts_per_code': vpc, 'probe': probe}
+        if doc and ch in st.analog:
+            if ch in st.invert:
+                sc = calib.uncorrected_scale(sc, 'inverted channel: the calibration was measured non-inverted')
+            else:
+                entry, used, why = calib.analog_entry(doc, cal_mode, ch, vdiv_v)
+                sc = (calib.corrected_scale(sc, entry, used, why, st.coupling.get(ch, 'dc'), ch in st.bw20)
+                      if entry else calib.uncorrected_scale(sc, why))
+                if why:
+                    warnings.append('calibration: ' + why)
+        z_eff = sc['zero_code']                    # the (corrected) volts <-> code map; zero_code is the DAC zero
         lvl = None
         if st.trig_source == ch:
             lv = st.trig_level
             if lv is None:
                 lv = st.offset.get(ch, 0.0)
-            code = int(round(zero + (lv / probe) / vpc))
+            code = int(round(z_eff + (lv / probe) / sc['volts_per_code']))      # same order as without --cal
             if not CODE_MIN <= code <= CODE_MAX and st.trig_mode == 'force':
                 code = min(max(code, CODE_MIN), CODE_MAX)          # force mode never uses the trigger: no refusal
             if not CODE_MIN <= code <= CODE_MAX:
-                lo, hi = ((c - zero) * vpc * probe for c in (CODE_MIN, CODE_MAX))
+                lo, hi = ((c - z_eff) * sc['volts_per_code'] * probe for c in (CODE_MIN, CODE_MAX))
                 raise DscopeError('TRIGGER_OUT_OF_RANGE', 'trigger level %.4g V is outside the visible range of %s: '
                                   '%.4g..%.4g V at %g V/div, offset %g V' % (lv, ch, lo, hi, vdiv_v * probe,
                                                                              st.offset.get(ch, 0.0)),
@@ -251,7 +269,7 @@ def hal_config(st):
             lvl = code
         ana.append({'enable': int(ch in st.analog), 'coupling': st.coupling.get(ch, 'dc'), 'bw20': int(ch in st.bw20),
                     'invert': int(ch in st.invert), 'vdiv_uv': hw, 'voff_code': zero, 'trig_level_code': lvl if lvl is not None else zero})
-        scale[ch] = {'zero_code': zero, 'vdiv_v': vdiv_v, 'volts_per_code': vpc, 'probe': probe}
+        scale[ch] = sc
     n_a, n_d = len(st.analog), len(st.digital)
     af, df = afold_for(n_a), dfold_for(n_d)
     lead_fold = af if n_a else df
@@ -294,11 +312,32 @@ def hal_config(st):
         trig['ch_type'], trig['ch_index'] = 1, int(st.analog[0][1:])
     else:
         trig['ch_type'], trig['ch_index'] = 0, int(st.digital[0][1:])
+    thr = min(max(st.threshold, 0.0), 5.0)
+    thr_prog, thr_clamped = calib.threshold_program(doc, thr) if doc else (thr, False)
+    if thr_clamped:
+        lo, hi = calib.threshold_range(doc)
+        warnings.append('calibration: threshold %.3g V is outside the calibrated range %.3f .. %.3f V: switching at '
+                        'about %.3f V' % (thr, lo, hi, calib.threshold_output(doc, thr_prog)))
     hal = {'analog': ana, 'digital': [int('D%d' % i in st.digital) for i in range(8)],
-           'threshold_uv': int(round(min(max(st.threshold, 0.0), 5.0) * 1e6)),
+           'threshold_uv': int(round(thr_prog * 1e6)),
            'sample_time_ps': time_ps, 'storage_depth': storage, 'auto_rate': 1,
            'trigger': trig, 'repeat': 0, 'roll': 0}
+    if doc:
+        hal['cal'] = dict(calib.summary(doc), mode=cal_mode,
+                          threshold={'target_v': round(calib.threshold_output(doc, thr_prog), 6) if thr_clamped else thr,
+                                     'programmed_v': hal['threshold_uv'] / 1e6,
+                                     **({'requested_v': thr, 'clamped': True} if thr_clamped else {})})
     return hal, scale, warnings, hints
+
+
+def cal_record(hal, scale, analog):
+    """The calibration block of a capture/log/stream document (None without --cal): what was corrected and how."""
+    c = hal.get('cal')
+    if not c:
+        return None
+    rec = dict(c)
+    rec['analog'] = {ch: scale[ch].get('cal', {'applied': False}) for ch in analog}
+    return rec
 
 
 # ------------------------------------------------------------------------------------------------ Scope
@@ -410,11 +449,63 @@ class Scope:
                            'awg': {'v_min': 0.0, 'v_max': 3.0, 'f_max_hz': awg.F_MAX}},
                 'awg_last': self.awg_status()}
 
-    def awg_set(self, wave, freq, high, low, duty=50.0, phase=0.0):
+    def _awg_cal(self, cal):
+        """The calibration document for a --cal generator command (None without), checked against this unit."""
+        if not cal:
+            return None
+        doc = calib.active()
+        calib.check_unit(doc, self.dev.zero_info if self.dev is not None else None)
+        return doc
+
+    @staticmethod
+    def _awg_levels(doc, **levels):
+        """Requested output levels -> (levels to program, calibration record or None)."""
+        if doc is None:
+            return levels, None
+        from .awg import CODES_PER_V
+        from .awg_modes import level_code
+        for k, v in levels.items():                    # the same refusals as without --cal
+            if not 0.0 <= v <= calib.AWG_V_MAX + 1e-9:
+                raise DscopeError('INVALID_ARG', '%s level must be 0 .. %g V (got %g V)' % (k, calib.AWG_V_MAX, v))
+        prog, clamped = {}, []
+        for k, v in levels.items():
+            prog[k], c = calib.awg_program(doc, v)
+            if c:
+                clamped.append(k)
+        if 'high' in prog and 'low' in prog and prog['low'] >= prog['high'] and levels['low'] < levels['high']:
+            lo, hi = calib.awg_range(doc)
+            raise DscopeError('INVALID_ARG', 'levels %g / %g V lie outside the calibrated output range %.4f .. %.4f V'
+                              % (levels['low'], levels['high'], lo, hi), 'choose levels inside that range')
+        e = doc.get('awg') or {}
+        rec = {'requested_v': dict(levels),
+               'programmed_v': {k: round(v, 5) for k, v in prog.items()},
+               'expected_v': {k: round(calib.awg_output(doc, level_code(v) / CODES_PER_V), 4) for k, v in prog.items()},
+               'gain': e.get('gain', 1.0), 'offset_v': e.get('offset_v', 0.0),
+               'unit_id': doc.get('unit_id'), 'neutral': calib.neutral(doc)}
+        if clamped:
+            lo, hi = calib.awg_range(doc)
+            rec['clamped'] = clamped
+            rec['warning'] = ('calibrated output range is %.4f .. %.4f V (the generator is programmed within 0..3 V): '
+                              '%s clamped' % (lo, hi, ', '.join(clamped)))
+        return prog, rec
+
+    @staticmethod
+    def _awg_report(st, rec):
+        """With --cal the reported levels are the expected output; the programmed ones go into st['cal']."""
+        if rec:
+            for k in ('high', 'low', 'level'):
+                if k in rec['expected_v'] and st.get(k + '_v') is not None:
+                    st[k + '_v'] = rec['expected_v'][k]
+            st['cal'] = rec
+        return st
+
+    def awg_set(self, wave, freq, high, low, duty=50.0, phase=0.0, cal=False):
         from . import awg
+        lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high, low = lv['high'], lv['low']
         awg.apply(self.dev.t, awg.program(wave, freq, high, low, duty, phase))
         awg.apply(self.dev.t, awg.START)
-        st = dict(awg.describe(wave, freq, high, low, duty, phase), enabled=True)
+        st = self._awg_report(dict(awg.describe(wave, freq, high, low, duty, phase), enabled=True), rec)
         self._save_awg(st)
         return st
 
@@ -425,57 +516,68 @@ class Scope:
         self._save_awg(st)
         return st
 
-    def awg_dc(self, level):
+    def awg_dc(self, level, cal=False):
         """Steady DC level on the AWG output (0..3 V, steps of 1/156 V)."""
         from . import awg
+        lv, rec = self._awg_levels(self._awg_cal(cal), level=level)
+        level = lv['level']
         awg.apply(self.dev.t, awg.dc(level))
-        st = {'wave': 'dc', 'level_v': round(int(round(level * 156)) / 156, 4), 'enabled': True}
+        st = self._awg_report({'wave': 'dc', 'level_v': round(int(round(level * 156)) / 156, 4), 'enabled': True}, rec)
         self._save_awg(st)
         return st
 
-    def awg_sweep(self, start, end, time, sweep_type='linear', wave='sine', high=3.0, low=0.0, duty=50.0):
+    def awg_sweep(self, start, end, time, sweep_type='linear', wave='sine', high=3.0, low=0.0, duty=50.0, cal=False):
         """Frequency sweep from `start` to `end` Hz in `time` s (repeats); register program from DSWave's HAL."""
         from . import awg, awg_modes
+        lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high, low = lv['high'], lv['low']
         direction = 'up' if end > start else 'down'
         awg.apply(self.dev.t, awg_modes.program_sweep(start, end, time, sweep_type, direction, wave=wave, high=high,
                                                       low=low, duty=duty))
         awg.apply(self.dev.t, awg.START)
         st = {'mode': 'sweep', 'wave': wave, 'start_hz': start, 'end_hz': end, 'time_s': time, 'sweep_type': sweep_type,
               'high_v': high, 'low_v': low, 'enabled': True}
+        st = self._awg_report(st, rec)
         self._save_awg(st)
         return st
 
-    def awg_burst(self, wave, freq, high, low, cycles, period, duty=50.0, phase=0.0):
+    def awg_burst(self, wave, freq, high, low, cycles, period, duty=50.0, phase=0.0, cal=False):
         """`cycles` periods of the carrier every `period` s (internal trigger)."""
         from . import awg, awg_modes
+        lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high, low = lv['high'], lv['low']
         awg.apply(self.dev.t, awg_modes.program_burst(wave, freq, high, low, duty, phase, cycles=cycles, period=period))
         awg.apply(self.dev.t, awg.START)
         st = {'mode': 'burst', 'wave': wave, 'freq_hz': freq, 'cycles': cycles, 'period_s': period, 'high_v': high,
               'low_v': low, 'enabled': True}
+        st = self._awg_report(st, rec)
         self._save_awg(st)
         return st
 
     def awg_modulate(self, kind, wave, freq, high, low, mod_wave='sine', mod_freq=100.0, depth=50.0, deviation=None,
-                     hop=None, duty=50.0):
+                     hop=None, duty=50.0, cal=False):
         """AM (depth %), FM (deviation Hz) or FSK (hop Hz) of a carrier, internal modulation source."""
         from . import awg, awg_modes
+        lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high, low = lv['high'], lv['low']
         awg.apply(self.dev.t, awg_modes.program_modulation(kind, wave, freq, high, low, duty, mod_wave=mod_wave,
                                                            mod_freq=mod_freq, depth=depth, deviation=deviation, hop=hop))
         awg.apply(self.dev.t, awg.START)
         st = {'mode': 'modulation', 'kind': kind, 'wave': wave, 'freq_hz': freq, 'mod_wave': mod_wave,
               'mod_freq_hz': mod_freq, 'high_v': high, 'low_v': low, 'enabled': True}
         st.update({'am': {'depth_pct': depth}, 'fm': {'deviation_hz': deviation}, 'fsk': {'hop_hz': hop}}.get(kind, {}))
+        st = self._awg_report(st, rec)
         self._save_awg(st)
         return st
 
-    def awg_from_spec(self, spec):
+    def awg_from_spec(self, spec, cal=False):
         from .units import si
         p = spec.split(',')
         wave = p[0]; freq = si(p[1], 'Hz', 'awg freq') if len(p) > 1 else 1000
         low = si(p[2], 'V', 'awg low') if len(p) > 2 else 0.0
         high = si(p[3], 'V', 'awg high') if len(p) > 3 else 3.0
         duty = si(p[4], None, 'awg duty') if len(p) > 4 else 50.0
-        return self.awg_set(wave, freq, high, low, duty)
+        return self.awg_set(wave, freq, high, low, duty, cal=cal)
 
     def awg_status(self):
         try:
@@ -501,8 +603,14 @@ class Scope:
         whole record has been acquired (pre-trigger fill + trigger + post-trigger), plus transfer latency."""
         return wait + (0.0 if geom.get('roll') else geom.get('record_s', 0.0)) + 0.5
 
+    def _cal_check(self, st):
+        """--cal: the file must belong to this unit (refused before anything is sent)."""
+        if getattr(st, 'cal', False) and self.dev is not None:
+            calib.check_unit(calib.active(), self.dev.zero_info)
+
     def capture(self, st):
         self._check_link()
+        self._cal_check(st)
         hal, scale, warnings, hints = hal_config(st)
         t_begin = time.time()
         attempts = []
@@ -652,6 +760,7 @@ class Scope:
         cannot take, so the next record starts after a short drain instead of a full read-out."""
         from . import packet
         self._check_link()
+        self._cal_check(st)
         st.trig_source, st.trig_mode = None, 'force'
         hal, scale, warnings, hints = hal_config(st)
         hal['trigger']['enable'] = 0
@@ -769,6 +878,7 @@ class Scope:
         Raises STREAM_BETTER / NEEDS_FORCE (with .plan) for a log longer than its gap-free limit."""
         from . import logger
         self._check_link()
+        self._cal_check(st)
         out_dir = os.path.dirname(out_stem) if out_stem else None
         kw = dict(zero_info=self.dev.zero_info, force=force, keep_last=keep_last)
         pl = logger.plan(st, rate, duration, every, out_dir, storage, ram_budget, chunk_s, defer=probe is not False,
@@ -793,6 +903,11 @@ class Scope:
                    'coupling': {c: st.coupling.get(c, 'dc') for c in st.analog},
                    'bw20': st.bw20, 'invert': st.invert, 'threshold_v': hal['threshold_uv'] / 1e6,
                    'trigger': trig, 'duration_req_s': st.duration}
+        cal = cal_record(hal, scale, st.analog)
+        if cal:
+            applied['threshold_v'] = cal['threshold']['target_v']
+            applied['threshold_programmed_v'] = cal['threshold']['programmed_v']
+            applied['cal'] = cal
         n_a = max([len(v) for v in frame['analog'].values()] + [0])
         n_d = max([len(v) for v in frame['digital'].values()] + [0])
         # samples / duration_s describe the analog channels when there are any (their rate can differ from the
@@ -807,7 +922,7 @@ class Scope:
                'digital_samples': n_d if frame['digital'] else None,
                'elapsed_ms': round((time.time() - t_begin) * 1000)}
         return {'version': 1, 'device': 'DSCope M454', 'time': time.strftime('%Y-%m-%dT%H:%M:%S'),
-                'applied': applied, 'acq': acq, 'channels': ch_scale,
+                'applied': applied, 'acq': acq, 'channels': ch_scale, **({'cal': cal} if cal else {}),
                 'analog_rate_hz': geom.get('analog_rate'), 'digital_rate_hz': geom.get('digital_rate'),
                 't0_analog_s': frame['t0_analog'], 't0_digital_s': frame['t0_digital'],
                 'trigger': trig, 'warnings': warnings, 'geometry': {k: v for k, v in geom.items() if isinstance(v, (int, float, str))}}

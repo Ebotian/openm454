@@ -111,7 +111,7 @@ def render(cap, window=None, title=None, summary=None, channels=None):
         trig = cap.meta.get('trigger', {})
         if (trig.get('source') or '').startswith('A') and trig.get('level_v') is not None:
             ax.axhline(trig['level_v'], color=INK2, lw=0.7, ls=':')
-        ax.set_ylabel('V', color=INK2)
+        ax.set_ylabel('V (calibrated)' if cap.meta.get('cal') else 'V', color=INK2)
         leg = _legend(ax, len(an))
         r = fig.canvas.get_renderer()
         if len(an) > 2 and leg.get_window_extent(r).width > 0.9 * fig.bbox.width:

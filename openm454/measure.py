@@ -4,7 +4,10 @@ Definitions (documented for the agent reading the JSON):
   vtop/vbase  modes of the histogram of the upper / lower half of the range (robust high/low levels)
   vamp        vtop - vbase
   edges       crossings of the mid level (vtop+vbase)/2 with hysteresis max(20 % vamp, 4 noise, 2.5 LSB), interpolated
-  freq        (n_rise - 1) / (t_last_rise - t_first_rise); FFT peak if fewer than 2 rising edges
+  freq        1 / period, period from a least-squares line through all rising edges (median interval when glitches
+              make them irregular); FFT peak if fewer than 2 rising edges. freq_res_hz = freq / (edge span in samples),
+              on the fitted path only: an edge faster than the sample interval is placed to +-0.5 sample, so a short
+              record at a low rate bounds the accuracy
   duty        high time / period averaged over whole periods between the first and last rising edge
   rise/fall   10-90 % transition times, median over edges
 """
@@ -64,6 +67,17 @@ def crossings(v, lo_thr, hi_thr):
             pos = float(j)
         (rises if d[c + 1] > 0 else falls).append(pos)
     return np.array(rises), np.array(falls)
+
+
+def _fit_period(ref):
+    """Period in samples from a least-squares line through all reference edges (edge index -> position). An edge
+    faster than the sample interval is placed to about +-0.5 sample only; the fit averages that over every edge
+    instead of resting on the first and the last one (measured on the generator at 80 samples per period over 50
+    periods: +-150 ppm -> +-18 ppm). The opposite edges are left out: a drifting duty cycle would bias the period."""
+    k = np.arange(len(ref), dtype=np.float64)
+    if len(ref) < 3:
+        return float(ref[-1] - ref[0]) / max(len(ref) - 1, 1)
+    return float(np.polyfit(k, np.asarray(ref, dtype=np.float64), 1)[0])
 
 
 def _transition_time(v, edges, lo, hi, rate, rising):
@@ -129,7 +143,10 @@ def analog(v, rate, clip_lo=None, clip_hi=None, edges_n=0, lsb=0.0):
                 period_s = med / rate
                 res['period_irregular'] = True
             else:
-                period_s = (ref[-1] - ref[0]) / (len(ref) - 1) / rate
+                period_s = _fit_period(ref) / rate
+                # an edge faster than the sample interval is located to about +-0.5 sample only: one sample over
+                # the measured span bounds the frequency error
+                res['freq_res_hz'] = _r(1.0 / period_s / max(ref[-1] - ref[0], 1.0), 3)
             freq, period = 1.0 / period_s, period_s
             # time per period from each reference edge to the next opposite one: high time from rises, low from falls
             spans = []

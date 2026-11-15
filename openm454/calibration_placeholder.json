@@ -1,0 +1,767 @@
+{
+ "format": "openm454-calibration",
+ "version": 1,
+ "unit_id": null,
+ "created": null,
+ "note": "neutral placeholder: gain 1 and every offset 0 (no correction); replace the entries with values measured on your unit against a reference meter",
+ "analog": {
+  "1": {
+   "A0": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A1": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A2": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A3": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   }
+  },
+  "2": {
+   "A0": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A1": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A2": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A3": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   }
+  },
+  "34": {
+   "A0": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A1": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A2": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   },
+   "A3": {
+    "0.001": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.002": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.005": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.01": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.02": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.05": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "0.5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "1": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "2": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    },
+    "5": {
+     "gain": 1.0,
+     "zero_lsb": 0.0,
+     "offset_slope_lsb_per_div": 0.0
+    }
+   }
+  }
+ },
+ "awg": {
+  "gain": 1.0,
+  "offset_v": 0.0
+ },
+ "threshold": {
+  "gain": 1.0,
+  "offset_v": 0.0
+ }
+}

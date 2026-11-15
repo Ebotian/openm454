@@ -36,6 +36,9 @@ openm454-mcp = "openm454.mcp_server:main"
 [tool.setuptools]
 packages = ["openm454"]
 
+[tool.setuptools.package-data]
+openm454 = ["calibration_placeholder.json"]
+
 [tool.setuptools.dynamic]
 version = {attr = "openm454.__version__"}
 

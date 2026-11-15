@@ -121,16 +121,17 @@ python -m openm454 stream -c D0-D7 --rate 100M --duration 60s --every 1s
 | `capture` | 一次触发(或无触发)的记录:测量值、`.png`、`.npz` | 见下文 |
 | `watch` | 重复采集,每次输出一行 JSON(监控用) | `capture` 的选项,`--every 0.5s`(从一次开始到下一次开始)、`--count N`(未给出 `--count` 和 `--for` 时默认 20)、`--for T`、`--fields A1.freq_hz,...`、`--stop-when EXPR`、`--save-last`(见 [watch](#watch)) |
 | `stream` | 边采集边发送的无触发记录,实时统计 | `capture` 的选项,`--every 1s`、`--save-each`、`--record-first` |
-| `log` | 无间隙的无限记录(循环模式),所有通道同一采样率 | `-c`、`--rate 1M`、`--duration 10s\|forever`、`--every 1s`、`--storage ram\|disk\|none`(`--no-save` = none)、`--keep-last`、`--chunk`、`--ram`、`--plan`、`--force`、`--remeasure`、`--out`、`--tag`、`--awg`、`--hook FILE.py`(实时处理,见[实时处理钩子](https://github.com/FrostFlops/openm454/blob/main/README.zh-CN.md#实时处理钩子log---hook))、垂直选项 |
+| `log` | 无间隙的无限记录(循环模式),所有通道同一采样率 | `-c`、`--rate 1M`、`--duration 10s\|forever`、`--every 1s`、`--storage ram\|disk\|none`(`--no-save` = none)、`--keep-last`、`--chunk`、`--ram`、`--plan`、`--force`、`--remeasure`、`--out`、`--tag`、`--awg`、`--cal`、`--hook FILE.py`(实时处理,见[实时处理钩子](https://github.com/FrostFlops/openm454/blob/main/README.zh-CN.md#实时处理钩子log---hook))、垂直选项 |
 | `bench` | 这台电脑的记录极限(空闲内存、解码和磁盘速度、USB 读出);保存内存 / 磁盘额度 | `--ram 8GB`、`--disk 50GB`、`--dir`、`--disk-test-mb`、`--no-device` |
-| `awg set` | MCX 输出上的连续波形(0..3 V) | `--wave sine\|square\|triangle\|noise`、`--freq 1k`、`--low/--high` 或 `--vpp/--dc`、`--duty 50%`、`--phase` |
-| `awg sweep` | 频率扫描,重复进行 | `--start`、`--end`(必需)、`--time 100ms`、`--log`、`--wave`、`--high`、`--low`、`--duty` |
-| `awg burst` | 每个周期输出 N 个载波周期 | `--cycles`、`--period 10ms`、`--freq`、`--wave`、`--high`、`--low`、`--duty` |
-| `awg mod` | 载波的 AM / FM / FSK 调制 | `--kind am\|fm\|fsk`、`--mod-wave`、`--mod-freq`、`--depth`、`--deviation`、`--hop`、`--freq`、`--wave`、`--high`、`--low`、`--duty` |
-| `awg dc` | 稳定的直流电平(0..3 V,步进 6.4 mV) | `--level`(必需) |
+| `awg set` | MCX 输出上的连续波形(0..3 V) | `--wave sine\|square\|triangle\|noise`、`--freq 1k`、`--low/--high` 或 `--vpp/--dc`、`--duty 50%`、`--phase`、`--cal` |
+| `awg sweep` | 频率扫描,重复进行 | `--start`、`--end`(必需)、`--time 100ms`、`--log`、`--wave`、`--high`、`--low`、`--duty`、`--cal` |
+| `awg burst` | 每个周期输出 N 个载波周期 | `--cycles`、`--period 10ms`、`--freq`、`--wave`、`--high`、`--low`、`--duty`、`--cal` |
+| `awg mod` | 载波的 AM / FM / FSK 调制 | `--kind am\|fm\|fsk`、`--mod-wave`、`--mod-freq`、`--depth`、`--deviation`、`--hop`、`--freq`、`--wave`、`--high`、`--low`、`--duty`、`--cal` |
+| `awg dc` | 稳定的直流电平(0..3 V,步进 6.4 mV) | `--level`(必需)、`--cal` |
 | `awg off`、`awg status` | 把输出停放在 0 V / 显示上次的设置 | |
 | `plot` | 把保存的 `.npz` 绘制成 PNG(无需设备) | `file`、`--window`、`--channels`、`--out` |
 | `analyze` | 测量保存的 `.npz`(无需设备) | `file`、`--window`、`--channels`、`--edges N`、`--dump N`、`--measure`、`--decode SPEC` |
+| `cal` | 可选的 PC 端校准文件([校准](#校准可选)):`status`(默认,不用 USB)、`template`、`import` | `status`、`template --out FILE [--force]`、`import FILE [--bind]` |
 | `selftest` | 验证示波器(见[自检](#自检)) | `--quick`、`--no-awg`、`--fixture file\|standard` |
 | `setup` | FPGA 比特流从哪里来;`--dswave <folder>` 一次性记录 DSWave 的文件夹(不用 USB) | `--dswave` |
 | `release` | 确保设备空闲并已释放 | |
@@ -140,7 +141,7 @@ python -m openm454 stream -c D0-D7 --rate 100M --duration 60s --every 1s
 
 `capture`、`watch` 和 `stream` 共用这些选项:
 
-- 通道 / 垂直:`-c A0-A3,D0-D7`(也可用 `analog`、`digital`)、`--vdiv 1V`、`--offset 0V`、`--coupling dc|ac`、`--bw20 A1,A2`、`--invert A2`、`--probe 10x|A2=10x`、`--threshold 1.4V`。按通道设置的值写作 `A0=500mV,A2=2V`。
+- 通道 / 垂直:`-c A0-A3,D0-D7`(也可用 `analog`、`digital`)、`--vdiv 1V`、`--offset 0V`、`--coupling dc|ac`、`--bw20 A1,A2`、`--invert A2`、`--probe 10x|A2=10x`、`--threshold 1.4V`、`--cal`(应用校准文件,见[校准](#校准可选);默认关闭)。按通道设置的值写作 `A0=500mV,A2=2V`。
 - 时基:`--timebase`(窗口 = 10 格)、`--duration`、`--samples`、`--rate`。
 - 触发:`--trig SRC:EDGE[:LEVEL]`(例如 `A1:rise:1.4V`、`D0:fall`、`D0:pulse>:200us`)、`--trig-mode auto|normal|force`(默认 `auto`)、`--trig-pos 50%`、`--auto-after 0.3s`、`--timeout 5s`(normal 模式的等待时间)、`--holdoff`、`--sensitivity 0..15`(默认 5)、`--trig-retries N`(默认 4;数字边沿触发,见[数字边沿触发](#数字边沿触发))。`stream` 接受触发选项但会忽略它们:它始终以无触发方式记录。
 - 输出:`--measure basic|full|none`(见[测量](#测量--measure))、`--edges N`、`--dump N`、`--window t0:t1`、`--no-plot`、`--no-save`、`--out`、`--tag`、`--awg 'sine,10k,0V,2V[,duty%]'`(先设置信号发生器)、`--decode SPEC`(可重复)、`--decode-limit`(默认 50 帧)。
@@ -165,7 +166,8 @@ python -m openm454 stream -c D0-D7 --rate 100M --duration 60s --every 1s
 
 `--measure basic|full|none` 适用于 `capture`、`watch`、`stream` 的最终结果以及 `analyze`。
 
-- `basic`(默认)。模拟通道:`samples`、`vmin_v`、`vmax_v`、`vpp_v`、`vmean_v`、`vrms_v`、`vac_rms_v`、`vtop_v`、`vbase_v`、`vamp_v`、`freq_hz`、`period_s`、`duty_pct`、`edges_rise`、`edges_fall`、`periods_in_window`、`pwidth_s`、`nwidth_s`、`rise_s`、`fall_s`、`overshoot_pct`、`undershoot_pct`、`clip_lo`、`clip_hi`,以及出现时才有的 `freq_method`、`period_irregular`、`noise_like`。数字通道:`samples`、`state`、`high_frac`、`edges`、`freq_hz`、`period_s`、`duty_pct`,以及出现时才有的 `glitch_edges` 和 `runts`。在模拟通道上,当窗口内至少有两个下降沿但上升沿少于两个时,频率和占空比由下降沿得出(数字通道需要两个上升沿)。
+- `basic`(默认)。模拟通道:`samples`、`vmin_v`、`vmax_v`、`vpp_v`、`vmean_v`、`vrms_v`、`vac_rms_v`、`vtop_v`、`vbase_v`、`vamp_v`、`freq_hz`、`period_s`、`duty_pct`、`edges_rise`、`edges_fall`、`periods_in_window`、`pwidth_s`、`nwidth_s`、`rise_s`、`fall_s`、`overshoot_pct`、`undershoot_pct`、`clip_lo`、`clip_hi`,以及出现时才有的 `freq_method`、`freq_res_hz`、`period_irregular`、`noise_like`。数字通道:`samples`、`state`、`high_frac`、`edges`、`freq_hz`、`period_s`、`duty_pct`,以及出现时才有的 `glitch_edges` 和 `runts`。在模拟通道上,当窗口内至少有两个下降沿但上升沿少于两个时,频率和占空比由下降沿得出(数字通道需要两个上升沿)。
+- 在模拟通道上,`freq_hz` 来自窗口内所有上升沿的最小二乘直线(上文由下降沿测量的情形用下降沿);边沿间隔因毛刺而不规则时用中位数(`period_irregular: true`);上升沿和下降沿都少于 2 个或过零像噪声时用 FFT 峰值(`freq_method: fft`)。数字通道用第一个到最后一个上升沿的平均间隔(有毛刺时用中位数),不给出 `freq_res_hz`。`freq_res_hz` = `freq_hz` / (边沿跨度的采样点数) 是分辨率上限:比采样间隔更快的边沿只能定位到约 +-0.5 个采样点。它只在拟合路径上给出。低采样率下较短的记录仍会限制精度。例如:0.8 MSa/s 下 5 ms 内的 9.9 kHz 信号跨越约 3960 个采样点,`freq_res_hz` 约为 2.5 Hz(250 ppm);对约 49 个上升沿的拟合通常远好于这个上限。
 - `full`:在 `basic` 的基础上,按通道增加窗口内每个完整周期(上升沿到上升沿)的统计:`cycles`、`period_min_s`、`period_max_s`、`period_std_s`、`freq_min_hz`、`freq_max_hz`、`pwidth_min_s`、`pwidth_max_s`、`nwidth_min_s`、`nwidth_max_s`、`duty_min_pct`、`duty_max_pct`(数字通道还有平均宽度 `pwidth_s`、`nwidth_s`),以及达到 10 万个边沿上限时的 `cycles_capped: true`(此时统计只覆盖前 10 万个边沿)。上升沿少于 2 个的通道或噪声通道不给出这些值。模拟通道还会得到 `range_lo_v` 和 `range_hi_v`,即在当前 V/div 和偏移下屏幕能显示的电压;位于两端的读数会被截幅。边沿列表(`edges_rise_s`、`edges_fall_s`)只在使用 `--edges N` 时出现。深存储记录需要再做一遍测量。
 - `none`:没有 `analog` / `digital` 块(仍会给出提示)。MCP 的 `detail` 参数(`summary` | `full`)是另一回事:它选择紧凑摘要还是 CLI 的完整文档。
 
@@ -199,6 +201,85 @@ python -m openm454 stream -c D0-D7 --rate 100M --duration 60s --every 1s
 - 超出范围的偏移会被限幅并给出警告,例如 `A1: offset 2.5 V out of range at 0.5 V/div (allowed -2.162 .. 2.179 V, about +-4.3 div); clamped to 2.179 V`;实际使用的值在 `applied.offset_v` 中。`watch` 的各行不显示警告。
 - 触发电平必须在屏幕上(屏幕 ADC 码值 10..245 以内,屏幕以偏移为中心),否则返回 `TRIGGER_OUT_OF_RANGE`(normal 和 auto 模式;使用 `--trig-mode force` 时,屏幕外的电平会被限幅且不报错)。不带电平时,模拟触发使用 `--offset`。
 - 截幅会给出提示(`A1 clips at the top: increase --vdiv or lower --offset`);过驱之后前端需要约 0.2-0.3 s 才能恢复。
+
+## 校准(可选)
+
+对测得电压的可选 PC 端修正。默认关闭,也绝不写入设备:设备 EEPROM 不会被触碰,示波器自己的零点校准仍然生效;这些修正叠加在它之上,在 PC 端进行。不带 `--cal` 时一切不变(没有新键,寄存器程序相同)。
+
+### 文件与命令
+
+- 文件是数据文件夹中的 `state/calibration.json`(克隆的仓库本身,安装的副本则为 `%LOCALAPPDATA%\openm454`(其他系统为 `~/.local/share/openm454`;可用 `OPENM454_HOME` 覆盖))。它不属于仓库。
+- 包中附带 `openm454/calibration_placeholder.json`:一个中性占位文件(增益 1,所有偏移为 0),每个条目都有,用你这台设备的实测值去填写。
+
+| 命令 | 作用 |
+|---|---|
+| `openm454 cal` 或 `cal status` | 当前生效的文件:`unit_id`、`created`、`note`、`neutral`、按模式的 `coverage`、`awg` 和 `threshold`、`awg_output_range_v`(不用 USB) |
+| `openm454 cal template --out FILE [--force]` | 写出待填写的中性占位文件 |
+| `openm454 cal import FILE [--bind]` | 校验文件并以原子方式安装为 `state/calibration.json`;`--bind` 会打开示波器并记录这台设备的 `unit_id` |
+
+### 使用
+
+`--cal` 被 `capture`、`watch`、`stream`、`log`、`debug plan`(共用的垂直选项)以及每个 `awg` 子命令(`set`、`sweep`、`burst`、`mod`、`dc`)接受。`capture`、`watch`、`stream` 和 `log` 上的 `--awg 'WAVE,...'` 跟随该命令的 `--cal`。MCP 服务器在 `capture`、`log_plan`、`record_start` 和 `awg` 上有布尔参数 `cal`(默认 false)。
+
+带 `--cal` 时:
+
+- 所有电压都被修正:`capture`、`watch`、保存文件的 `analyze` 和 `plot`、`stream` 和 `log` 的实时行与结果、保存的 `log` 数据块,以及钩子的 `Block.volts` 和 `info['scale']`。
+- 模拟触发电平用修正后的映射换算。
+- 数字阈值按 (目标 - offset_v) / gain 编程,范围 0..5 V。八个输入共用一个阈值 DAC,因此无法修正各输入的偏移。超出可达范围的目标会被限幅并给出警告,同时报告可达的开关电压。
+- 信号发生器电平按 (v - offset_v) / gain 编程。0..3 V 之外的请求与不带 `--cal` 时一样被拒绝。落在 0..3 V 内但所需编程值超出 0..3 V 的请求(高于 gain x 3 V + offset_v 时需编程超过 3 V,低于正的 offset_v 时需编程低于 0 V)会被限幅;限幅超过半个信号发生器步进(约 3 mV)时给出警告,其中写明校准后的输出范围(例如增益 0.98、偏移 2 mV 时输出可达 0.002 .. 2.942 V;示例数值)。限幅到同一个值的电平会被拒绝。报告的 `high_v` / `low_v` / `level_v` 是预期输出。
+
+### 模型、回退与限制
+
+对每个模式、通道和硬件 V/div(对照万用表测得):
+
+```
+code - zero_code = gain * V / volts_per_code + zero_lsb + offset_slope_lsb_per_div * offset_div
+V = ((code - zero_code) - (zero_lsb + slope * offset_div)) / gain * volts_per_code      (x 探头倍率)
+```
+
+`volts_per_code` = V/div x 8/235(1 LSB);`offset_div` 是以格为单位的偏移。
+
+- 开启 1 个或 2 个模拟通道的模式若没有条目,则回退到 `34` 条目,并给出说明和警告。完全没有条目:该通道不修正,并给出警告。反相的通道保持不修正。交流耦合和 `--bw20` 会被修正但有说明:该表是在直流耦合和全带宽下测得的。
+- 不交错的 `log`(最高 100 MSa/s)使用 `34` 表。
+- 使用 10x 探头时,该表作用于 BNC 处;探头自身的倍率不被修正。
+- 请让输入保持在绝对值约 +-7 格以内:偏移较大时,前端在此之上会压缩。
+
+### 格式
+
+JSON:`format` 为 `openm454-calibration`,`version` 为 1,`unit_id`(null 或 16 位小写十六进制)、`created`、`note`,以及
+
+```
+"analog": {mode: {channel: {vdiv_key: {"gain": g, "zero_lsb": z, "offset_slope_lsb_per_div": s}}}},
+"awg": {"gain": g, "offset_v": o},
+"threshold": {"gain": g, "offset_v": o}
+```
+
+- `mode`:`1`(开启一个模拟通道)、`2`(两个)、`34`(三个或四个)。`channel`:`A0`-`A3`。`vdiv_key`:BNC 处的硬件 V/div,以伏特的 `%g` 写法:`0.001`、`0.002`、`0.005`、`0.01`、`0.02`、`0.05`、`0.1`、`0.2`、`0.5`、`1`、`2`、`5`。
+- 界限,加载时超出会以 `CAL_INVALID` 拒绝:
+
+  | 条目 | 增益 | 偏移 |
+  |---|---|---|
+  | analog | 0.8 .. 1.25 | `zero_lsb` 在 +-30 以内,`offset_slope_lsb_per_div` 在 +-2 以内 |
+  | `awg` | 0.9 .. 1.1 | `offset_v` 在 +-0.1 V 以内 |
+  | `threshold` | 0.8 .. 1.2 | `offset_v` 在 +-0.3 V 以内 |
+
+### 设备绑定
+
+`unit_id` 是 512 字节 EEPROM 零点信息块的 SHA-256 的前 16 位十六进制(不是秘密;从不使用安全密钥)。`cal import --bind` 会记录它。绑定到另一台设备的文件在发送任何内容之前就以 `CAL_MISMATCH` 被拒绝(`capture`、`watch`、`stream`、`log`、`awg`)。没有 `unit_id` 的文件适用于任何设备。
+
+### 在哪里显示
+
+- `capture`、`stream`、`analyze` 的输出和 MCP 摘要中的 `applied.cal`(`log` 则在计划、`started` 行和结果中为 `plan.cal`,其保存的文件中为 `applied.cal`):`enabled`、`file`、`unit_id`、`created`、`neutral`、`mode`、`threshold`(`target_v`、`programmed_v`,限幅时还有 `requested_v`、`clamped`)和 `analog`:每通道一条记录(`applied`、`mode`、`gain`、`zero_lsb`、`offset_slope_lsb_per_div`、`offset_div`、`zero_code_raw`、`volts_per_code_raw`、`note`),或 `applied: false` 加 `reason`。`applied.threshold_v` 是目标值,`applied.threshold_programmed_v` 是实际编程的值。
+- `awg.cal`:`requested_v`、`programmed_v`、`expected_v`、`gain`、`offset_v`、`unit_id`、`neutral`,限幅时还有 `clamped` / `warning`。
+- 保存的 `.npz` 文件带有元数据 `cal` 和修正后的刻度,所以 `analyze` 和 `plot` 用文件中保存的修正重新换算,绝不用当前的文件。`plot` 把 y 轴标为 `V (calibrated)`。
+
+### 制作校准表
+
+用稳定的直流源和参考万用表,接在与输入相同的节点上测量。对每个模式、通道和 V/div,把(平均码值 - 零点码值)对 V / `volts_per_code` 拟合出 `gain`、`zero_lsb` 和一个与偏移成线性的项。信号发生器:输出 = gain * 编程值 + `offset_v`。阈值:开关电压 = gain * 编程值 + `offset_v`。从 `cal template` 开始,然后 `cal import FILE --bind`。
+
+### 校准错误
+
+退出码均为 2:`CAL_MISSING`(没有 `state/calibration.json` 却给了 `--cal`,或 `cal import` 的文件不存在)、`CAL_INVALID`(无法读取或未通过校验)、`CAL_MISMATCH`(文件绑定到另一台设备)。见错误一节。
 
 ## 自检
 
@@ -430,12 +511,12 @@ claude mcp add -s user openm454 -e "OPENM454_DSWAVE=<folder>" -- openm454-mcp
 | 工具 | 运行 | 主要参数(默认值) |
 |---|---|---|
 | `status` | `info` | 无。是否已连接?型号、USB 速度、固件 / FPGA 状态、上次的信号发生器设置 |
-| `capture` | `capture` | `channels`(`A0-A3,D0-D7`)、`timebase` / `duration` / `rate` / `samples`、`trigger`(`SRC:EDGE[:LEVEL]`)、`trig_mode`(有触发时为 `normal`,无触发时为 `force`)、`timeout_s`(5)、`trig_pos`、`holdoff`、`trig_retries`(4)、`decode`、`edges`、`window`、`save`(true)、`plot`(true)、垂直选项(`vdiv`、`offset`、`probe`、`coupling`、`bw20`、`threshold`)。每通道的频率、Vpp、最小/最大/平均值、占空比、上升/下降时间(数字通道:状态、频率、占空比、边沿数)、触发结果、解码帧、文件路径。未触发时返回 `TIMEOUT_NO_TRIGGER` |
+| `capture` | `capture` | `channels`(`A0-A3,D0-D7`)、`timebase` / `duration` / `rate` / `samples`、`trigger`(`SRC:EDGE[:LEVEL]`)、`trig_mode`(有触发时为 `normal`,无触发时为 `force`)、`timeout_s`(5)、`trig_pos`、`holdoff`、`trig_retries`(4)、`decode`、`edges`、`window`、`save`(true)、`plot`(true)、垂直选项(`vdiv`、`offset`、`probe`、`coupling`、`bw20`、`threshold`)、`cal`(false)。每通道的频率、Vpp、最小/最大/平均值、占空比、上升/下降时间(数字通道:状态、频率、占空比、边沿数)、触发结果、解码帧、文件路径。未触发时返回 `TIMEOUT_NO_TRIGGER` |
 | `analyze` | `analyze` | `file`(必需)、`channels`、`window`、`edges`、`decode`;对保存的 `.npz` 做测量 |
 | `plot` | `plot` | `file`(必需)、`channels`、`window`、`out`;返回 `.png` 路径 |
-| `awg` | `awg set` / `dc` / `off` / `status` | `action`(必需:`set`、`dc`、`off`、`status`);`wave`、`freq`、`high`、`low`(或 `vpp`、`dc`)、`duty`、`phase`;`dc` 用 `level`。调用结束后输出仍保持运行 |
+| `awg` | `awg set` / `dc` / `off` / `status` | `action`(必需:`set`、`dc`、`off`、`status`);`wave`、`freq`、`high`、`low`(或 `vpp`、`dc`)、`duty`、`phase`;`dc` 用 `level`;`cal`(false)。调用结束后输出仍保持运行 |
 | `log_plan` | `log --plan` | `rate`(必需)、`channels`、`duration`、`every`、`storage`、`keep_last`、`force`、垂直选项;无需设备 |
-| `record_start` | 在后台运行 `log` 或 `stream` | `mode`(必需:`log` 或 `stream`)、`channels`、`rate`、`duration`、`every`、`storage`(log:`ram` / `disk` / `none`;stream:仅 `none`,不保存)、`keep_last`、`force` 和 `hook`(仅 log;一个钩子文件,此时 `record_status` 会返回它的 `events`)、`decode`(仅 stream)、垂直选项(`vdiv`、`offset`、`probe`、`coupling`、`bw20`、`threshold`);返回任务 id。同一时间只能有一个记录,期间示波器处于忙状态 |
+| `record_start` | 在后台运行 `log` 或 `stream` | `mode`(必需:`log` 或 `stream`)、`channels`、`rate`、`duration`、`every`、`storage`(log:`ram` / `disk` / `none`;stream:仅 `none`,不保存)、`keep_last`、`force` 和 `hook`(仅 log;一个钩子文件,此时 `record_status` 会返回它的 `events`)、`decode`(仅 stream)、垂直选项(`vdiv`、`offset`、`probe`、`coupling`、`bw20`、`threshold`)、`cal`(false);返回任务 id。同一时间只能有一个记录,期间示波器处于忙状态 |
 | `record_status` | 无(读取任务的输出) | `job`(最近一个)、`lines`(3);最近的状态行,完成后给出结果;带 `hook` 时还有 `events` 和 `events_seen` |
 | `record_stop` | `stop` | `job`、`wait_s`(120);干净地停止并返回结果 |
 | `release` | `release` | 无;释放被崩溃的程序遗留在运行状态的示波器 |
@@ -455,6 +536,7 @@ claude mcp add -s user openm454 -e "OPENM454_DSWAVE=<folder>" -- openm454-mcp
 | `recover` | 复位并重新加载挂起示波器的 FPGA;有意保留为 CLI 手动步骤 |
 | `debug` | 原始寄存器访问,有意不向智能体开放 |
 | `stop` | `record_stop` 内部使用它 |
+| `cal` | 校准文件在终端中管理(`cal template`、`cal import`);工具只在 `cal: true` 时应用它 |
 | `awg sweep`、`burst`、`mod` | `awg` 工具只覆盖 `set`、`dc`、`off`、`status` |
 
 有 shell 的智能体可以用 CLI 完成以上所有操作。
@@ -476,12 +558,15 @@ claude mcp add -s user openm454 -e "OPENM454_DSWAVE=<folder>" -- openm454-mcp
 | `STREAM_BETTER`、`NEEDS_FORCE` | 2 | `log` 超过了它的无间隙上限(见上文) |
 | `HOOK_ERROR` | 2 | `log --hook`:钩子文件在 `setup()`、`process()` 或 `finish()` 中抛出异常,或 `process()` 返回了 `None` 和 dict 之外的东西;对 `process()` / `finish()`,`error.trace` 给出回溯的末尾部分,此前已记录的数据会保留;`setup()` 失败时不会记录任何数据 |
 | `SELFTEST_FAILED` | 1 | 仅 MCP `selftest`(CLI 以 1 退出并列出各项检查):某项检查失败;`failed_checks` 给出 measured 对比 expected(信号检查失败通常意味着接线与标准夹具不同,无需接线的检查失败则指向示波器或其 USB 连接) |
+| `CAL_MISSING` | 2 | 给了 `--cal` 但没有 `state/calibration.json`,或 `cal import` 指定的文件不存在([校准](#校准可选)) |
+| `CAL_INVALID` | 2 | 校准文件无法读取或未通过校验(format/version、未知的模式/通道/V/div 键、unit_id、数值超出界限) |
+| `CAL_MISMATCH` | 2 | 校准文件绑定到另一台设备;在发送任何内容之前就被拒绝 |
 | `UNSAFE_OPERATION` | 7 | 被安全规则拒绝 |
 | `TIMEOUT_WATCHDOG`、`TIMEOUT_DATA`、`USB_ERROR`、`PROTOCOL_ERROR`、`HOST_TOO_SLOW` | 6 | 运行期间设备或主机出错;此前的数据会保留 |
 
 ## 目录结构
 
-- `openm454/` 驱动:带安全白名单的 USB 传输层、设备启动(FPGA、安全握手、校准)、寄存器编译器(`mso.py`,精确复现 DSWave 的寄存器程序)、数据流解码器(`packet.py`)、采集引擎、循环模式记录器(`logger.py`)、`log --hook` 的实时处理钩子(`hook.py`)、测量、绘图、AWG、CLI、自检、协议解码器(`decode.py`)、测试用的合成总线流量(`protosim.py`)以及 MCP 服务器(`mcp_server.py`)。
+- `openm454/` 驱动:带安全白名单的 USB 传输层、设备启动(FPGA、安全握手、校准)、寄存器编译器(`mso.py`,精确复现 DSWave 的寄存器程序)、数据流解码器(`packet.py`)、采集引擎、循环模式记录器(`logger.py`)、`log --hook` 的实时处理钩子(`hook.py`)、测量、绘图、AWG、CLI、自检、协议解码器(`decode.py`)、测试用的合成总线流量(`protosim.py`)、可选的 PC 端校准(`calib.py`,附带中性的 `calibration_placeholder.json`)以及 MCP 服务器(`mcp_server.py`)。
 - `tests/` 离线测试:golden 寄存器和 AWG 程序、数据流解码器、针对模拟设备的采集引擎、测量、基于合成流量的协议解码器、MCP 服务器、安全规则(`python -m pytest tests`)。
 - `docs/PROTOCOL.md` 还原出的 USB 协议。
 - `.github/workflows/`:CI(在 Windows 和 Linux、Python 3.10-3.14 上运行离线测试,使用 `OPENM454_NO_USB=1`,让驱动拒绝打开 USB;检查受版本控制的文件不含本地路径;构建包),在推送到 main 和提交 pull request 时触发;与 `openm454.__version__` 相同的标签 `vX.Y.Z` 会运行测试、构建并发布到 PyPI(trusted publishing),同时创建 GitHub release。

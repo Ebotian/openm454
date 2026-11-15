@@ -52,6 +52,7 @@ VERTICAL = {
     'coupling': {'type': 'string', 'description': "'dc' / 'ac' or per channel 'A1=ac'"},
     'bw20': {'type': 'string', 'description': 'channels with the 20 MHz bandwidth limit, e.g. A1,A2'},
     'threshold': {'type': 'string', 'description': "digital input threshold 0..5 V (default '1.4V')"},
+    'cal': {'type': 'boolean', 'description': "apply this unit's calibration file (installed with 'openm454 cal import'): corrected volts, trigger level, threshold and generator levels; default false (the result's applied.cal says what was corrected)"},
 }
 DECODE = {'type': 'array', 'items': {'type': 'string'},
           'description': "protocol decoders: 'uart:rx=D4,baud=115200', 'spi:clk=D1,mosi=D3,miso=D2,cs=D0,mode=0', "
@@ -120,7 +121,8 @@ TOOLS = [
                              'freq': {'type': 'string', 'description': "e.g. '10k'"},
                              'high': {'type': 'string'}, 'low': {'type': 'string'}, 'vpp': {'type': 'string'},
                              'dc': {'type': 'string'}, 'duty': {'type': 'string'}, 'phase': {'type': 'string'},
-                             'level': {'type': 'string', 'description': "dc level, e.g. '1.2V'"}}, ['action'])},
+                             'level': {'type': 'string', 'description': "dc level, e.g. '1.2V'"},
+                             'cal': {'type': 'boolean', 'description': "apply this unit's calibration file (installed with 'openm454 cal import'): corrected volts, trigger level, threshold and generator levels; default false (the result's applied.cal says what was corrected)"}}, ['action'])},
     {'name': 'log_plan', 'title': 'Plan a gap-free log',
      'description': 'Plan a gap-free loop-mode log without touching the scope: data rate, verdict, gap-free limit, '
                     'storage, and above the readout limit the comparison with stream (STREAM_BETTER / NEEDS_FORCE '
@@ -439,7 +441,8 @@ def summarize(doc):
     applied = doc.get('applied') or {}
     if applied:
         out['applied'] = {k: v for k, v in applied.items()
-                          if k in ('channels', 'vdiv_v', 'offset_v', 'probe', 'threshold_v', 'rate_hz', 'mode')}
+                          if k in ('channels', 'vdiv_v', 'offset_v', 'probe', 'threshold_v', 'threshold_programmed_v',
+                                   'rate_hz', 'mode', 'cal')}
         if applied.get('trigger'):
             out['trigger'] = {k: v for k, v in applied['trigger'].items() if v is not None}
     if doc.get('acq'):
@@ -458,7 +461,7 @@ def summarize(doc):
                 out[group][ch] = d
     if doc.get('decode'):
         out['decode'] = [_trim_decode(r) for r in doc['decode']]
-    for k in ('error', 'files', 'plan', 'hook', 'device', 'awg', 'awg_last', 'persists_after_exit', 'note', 'records',
+    for k in ('error', 'files', 'plan', 'hook', 'device', 'awg', 'awg_last', 'cal', 'persists_after_exit', 'note', 'records',
               'signal_s', 'seams_s', 'stopped_by', 'warnings', 'hints'):
         if doc.get(k) not in (None, {}, []):
             out[k] = doc[k]
@@ -480,6 +483,8 @@ def _vertical(a):
     for k in ('vdiv', 'offset', 'probe', 'coupling', 'bw20', 'threshold'):
         if a.get(k) not in (None, ''):
             out += _flag('--' + k, a[k])
+    if a.get('cal'):
+        out.append('--cal')
     return out
 
 
@@ -532,13 +537,13 @@ def awg_args(a):
     if act == 'dc':
         if not a.get('level') or set(extra) - {'level'}:
             raise ToolError('INVALID_ARG', "awg dc takes only level, e.g. '1.2V'")
-        return ['awg', 'dc', '--level', str(a['level'])]
+        return ['awg', 'dc', '--level', str(a['level'])] + (['--cal'] if a.get('cal') else [])
     if a.get('level'):
         raise ToolError('INVALID_ARG', 'level is for action dc', 'awg set takes wave, freq, high/low (or vpp, dc)')
     args = ['awg', 'set']
     for k in ('wave', 'freq', 'high', 'low', 'vpp', 'dc', 'duty', 'phase'):
         args += _opt(a, k)
-    return args
+    return args + (['--cal'] if a.get('cal') else [])
 
 
 def record_args(a, plan=False):

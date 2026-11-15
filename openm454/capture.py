@@ -2,7 +2,9 @@
 
 Time base: t = 0 at the trigger point (or at the window centre for untriggered captures);
 sample k of a channel sampled at rate r is at t = t0 + k / r.
-Analog volts = (code - zero_code) * volts_per_code * probe, volts_per_code = vdiv * 8 / 235.
+Analog volts = (code - zero_code) * volts_per_code * probe, volts_per_code = vdiv * 8 / 235. With --cal
+(openm454.calib) the scale stores the corrected zero_code / volts_per_code (raw values in scale['cal']), so a saved
+capture reconverts with its own correction.
 """
 import json
 import os
@@ -27,6 +29,10 @@ class Capture:
     # ---------------------------------------------------------------- scaling / time
     def scale(self, ch):
         return self.meta['channels'][ch]
+
+    def calibration(self):
+        """The calibration record of this capture ({'enabled': False} for an uncorrected one or an old file)."""
+        return self.meta.get('cal') or {'enabled': False}
 
     def volts(self, ch):
         s = self.scale(ch)

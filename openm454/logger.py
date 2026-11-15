@@ -32,6 +32,7 @@ Storage (most logs are short: RAM is the default, an SSD written at 100+ MB/s fo
 Every .npz is a normal capture file (load_capture / analyze / plot); t = 0 is the first sample of the log.
 """
 import collections
+import copy
 import json
 import math
 import os
@@ -129,6 +130,8 @@ def loop_hal(st, rate, fold=False, divider=None):
     import copy
     s = copy.copy(st)
     s.duration, s.rate, s.trig_source, s.trig_mode = 1.0, None, None, 'force'
+    if getattr(s, 'cal', False) and not fold:
+        s.cal_mode = '34'        # without interleave every channel runs on its own converter, as with 3-4 channels
     hal, scale, warnings, _ = hal_config(s)
     hal['trigger']['enable'] = 0
     hal.update(loop=1, loop_fold=int(bool(fold)), rate=rate, divider=divider, auto_rate=0, storage_depth=LOOP_DEPTH,
@@ -341,6 +344,9 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         'backlog_growth_mb_s': round(max(0.0, data_bps - R) / 1e6, 1), 'gapfree_max_s': gapfree,
         'backlog_stop_mb': round(BACKLOG_STOP / 1e6, 1), 'recommendation': recommendation,
         'stream_alternative': alt, 'provisional': bool(defer and needs_probe), 'warnings': warnings}
+    if hal.get('cal'):
+        from .scope import cal_record
+        pub['cal'] = cal_record(hal, scale, st.analog)
     return dict(pub, _hal=hal, _scale=scale, _prog=prog, _geom=geom, _every_blocks=every_blocks,
                 _chunk_blocks=chunk_blocks, _data_bps=data_bps, _pkt_s=pkt_s, _ram_budget=ram_budget,
                 _disk_bytes=disk_bytes, _needs_probe=needs_probe, _readout_key=rkey, _force=bool(force and too_long),
@@ -793,7 +799,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
         piece_bytes = max(blk, min(piece_bytes, int(hookmod.PIECE_S * data_bps) // blk * blk))
         try:
             hook.setup({'rate_hz': rate, 'analog': list(st.analog), 'digital': list(st.digital),
-                        'scale': {c: dict(pl['_scale'][c]) for c in st.analog}, 'every_s': pl['every_s'],
+                        'scale': {c: copy.deepcopy(pl['_scale'][c]) for c in st.analog}, 'every_s': pl['every_s'],
                         'duration_s': pl['duration_s'], 'storage': pl['storage'], 'block_samples': packet.BLOCK_SAMPLES,
                         'piece_s': piece_bytes // blk * packet.BLOCK_SAMPLES / rate})
         except hookmod.HookError as e:
@@ -814,6 +820,8 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                  'acq': {'mode': 'loop', 'analog_rate_hz': rate if st.analog else None,
                          'digital_rate_hz': rate if st.digital else None, 'triggered': False},
                  'trigger': {'source': None, 'mode': 'force'}, 'warnings': list(pl['warnings'])}
+    if applied.get('cal'):
+        meta_base['cal'] = applied['cal']
     w = _Writer(layout, rate, pl['_scale'], storage, pl['_chunk_blocks'], stem, meta_base, emit, heartbeat,
                 pl['_ram_budget'], pl['ram_ring'], pl['_every_blocks'], hook=hook)
     w.t0_wall = t0_wall
@@ -1052,4 +1060,15 @@ def scope_applied(st, pl):
                          for c in st.analog},
             'probe': {c: sc[c]['probe'] for c in st.analog},
             'coupling': {c: st.coupling.get(c, 'dc') for c in st.analog}, 'bw20': st.bw20, 'invert': st.invert,
-            'threshold_v': pl['_hal']['threshold_uv'] / 1e6, 'rate_hz': pl['rate_hz'], 'mode': 'loop'}
+            'threshold_v': pl['_hal']['threshold_uv'] / 1e6, 'rate_hz': pl['rate_hz'], 'mode': 'loop',
+            **_cal_applied(st, pl)}
+
+
+def _cal_applied(st, pl):
+    """--cal: the threshold target / programmed value and the calibration record (nothing without --cal)."""
+    if not pl['_hal'].get('cal'):
+        return {}
+    from .scope import cal_record
+    rec = cal_record(pl['_hal'], pl['_scale'], st.analog)
+    return {'threshold_v': rec['threshold']['target_v'], 'threshold_programmed_v': rec['threshold']['programmed_v'],
+            'cal': rec}

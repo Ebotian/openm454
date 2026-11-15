@@ -87,6 +87,8 @@ def _fwd(p):
 
 
 # ------------------------------------------------------------------------------------------- arguments
+CAL_HELP = ("apply this unit's calibration (state/calibration.json, see 'openm454 cal'): corrected volts, trigger "
+            "level and digital threshold, and the --awg levels; off by default")
 AWG_SPEC_HELP = ("also set the signal generator first: 'WAVE,FREQ,LOW,HIGH[,DUTY]', e.g. 'sine,10k,0V,2V' or "
                  "'square,1k,0V,3V,25%%' (0..3 V; it keeps running after the command)")
 MEASURE_HELP = ('basic (default): the standard measurements per channel (analog: min/max/mean/pp/rms, top/base, '
@@ -118,6 +120,7 @@ def _vertical_args(p):
     g.add_argument('--probe', default=None, help="probe attenuation: '10x' or per channel 'A2=10x' (default 1x); "
                                                  "--vdiv, --offset and trigger levels are then at the probe tip")
     g.add_argument('--threshold', default='1.4V', help='logic threshold of the digital inputs, 0..5 V (default 1.4V)')
+    g.add_argument('--cal', action='store_true', help=CAL_HELP)
 
 
 def _timing_trigger_output_args(p, cmd='capture'):
@@ -331,6 +334,10 @@ def build_parser():
         x.add_argument('--freq', default='1k', help='carrier frequency (default 1k)')
     dcp = asub.add_parser('dc', help='steady DC level (0..3 V, 6.4 mV steps)')
     dcp.add_argument('--level', required=True, help='output level, e.g. 1.2V')
+    for x in (s, sw, bu, mo, dcp):
+        x.add_argument('--cal', action='store_true',
+                       help="apply this unit's generator calibration (state/calibration.json): the levels given are "
+                            "the output wanted; the programmed levels stay within 0..3 V (off by default)")
     asub.add_parser('off', help='stop the output and park it at 0 V')
     asub.add_parser('status', help='the last setting made by openm454 (the generator cannot be read back)')
     pl = sub.add_parser('plot', help='render a saved capture (.npz) to PNG (no device)')
@@ -362,6 +369,17 @@ def build_parser():
     su.add_argument('--dswave', default=None, metavar='FOLDER',
                     help='DSWave 1.2.1 folder (or its DSWave.exe): checked, the bitstream cached, the path saved in '
                          'state/dswave.json of the data folder')
+    ca = sub.add_parser('cal', help="opt-in calibration file of this unit (state/calibration.json): status, a neutral "
+                                    "template to fill in, import (no USB unless --bind)")
+    csub = ca.add_subparsers(dest='cal_cmd')
+    csub.add_parser('status', help='the calibration file in force: unit, coverage, generator and threshold (default)')
+    ct = csub.add_parser('template', help='write the neutral placeholder (gain 1, every offset 0) to fill in')
+    ct.add_argument('--out', required=True, help='file to write, e.g. mycal.json')
+    ct.add_argument('--force', action='store_true', help='overwrite an existing file')
+    ci = csub.add_parser('import', help='check a calibration file and install it as state/calibration.json')
+    ci.add_argument('file', help='the calibration JSON')
+    ci.add_argument('--bind', action='store_true',
+                    help='record the connected unit in the file (opens the scope): it is then refused on another unit')
     sub.add_parser('release', help='make sure the device is idle and released')
     sub.add_parser('recover', help='reset and reload the FPGA (like a power-up) when the scope hangs; a scope '
                                    'that does not answer register reads still needs a replug')
@@ -388,8 +406,7 @@ def cmd_capture(args, scope, emit=True):
     from . import plot as plotmod
     from .units import window
     st = settings_from_args(args)
-    if args.awg:
-        scope.awg_from_spec(args.awg)
+    awg_st = scope.awg_from_spec(args.awg, **_cal_kw(args)) if args.awg else None
     cap = scope.capture(st)
     _idle(_n_values(cap))
     win = window(args.window)
@@ -413,6 +430,7 @@ def cmd_capture(args, scope, emit=True):
     res['files'] = files
     res['hints'] = cap.meta.get('hints', [])
     res['warnings'] = cap.meta.get('warnings', [])
+    _awg_into(res, awg_st)
     if emit:
         _emit(res)
     return cap, res
@@ -555,8 +573,7 @@ def cmd_watch(args, scope):
     total = si(args.duration_total, 's', '--for') if args.duration_total else None
     win = window(args.window)
     fields, need = _watch_fields(args)
-    if args.awg:
-        scope.awg_from_spec(args.awg)
+    awg_st = scope.awg_from_spec(args.awg, **_cal_kw(args)) if args.awg else None
     t0 = due = time.time(); i = 0; hist = {}; stopped_by = 'count'
     last = None
     while True:
@@ -567,6 +584,8 @@ def cmd_watch(args, scope):
         flat = {'%s.%s' % (ch, k): v for ch, m in chans.items() for k, v in m.items()}
         keys = fields or [k for k in flat if k.split('.')[1] in ('vpp_v', 'freq_hz', 'duty_pct', 'state', 'vmean_v')]
         line = {'i': i, 't_s': round(start - t0, 3), 'triggered': cap.meta['acq'].get('triggered')}
+        if i == 0 and awg_st and awg_st.get('cal'):
+            line['awg'] = awg_st
         if cap.meta['acq'].get('trigger_check') not in (None, 'unchecked', 'ok'):
             line['trigger_check'] = cap.meta['acq']['trigger_check']
         if cap.meta['acq'].get('trigger_misfires'):
@@ -632,8 +651,7 @@ def cmd_stream(args, scope):
     from .units import si, window
     st, total, rec_s, chained = stream_plan(args)
     win = window(args.window)                      # the final document: measurements, dump, decode and plot
-    if args.awg:
-        scope.awg_from_spec(args.awg)
+    awg_st = scope.awg_from_spec(args.awg, **_cal_kw(args)) if args.awg else None
     every = si(args.every, 's', '--every')
     if not chained:
         try:
@@ -651,6 +669,7 @@ def cmd_stream(args, scope):
         res = {'ok': True, 'cmd': 'stream', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
         _report(cap, args, res, win)
         _stream_files(args, cap, res, win)
+        _awg_into(res, awg_st)
         _emit(res)
         return
     import copy
@@ -709,6 +728,7 @@ def cmd_stream(args, scope):
         _stream_files(args, last, res, win)
         if saved:
             res['files']['records'] = saved
+    _awg_into(res, awg_st)
     _emit(res)
 
 
@@ -769,16 +789,19 @@ def cmd_log(args, scope):
     from . import logger
     from .capture import new_path
     st, pl = log_plan(args, scope.dev.zero_info, defer=True)
+    if st.cal:                                          # --cal: refused before the readout probe touches the scope
+        from . import calib
+        calib.check_unit(calib.active(), scope.dev.zero_info)
     scope._check_link()
     if pl['_needs_probe']:
         r, kept_up = logger.measure_readout(scope, pl)  # this channel set's readout, remembered in state/host.json
         _emit({'ok': True, 'cmd': 'log', 'probe': {'readout_mb_s': round(r / 1e6, 1), 'kept_up': kept_up,
                                                    'data_mb_s': round(pl['_data_bps'] / 1e6, 1)}})
         st, pl = log_plan(args, scope.dev.zero_info)    # now with the measured readout: may refuse
-    if args.awg:                                        # only once the log will run
-        scope.awg_from_spec(args.awg)
+    awg_st = scope.awg_from_spec(args.awg, **_cal_kw(args)) if args.awg else None   # only once the log will run
     stem = None if pl['storage'] == 'none' else new_path(_log_out(args), args.tag)
-    _emit({'ok': True, 'cmd': 'log', 'started': True, 'plan': logger.public(pl), 'out_stem': _fwd(stem)})
+    _emit({'ok': True, 'cmd': 'log', 'started': True, 'plan': logger.public(pl), 'out_stem': _fwd(stem),
+           **({'awg': awg_st} if awg_st and awg_st.get('cal') else {})})
     try:
         res = logger.run(scope, st, pl, stem, emit=_emit, stop_flag=_throttled(stop_requested),
                          heartbeat=_HEARTBEAT[0], on_final=_idle, hook=_log_hook(args))
@@ -865,22 +888,24 @@ def cmd_awg(args, scope):
     if args.awg_cmd == 'off':
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_off()}); return
     if args.awg_cmd in ('sweep', 'burst', 'mod'):
-        lv = dict(high=si(args.high, 'V', '--high'), low=si(args.low, 'V', '--low'), duty=si(args.duty, None, '--duty'))
+        lv = dict(high=si(args.high, 'V', '--high'), low=si(args.low, 'V', '--low'), duty=si(args.duty, None, '--duty'),
+                  cal=args.cal)
         if args.awg_cmd == 'sweep':
             st = scope.awg_sweep(si(args.start, 'Hz', '--start'), si(args.end, 'Hz', '--end'), si(args.time, 's', '--time'),
                                  'log' if args.log else 'linear', args.wave, **lv)
         elif args.awg_cmd == 'burst':
             st = scope.awg_burst(args.wave, si(args.freq, 'Hz', '--freq'), lv['high'], lv['low'], args.cycles,
-                                 si(args.period, 's', '--period'), lv['duty'])
+                                 si(args.period, 's', '--period'), lv['duty'], cal=args.cal)
         else:
             st = scope.awg_modulate(args.kind, args.wave, si(args.freq, 'Hz', '--freq'), lv['high'], lv['low'],
                                     args.mod_wave, si(args.mod_freq, 'Hz', '--mod-freq'), si(args.depth, None, '--depth'),
                                     si(args.deviation, 'Hz', '--deviation') if args.deviation else None,
-                                    si(args.hop, 'Hz', '--hop') if args.hop else None, lv['duty'])
+                                    si(args.hop, 'Hz', '--hop') if args.hop else None, lv['duty'], cal=args.cal)
         _emit({'ok': True, 'cmd': 'awg', 'awg': st, 'persists_after_exit': True})
         return
     if args.awg_cmd == 'dc':
-        _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_dc(si(args.level, 'V', '--level')), 'persists_after_exit': True})
+        _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_dc(si(args.level, 'V', '--level'), cal=args.cal),
+               'persists_after_exit': True})
         return
     if args.awg_cmd == 'status':
         _emit({'ok': True, 'cmd': 'awg', 'awg': scope.awg_status(), 'note': 'last state set by openm454 (device is write-only)'}); return
@@ -890,8 +915,57 @@ def cmd_awg(args, scope):
     else:
         high = si(args.high, 'V', '--high') if args.high else 3.0
         low = si(args.low, 'V', '--low') if args.low else 0.0
-    st = scope.awg_set(args.wave, si(args.freq, 'Hz', '--freq'), high, low, si(args.duty, None, '--duty'), si(args.phase, None, '--phase'))
+    st = scope.awg_set(args.wave, si(args.freq, 'Hz', '--freq'), high, low, si(args.duty, None, '--duty'),
+                       si(args.phase, None, '--phase'), cal=args.cal)
     _emit({'ok': True, 'cmd': 'awg', 'awg': st, 'persists_after_exit': True})
+
+
+def _awg_into(res, awg_st):
+    """--awg with --cal: the generator record (programmed / expected levels) and its clamp warning in the result."""
+    if awg_st and awg_st.get('cal'):
+        res['awg'] = awg_st
+        if awg_st['cal'].get('warning'):
+            res['warnings'] = list(res.get('warnings') or []) + [awg_st['cal']['warning']]
+
+
+def _cal_kw(args):
+    """{'cal': True} with --cal, else nothing (scope objects without the keyword keep working)."""
+    return {'cal': True} if getattr(args, 'cal', False) else {}
+
+
+def cmd_cal(args):
+    """openm454 cal [status] | template --out FILE | import FILE [--bind] (only --bind opens the scope)."""
+    from . import calib
+    sub = args.cal_cmd or 'status'
+    if sub == 'template':
+        if os.path.exists(args.out) and not args.force:
+            raise DscopeError('INVALID_ARG', '%s exists' % _fwd(args.out), 'choose another --out or add --force')
+        with open(args.out, 'w', encoding='utf-8') as f:
+            json.dump(calib.placeholder(), f, indent=1)
+        return {'ok': True, 'cmd': 'cal', 'file': _fwd(os.path.abspath(args.out)),
+                'note': 'neutral placeholder: replace gain / zero_lsb / offset_slope_lsb_per_div per mode, channel and '
+                        'V/div, and awg / threshold gain and offset_v, with values measured on your unit; then '
+                        'openm454 cal import FILE'}
+    if sub == 'import':
+        doc = calib.read(args.file)
+        if args.bind:
+            from .scope import Scope
+            with Scope() as s:
+                doc['unit_id'] = calib.unit_id(s.dev.zero_info)
+        path = calib.save(doc)
+        return {'ok': True, 'cmd': 'cal', 'installed': _fwd(path), 'unit_id': doc.get('unit_id'),
+                'neutral': calib.neutral(doc), 'coverage': calib.coverage(doc)}
+    path = calib.PATH
+    res = {'ok': True, 'cmd': 'cal', 'file': _fwd(path), 'exists': os.path.exists(path)}
+    if res['exists']:
+        doc = calib.read(path)
+        res.update({'unit_id': doc.get('unit_id'), 'created': doc.get('created'), 'note': doc.get('note'),
+                    'neutral': calib.neutral(doc), 'coverage': calib.coverage(doc),
+                    'awg': doc.get('awg'), 'threshold': doc.get('threshold'),
+                    'awg_output_range_v': [round(x, 4) for x in calib.awg_range(doc)]})
+    else:
+        res['note'] = "no calibration installed: --cal is refused; 'openm454 cal template --out FILE' writes one to fill in"
+    return res
 
 
 def cmd_offline(args):
@@ -908,6 +982,8 @@ def cmd_offline(args):
         _emit({'ok': True, 'cmd': 'plot', 'files': {'png': _fwd(plotmod.plot(cap, out, window=win, channels=chans, title=os.path.basename(args.file)))}})
     else:
         res = {'ok': True, 'cmd': 'analyze', 'applied': cap.meta.get('applied'), 'acq': cap.meta.get('acq')}
+        if cap.meta.get('cal'):
+            res['cal'] = cap.calibration()
         res.update(_measurements(cap, args, win, chans))
         if args.dump:
             res['dump'] = {ch: cap.dump(ch, args.dump, win) for ch in (chans or cap.channels())}
@@ -1023,6 +1099,14 @@ def main(argv=None):
                 'code': 'INVALID_ARG', 'message': 'could not read DSWave or write the data folder: %s' % e,
                 'hint': 'check the DSWave folder and that the data folder (OPENM454_HOME) is writable'}})
             return 2
+    if args.cmd == 'cal':
+        try:
+            _emit(cmd_cal(args))
+            return 0
+        except DscopeError as e:
+            _emit({'ok': False, 'cmd': 'cal', 'error': e.to_dict()}); return e.exit_code
+        except OSError as e:
+            _emit({'ok': False, 'cmd': 'cal', 'error': {'code': 'INVALID_ARG', 'message': str(e)}}); return 2
     if args.cmd == 'stop':
         os.makedirs(os.path.dirname(STOP_REQUEST), exist_ok=True)
         with open(STOP_REQUEST, 'w') as f:

@@ -199,16 +199,17 @@ log on stderr), `--json` (accepted, output is always JSON).
 | `capture` | one triggered (or untriggered) record: measurements, `.png`, `.npz` | see below |
 | `watch` | repeated captures, one JSON line each (monitoring) | the `capture` options, `--every 0.5s` (start to start), `--count N` (default 20 when neither `--count` nor `--for` is given), `--for T`, `--fields A1.freq_hz,...`, `--stop-when EXPR`, `--save-last` (see [watch](https://github.com/FrostFlops/openm454#watch)) |
 | `stream` | untriggered recording sent while it is acquired, live statistics | the `capture` options, `--every 1s`, `--save-each`, `--record-first` |
-| `log` | gap-free endless recording (loop mode), one rate for all channels | `-c`, `--rate 1M`, `--duration 10s\|forever`, `--every 1s`, `--storage ram\|disk\|none` (`--no-save` = none), `--keep-last`, `--chunk`, `--ram`, `--plan`, `--force`, `--remeasure`, `--out`, `--tag`, `--awg`, `--hook FILE.py` (live processing, see [Live processing hook](https://github.com/FrostFlops/openm454#live-processing-hook-log---hook)), the vertical options |
+| `log` | gap-free endless recording (loop mode), one rate for all channels | `-c`, `--rate 1M`, `--duration 10s\|forever`, `--every 1s`, `--storage ram\|disk\|none` (`--no-save` = none), `--keep-last`, `--chunk`, `--ram`, `--plan`, `--force`, `--remeasure`, `--out`, `--tag`, `--awg`, `--cal`, `--hook FILE.py` (live processing, see [Live processing hook](https://github.com/FrostFlops/openm454#live-processing-hook-log---hook)), the vertical options |
 | `bench` | this PC's recording limits (free RAM, decode and disk speed, USB readout); stores the RAM / disk allowance | `--ram 8GB`, `--disk 50GB`, `--dir`, `--disk-test-mb`, `--no-device` |
-| `awg set` | continuous waveform on the MCX output (0..3 V) | `--wave sine\|square\|triangle\|noise`, `--freq 1k`, `--low/--high` or `--vpp/--dc`, `--duty 50%`, `--phase` |
-| `awg sweep` | frequency sweep, repeating | `--start`, `--end` (required), `--time 100ms`, `--log`, `--wave`, `--high`, `--low`, `--duty` |
-| `awg burst` | N periods of the carrier every period | `--cycles`, `--period 10ms`, `--freq`, `--wave`, `--high`, `--low`, `--duty` |
-| `awg mod` | AM / FM / FSK of the carrier | `--kind am\|fm\|fsk`, `--mod-wave`, `--mod-freq`, `--depth`, `--deviation`, `--hop`, `--freq`, `--wave`, `--high`, `--low`, `--duty` |
-| `awg dc` | steady DC level (0..3 V, 6.4 mV steps) | `--level` (required) |
+| `awg set` | continuous waveform on the MCX output (0..3 V) | `--wave sine\|square\|triangle\|noise`, `--freq 1k`, `--low/--high` or `--vpp/--dc`, `--duty 50%`, `--phase`, `--cal` |
+| `awg sweep` | frequency sweep, repeating | `--start`, `--end` (required), `--time 100ms`, `--log`, `--wave`, `--high`, `--low`, `--duty`, `--cal` |
+| `awg burst` | N periods of the carrier every period | `--cycles`, `--period 10ms`, `--freq`, `--wave`, `--high`, `--low`, `--duty`, `--cal` |
+| `awg mod` | AM / FM / FSK of the carrier | `--kind am\|fm\|fsk`, `--mod-wave`, `--mod-freq`, `--depth`, `--deviation`, `--hop`, `--freq`, `--wave`, `--high`, `--low`, `--duty`, `--cal` |
+| `awg dc` | steady DC level (0..3 V, 6.4 mV steps) | `--level` (required), `--cal` |
 | `awg off`, `awg status` | park the output at 0 V / show the last setting | |
 | `plot` | render a saved `.npz` to PNG (no device) | `file`, `--window`, `--channels`, `--out` |
 | `analyze` | measure a saved `.npz` (no device) | `file`, `--window`, `--channels`, `--edges N`, `--dump N`, `--measure`, `--decode SPEC` |
+| `cal` | opt-in PC-side calibration file ([Calibration](https://github.com/FrostFlops/openm454#calibration-opt-in)): `status` (default, no USB), `template`, `import` | `status`, `template --out FILE [--force]`, `import FILE [--bind]` |
 | `selftest` | verify the scope ([Self-test](https://github.com/FrostFlops/openm454#self-test)) | `--quick`, `--no-awg`, `--fixture file\|standard` |
 | `setup` | where the FPGA bitstream comes from; `--dswave <folder>` records DSWave's folder once (no USB) | `--dswave` |
 | `release` | make sure the device is idle and released | |
@@ -219,7 +220,8 @@ log on stderr), `--json` (accepted, output is always JSON).
 `capture`, `watch` and `stream` share these options:
 
 - channels / vertical: `-c A0-A3,D0-D7` (also `analog`, `digital`), `--vdiv 1V`, `--offset 0V`, `--coupling dc|ac`,
-  `--bw20 A1,A2`, `--invert A2`, `--probe 10x|A2=10x`, `--threshold 1.4V`. Per-channel values are written
+  `--bw20 A1,A2`, `--invert A2`, `--probe 10x|A2=10x`, `--threshold 1.4V`, `--cal` (apply the calibration file, see
+  [Calibration](https://github.com/FrostFlops/openm454#calibration-opt-in); off by default). Per-channel values are written
   `A0=500mV,A2=2V`.
 - timing: `--timebase` (window = 10 divisions), `--duration`, `--samples`, `--rate`.
 - trigger: `--trig SRC:EDGE[:LEVEL]` (e.g. `A1:rise:1.4V`, `D0:fall`, `D0:pulse>:200us`), `--trig-mode
@@ -270,10 +272,14 @@ Exit codes: 0 ok, 1 other (a failed self-test, an internal error, interrupted), 
 - `basic` (default). Analog channels: `samples`, `vmin_v`, `vmax_v`, `vpp_v`, `vmean_v`, `vrms_v`, `vac_rms_v`,
   `vtop_v`, `vbase_v`, `vamp_v`, `freq_hz`, `period_s`, `duty_pct`, `edges_rise`, `edges_fall`, `periods_in_window`,
   `pwidth_s`, `nwidth_s`, `rise_s`, `fall_s`, `overshoot_pct`, `undershoot_pct`, `clip_lo`, `clip_hi`, and when they
-  occur `freq_method`, `period_irregular`, `noise_like`. Digital channels: `samples`, `state`, `high_frac`, `edges`,
+  occur `freq_method`, `freq_res_hz`, `period_irregular`, `noise_like`. Digital channels: `samples`, `state`, `high_frac`, `edges`,
   `freq_hz`, `period_s`, `duty_pct`, and when they occur `glitch_edges` and `runts`. On analog channels, frequency and duty come
   from falling edges when the window holds at least two falls but fewer than two rises (digital channels need two
   rising edges).
+- On analog channels `freq_hz` comes from a least-squares line through all rising edges in the window (falling edges in the fall-to-fall case above); the median edge interval when glitches make the intervals irregular (`period_irregular: true`); the FFT peak when there are fewer than 2 rising and fewer than 2 falling edges or the crossings are noise-like (`freq_method: fft`). Digital channels use the mean interval from the first to the last rising edge (the median with glitches) and give no `freq_res_hz`.
+  `freq_res_hz` = `freq_hz` / (edge span in samples) is the resolution bound: an edge faster than the sample
+  interval is placed to about +-0.5 sample only. It is given on the fitted path only. A record that is short at a low
+  rate still bounds the accuracy. Example: 9.9 kHz at 0.8 MSa/s over 5 ms spans about 3960 samples, so `freq_res_hz` is about 2.5 Hz (250 ppm); the fit over all ~49 rising edges usually lands well inside that bound.
 - `full`: `basic` plus, per channel, statistics over every whole cycle (rising edge to rising edge) in the window:
   `cycles`, `period_min_s`, `period_max_s`, `period_std_s`, `freq_min_hz`, `freq_max_hz`, `pwidth_min_s`,
   `pwidth_max_s`, `nwidth_min_s`, `nwidth_max_s`, `duty_min_pct`, `duty_max_pct` (digital channels also get the mean
@@ -347,6 +353,114 @@ or trigger on an analog channel, whose trigger has a noise margin.
   an analog trigger uses `--offset`.
 - Clipping gives a hint (`A1 clips at the top: increase --vdiv or lower --offset`); the front end needs ~0.2-0.3 s to
   recover after an overdrive.
+
+## Calibration (opt-in)
+
+An optional, PC-side correction of the measured volts. It is off by default and never written to the device: the
+device EEPROM is untouched and the scope's own zero calibration still applies; the corrections act on top of it, on
+the PC. Without `--cal` nothing changes (no new keys, the same register program).
+
+### The file and the commands
+
+- The file is `state/calibration.json` in the data folder (the clone, or for an installed copy `%LOCALAPPDATA%\openm454`, `~/.local/share/openm454` elsewhere; `OPENM454_HOME` overrides it). It is not part of the repository.
+- The package ships `openm454/calibration_placeholder.json`: a neutral placeholder (gain 1, every offset 0) with
+  every entry present, to fill in with values measured on your unit.
+
+| Command | Does |
+|---|---|
+| `openm454 cal` or `cal status` | the file in force: `unit_id`, `created`, `note`, `neutral`, `coverage` per mode, `awg` and `threshold`, `awg_output_range_v` (no USB) |
+| `openm454 cal template --out FILE [--force]` | writes the neutral placeholder to fill in |
+| `openm454 cal import FILE [--bind]` | validates the file and installs it atomically as `state/calibration.json`; `--bind` opens the scope and records this unit's `unit_id` |
+
+### Using it
+
+`--cal` is accepted by `capture`, `watch`, `stream`, `log`, `debug plan` (the shared vertical options) and every
+`awg` subcommand (`set`, `sweep`, `burst`, `mod`, `dc`). An `--awg 'WAVE,...'` spec on `capture`, `watch`, `stream` and
+`log` follows the command's `--cal`. The MCP server has a boolean `cal` (default false) on `capture`, `log_plan`,
+`record_start` and `awg`.
+
+With `--cal`:
+
+- All volts are corrected: `capture`, `watch`, `analyze` and `plot` of saved files, the live lines and the result of
+  `stream` and `log`, the saved `log` chunks, and the hook's `Block.volts` and `info['scale']`.
+- The analog trigger level is converted with the corrected map.
+- The digital threshold is programmed as (target - offset_v) / gain, within 0..5 V. One threshold DAC serves all eight
+  inputs, so per-input offsets cannot be corrected. A target outside the reachable range is clamped with a warning, and
+  the reachable switching voltage is reported.
+- The generator levels are programmed as (v - offset_v) / gain. Requests outside 0..3 V are refused exactly as
+  without `--cal`. A request inside 0..3 V that would need a programmed level outside 0..3 V (above 3 V when it exceeds gain x 3 V + offset_v, below 0 V when it is under a positive offset_v) is clamped; a clamp of more than half a generator step (about 3 mV) comes with a warning that
+  gives the calibrated output range (for example, with gain 0.98 and offset_v 2 mV the output reaches 0.002 ..
+  2.942 V; example numbers). Levels that clamp to the same value are refused. The reported `high_v` / `low_v` /
+  `level_v` are the expected output.
+
+### The model, fallbacks and limits
+
+For each mode, channel and hardware V/div (as measured against a meter):
+
+```
+code - zero_code = gain * V / volts_per_code + zero_lsb + offset_slope_lsb_per_div * offset_div
+V = ((code - zero_code) - (zero_lsb + slope * offset_div)) / gain * volts_per_code      (x probe factor)
+```
+
+`volts_per_code` = V/div x 8/235 (1 LSB); `offset_div` is the offset in divisions.
+
+- A mode with one or two analog channels on and no entry falls back to the `34` entry, with a note and a warning. No
+  entry at all: that channel is uncorrected, with a warning. Inverted channels stay uncorrected. AC coupling and
+  `--bw20` are corrected but noted: the table is measured with DC coupling and full bandwidth.
+- `log` without interleave (up to 100 MSa/s) uses the `34` table.
+- With a 10x probe the table applies at the BNC; the probe's own ratio is not corrected.
+- Keep inputs within about +-7 divisions absolute: the front end compresses above that with large offsets.
+
+### Format
+
+JSON: `format` `openm454-calibration`, `version` 1, `unit_id` (null or 16 lower-case hex digits), `created`, `note`, and
+
+```
+"analog": {mode: {channel: {vdiv_key: {"gain": g, "zero_lsb": z, "offset_slope_lsb_per_div": s}}}},
+"awg": {"gain": g, "offset_v": o},
+"threshold": {"gain": g, "offset_v": o}
+```
+
+- `mode`: `1` (one analog channel on), `2` (two), `34` (three or four). `channel`: `A0`-`A3`. `vdiv_key`: the hardware
+  V/div at the BNC as `%g` of volts: `0.001`, `0.002`, `0.005`, `0.01`, `0.02`, `0.05`, `0.1`, `0.2`, `0.5`, `1`, `2`, `5`.
+- Bounds, refused on load with `CAL_INVALID`:
+
+  | Entry | Gain | Offset |
+  |---|---|---|
+  | analog | 0.8 .. 1.25 | `zero_lsb` within +-30, `offset_slope_lsb_per_div` within +-2 |
+  | `awg` | 0.9 .. 1.1 | `offset_v` within +-0.1 V |
+  | `threshold` | 0.8 .. 1.2 | `offset_v` within +-0.3 V |
+
+### Unit binding
+
+`unit_id` is the first 16 hex digits of the SHA-256 of the 512-byte EEPROM zero-info block (not secret; the security
+key is never used). `cal import --bind` records it. A file bound to another unit is refused with `CAL_MISMATCH` before
+anything is sent (`capture`, `watch`, `stream`, `log`, `awg`). A file without `unit_id` applies to any unit.
+
+### Where it shows
+
+- `applied.cal` in the output of `capture`, `stream` and `analyze` and in MCP summaries (for `log`: `plan.cal` in the
+  plan, the `started` line and the result, and `applied.cal` in its saved files): `enabled`, `file`,
+  `unit_id`, `created`, `neutral`, `mode`, `threshold` (`target_v`, `programmed_v`, and `requested_v`, `clamped` when
+  clamped) and `analog`: per channel the record (`applied`, `mode`, `gain`, `zero_lsb`, `offset_slope_lsb_per_div`,
+  `offset_div`, `zero_code_raw`, `volts_per_code_raw`, `note`), or `applied: false` with a `reason`.
+  `applied.threshold_v` is the target and `applied.threshold_programmed_v` what was programmed.
+- `awg.cal`: `requested_v`, `programmed_v`, `expected_v`, `gain`, `offset_v`, `unit_id`, `neutral`, and `clamped` /
+  `warning` when clamped.
+- Saved `.npz` files carry the meta `cal` and the corrected scale, so `analyze` and `plot` reconvert with the
+  correction stored in the file, never with the current file. `plot` labels the y axis `V (calibrated)`.
+
+### Making a table
+
+Measure with a stable DC source and a reference meter on the same node as the inputs. For each mode, channel and V/div,
+fit (mean code - zero code) against V / `volts_per_code` for `gain`, `zero_lsb` and a term linear in the offset. For
+the generator: output = gain * programmed + `offset_v`. For the threshold: switching voltage = gain * programmed +
+`offset_v`. Start from `cal template`, then `cal import FILE --bind`.
+
+### Calibration errors
+
+All exit 2: `CAL_MISSING` (no `state/calibration.json` with `--cal`, or a missing `cal import` file), `CAL_INVALID` (unreadable or failing
+validation), `CAL_MISMATCH` (file bound to another unit). See Errors.
 
 ## Self-test
 
@@ -677,12 +791,12 @@ so the scope is opened and released per call, a hang never blocks the server, an
 | Tool | Runs | Key arguments (defaults) |
 |---|---|---|
 | `status` | `info` | none. Connected? model, USB speed, firmware / FPGA state, last generator setting |
-| `capture` | `capture` | `channels` (`A0-A3,D0-D7`), `timebase` / `duration` / `rate` / `samples`, `trigger` (`SRC:EDGE[:LEVEL]`), `trig_mode` (`normal` with a trigger, `force` without), `timeout_s` (5), `trig_pos`, `holdoff`, `trig_retries` (4), `decode`, `edges`, `window`, `save` (true), `plot` (true), the vertical options (`vdiv`, `offset`, `probe`, `coupling`, `bw20`, `threshold`). Per channel frequency, Vpp, min/max/mean, duty, rise/fall (digital: state, frequency, duty, edges), trigger result, decoded frames, file paths. A trigger that does not fire gives `TIMEOUT_NO_TRIGGER` |
+| `capture` | `capture` | `channels` (`A0-A3,D0-D7`), `timebase` / `duration` / `rate` / `samples`, `trigger` (`SRC:EDGE[:LEVEL]`), `trig_mode` (`normal` with a trigger, `force` without), `timeout_s` (5), `trig_pos`, `holdoff`, `trig_retries` (4), `decode`, `edges`, `window`, `save` (true), `plot` (true), the vertical options (`vdiv`, `offset`, `probe`, `coupling`, `bw20`, `threshold`), `cal` (false). Per channel frequency, Vpp, min/max/mean, duty, rise/fall (digital: state, frequency, duty, edges), trigger result, decoded frames, file paths. A trigger that does not fire gives `TIMEOUT_NO_TRIGGER` |
 | `analyze` | `analyze` | `file` (required), `channels`, `window`, `edges`, `decode`; measurements of a saved `.npz` |
 | `plot` | `plot` | `file` (required), `channels`, `window`, `out`; returns the `.png` path |
-| `awg` | `awg set` / `dc` / `off` / `status` | `action` (required: `set`, `dc`, `off`, `status`); `wave`, `freq`, `high`, `low` (or `vpp`, `dc`), `duty`, `phase`; `level` for `dc`. The output keeps running after the call |
+| `awg` | `awg set` / `dc` / `off` / `status` | `action` (required: `set`, `dc`, `off`, `status`); `wave`, `freq`, `high`, `low` (or `vpp`, `dc`), `duty`, `phase`; `level` for `dc`; `cal` (false). The output keeps running after the call |
 | `log_plan` | `log --plan` | `rate` (required), `channels`, `duration`, `every`, `storage`, `keep_last`, `force`, the vertical options; no device needed |
-| `record_start` | `log` or `stream` in the background | `mode` (required: `log` or `stream`), `channels`, `rate`, `duration`, `every`, `storage` (log: `ram` / `disk` / `none`; stream: only `none`, nothing saved), `keep_last`, `force` and `hook` (log only; a hook file, `record_status` then returns its `events`), `decode` (stream only), the vertical options (`vdiv`, `offset`, `probe`, `coupling`, `bw20`, `threshold`); returns a job id. One recording at a time, the scope is busy meanwhile |
+| `record_start` | `log` or `stream` in the background | `mode` (required: `log` or `stream`), `channels`, `rate`, `duration`, `every`, `storage` (log: `ram` / `disk` / `none`; stream: only `none`, nothing saved), `keep_last`, `force` and `hook` (log only; a hook file, `record_status` then returns its `events`), `decode` (stream only), the vertical options (`vdiv`, `offset`, `probe`, `coupling`, `bw20`, `threshold`), `cal` (false); returns a job id. One recording at a time, the scope is busy meanwhile |
 | `record_status` | none (reads the job's output) | `job` (the latest), `lines` (3); latest status lines, and the result once done; with a `hook`, also `events` and `events_seen` |
 | `record_stop` | `stop` | `job`, `wait_s` (120); stops cleanly and returns the result |
 | `release` | `release` | none; frees a scope left running by a crashed program |
@@ -713,6 +827,7 @@ CLI commands with no MCP tool:
 | `recover` | resets and reloads the FPGA of a hung scope; kept a deliberate CLI step |
 | `debug` | raw register access, deliberately not exposed to agents |
 | `stop` | `record_stop` uses it internally |
+| `cal` | the calibration file is managed in a terminal (`cal template`, `cal import`); the tools only apply it with `cal: true` |
 | `awg sweep`, `burst`, `mod` | the `awg` tool covers `set`, `dc`, `off`, `status` only |
 
 An agent that has a shell can use the CLI for all of these.
@@ -734,6 +849,9 @@ Every error has a code, a message and a hint, so the next step is clear:
 | `STREAM_BETTER`, `NEEDS_FORCE` | 2 | `log` longer than its gap-free limit (see above) |
 | `HOOK_ERROR` | 2 | `log --hook`: the hook file raised in `setup()`, `process()` or `finish()`, or `process()` returned something other than `None` or a dict; for `process()` / `finish()` `error.trace` has the traceback tail and the data recorded so far is kept; a `setup()` failure records nothing |
 | `SELFTEST_FAILED` | 1 | MCP `selftest` only (the CLI exits 1 and lists the checks): a check failed; `failed_checks` has measured vs expected (a failed signal check usually means the wiring differs from the standard fixture, a failed wiring-free check points at the scope or its USB link) |
+| `CAL_MISSING` | 2 | `--cal` given but there is no `state/calibration.json`, or `cal import` names a file that does not exist ([Calibration](https://github.com/FrostFlops/openm454#calibration-opt-in)) |
+| `CAL_INVALID` | 2 | the calibration file is unreadable or fails validation (format/version, unknown mode, channel or V/div key, unit_id, a value out of bounds) |
+| `CAL_MISMATCH` | 2 | the calibration file is bound to another unit; refused before anything is sent |
 | `UNSAFE_OPERATION` | 7 | refused by the safety rules |
 | `TIMEOUT_WATCHDOG`, `TIMEOUT_DATA`, `USB_ERROR`, `PROTOCOL_ERROR`, `HOST_TOO_SLOW` | 6 | the device or the host failed during a run; data up to then is kept |
 
@@ -742,7 +860,8 @@ Every error has a code, a message and a hint, so the next step is clear:
 - `openm454/` driver: USB transport with a safety whitelist, device bring-up (FPGA, security handshake, calibration),
   register compiler (`mso.py`, reproduces DSWave's register programs exactly), stream decoder (`packet.py`),
   acquisition engine, loop-mode logger (`logger.py`), live processing hook for `log --hook` (`hook.py`), measurements, plots, AWG, CLI, self-test, protocol decoders
-  (`decode.py`), synthetic bus traffic for tests (`protosim.py`) and the MCP server (`mcp_server.py`).
+  (`decode.py`), synthetic bus traffic for tests (`protosim.py`), the opt-in PC-side calibration (`calib.py`, with the
+  neutral `calibration_placeholder.json`) and the MCP server (`mcp_server.py`).
 - `tests/` offline tests: golden register and AWG programs, the stream decoder, the acquisition engine against a
   simulated device, measurements, protocol decoders on synthetic traffic, the MCP server, safety rules
   (`python -m pytest tests`).
