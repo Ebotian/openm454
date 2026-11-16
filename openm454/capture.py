@@ -135,10 +135,34 @@ class Capture:
         for ch, a in self.digital.items():
             arrays['digital_' + ch] = np.packbits(a, bitorder='little')
             self.meta.setdefault('digital_lengths', {})[ch] = int(len(a))
+        if self.frames and len(self.frames) > 1:     # repeat mode: every frame, not just the first
+            self._add_frames(arrays)
         meta = json.dumps(self.meta)
         n = sum(len(a) for a in self.analog.values())
         (np.savez_compressed if n < 20_000_000 else np.savez)(path, meta=np.frombuffer(meta.encode(), dtype=np.uint8), **arrays)
         return path
+
+    def _add_frames(self, arrays):
+        """Every frame of a repeat run: <frames_analog_A1> is (frames, samples), digital packed the same way.
+
+        The frames of one run can differ by a few samples (each is cut by its own tail), so they are trimmed to the
+        shortest and that length is recorded in `frames_samples`; frame 0 stays the 1-D `analog_A1`, unchanged."""
+        self.meta['frames_samples'] = {}
+        self.meta['frame_trig_index'] = [f.get('trig_index') for f in self.frames]
+        for ch in self.analog:
+            arr = [f['analog'][ch] for f in self.frames if ch in f['analog']]
+            if not arr:
+                continue
+            n = min(len(a) for a in arr)
+            arrays['frames_analog_' + ch] = np.stack([a[:n] for a in arr])
+            self.meta['frames_samples'][ch] = int(n)
+        for ch in self.digital:
+            arr = [f['digital'][ch] for f in self.frames if ch in f['digital']]
+            if not arr:
+                continue
+            n = min(len(a) for a in arr)
+            arrays['frames_digital_' + ch] = np.stack([np.packbits(a[:n], bitorder='little') for a in arr])
+            self.meta['frames_samples'][ch] = int(n)
 
     def to_volts_dict(self):
         return {ch: self.volts(ch) for ch in self.analog}
@@ -147,14 +171,30 @@ class Capture:
 def load_capture(path):
     z = np.load(path)
     meta = json.loads(bytes(z['meta']).decode())
-    analog, digital = {}, {}
+    analog, digital, frames_analog, frames_digital = {}, {}, {}, {}
     for k in z.files:
-        if k.startswith('analog_'):
+        if k.startswith('frames_analog_'):
+            frames_analog[k[14:]] = z[k]
+        elif k.startswith('frames_digital_'):
+            frames_digital[k[15:]] = z[k]
+        elif k.startswith('analog_'):
             analog[k[7:]] = z[k]
         elif k.startswith('digital_'):
             ch = k[8:]
             digital[ch] = np.unpackbits(z[k], bitorder='little')[:meta['digital_lengths'][ch]]
-    return Capture(meta, analog, digital)
+    cap = Capture(meta, analog, digital)
+    if frames_analog or frames_digital:              # repeat mode: every frame, trimmed at save time
+        n = meta.get('frames', 0) or next(len(a) for a in list(frames_analog.values()) + list(frames_digital.values()))
+        trig = meta.get('frame_trig_index') or [None] * n
+        cap.frames = []
+        for i in range(n):
+            item = {'analog': {}, 'digital': {}, 'trig_index': trig[i] if i < len(trig) else None}
+            for ch, a in frames_analog.items():
+                item['analog'][ch] = a[i]
+            for ch, a in frames_digital.items():
+                item['digital'][ch] = np.unpackbits(a[i], bitorder='little')
+            cap.frames.append(item)
+    return cap
 
 
 def new_path(out_dir, tag='cap'):

@@ -180,3 +180,85 @@ def test_each_frame_is_decoded_once_and_only_frame_0_inherits_stale_levels(monke
     out = mso_adapter.decode_frames(raw, {}, {})
     assert len(out) == 2
     assert calls == [True, False]
+
+
+# ---------------------------------------------------------------- the default program, and every frame on disk
+
+V0_CASES = {
+    'two_analog_one_digital': (dict(analog=['A0', 'A1'], digital=['D0'], duration=1e-3, samples=100_000),
+                               'a021f0b1ac71ea45', 1089, 0),
+    'one_analog_400msa': (dict(analog=['A0'], digital=[], duration=1e-3, samples=400_000),
+                          'a484fbb7e55fb843', 1089, 0),
+    'all_channels': (dict(analog=['A0', 'A1', 'A2', 'A3'], digital=['D%d' % i for i in range(8)],
+                          duration=10e-3, samples=100_000), 'f0c912eef49e5f14', 1089, 2),
+    'triggered': (dict(analog=['A0'], digital=[], duration=1e-3, samples=50_000,
+                       trig_source='A0', trig_mode='normal', trig_level=1.4), '01c51a7a1fb7b60e', 1103, 0),
+}
+
+
+@pytest.mark.parametrize('name', sorted(V0_CASES))
+def test_the_program_without_repeat_is_unchanged(name):
+    """Hashed against v0.3.0 (origin/main) with a synthetic calibration, so the expected hash does not depend on a
+    unit: repeat=0 must keep the register program byte for byte, including the write count and HW_BASE_MODE."""
+    import hashlib
+    from openm454 import mso
+    kw, want_hash, want_writes, want_mode = V0_CASES[name]
+    st = scope.Settings(**kw)
+    hal, _, _, _ = scope.hal_config(st)
+    hal['trigger']['enable'] = int(bool(st.trig_source) and st.trig_mode != 'force')
+    prog, geom = scope._compile(hal, [mso.ProbeCal(500, 0, 0, [])] * 4)
+    h = hashlib.sha256(repr([tuple(w) for w in prog]).encode()).hexdigest()[:16]
+    assert (h, len(prog), geom['hw_mode']) == (want_hash, want_writes, want_mode)
+
+
+def test_a_repeat_capture_returns_every_decoded_frame(monkeypatch):
+    """The capture path itself, not only hal_config: every frame, its trigger index, and the counts in the meta."""
+    import numpy as np
+    from openm454 import scope as scopemod
+
+    frames = [{'analog': {'A0': np.full(8, i, np.uint8)}, 'digital': {}, 't0_analog': 0.0, 't0_digital': 0.0,
+               'trig_index': 100 + i} for i in range(3)]
+
+    class Raw:
+        head = object()
+        aborted = False
+        frames = [b'x'] * 3
+        data = b''
+        stop = 'normal'
+        triggered = False
+        handshakes = []
+        transfers = 2
+        transfers_wanted = 2
+
+    s = scopemod.Scope()
+    s._check_link = lambda: None
+    s._run = lambda prog, geom, tt, ct, **kw: Raw()
+    s._check_complete = lambda raw, geom: True
+    monkeypatch.setattr(scopemod, '_decode_frames', lambda raw, geom, hal: frames)
+
+    cap = s.capture(scope.Settings(analog=['A0'], digital=[], duration=0.01, samples=1000, repeat=3))
+    assert cap.meta['acq']['repeat_frames'] == 3 and cap.meta['acq']['frames'] == 3
+    assert [f['trig_index'] for f in cap.frames] == [100, 101, 102]
+    assert cap.analog['A0'].shape == (8,)          # frame 0 stays the top-level array
+
+
+def test_a_repeat_capture_saves_every_frame(tmp_path):
+    import numpy as np
+    from openm454.capture import Capture, load_capture
+
+    frames = [{'analog': {'A0': np.full(8, i, np.uint8)},
+               'digital': {'D0': np.tile(np.array([1, 0], np.uint8), 4)}, 'trig_index': 200 + i} for i in range(3)]
+    meta = {'channels': {'A0': {'zero_code': 128, 'volts_per_code': 0.034, 'probe': 1}, 'D0': {}},
+            'analog_rate_hz': 1e6, 'digital_rate_hz': 1e6, 't0_analog_s': 0.0, 't0_digital_s': 0.0,
+            'acq': {'repeat_frames': 3, 'frames': 3}, 'frames': 3}
+    cap = Capture(meta, frames[0]['analog'], frames[0]['digital'])
+    cap.frames = frames
+    path = cap.save(str(tmp_path / 'r.npz'))
+
+    z = np.load(path)
+    assert z['frames_analog_A0'].shape == (3, 8) and z['frames_digital_D0'].shape == (3, 1)
+    back = load_capture(path)
+    assert len(back.frames) == 3
+    assert int(back.frames[2]['analog']['A0'][0]) == 2
+    assert [f['trig_index'] for f in back.frames] == [200, 201, 202]
+    assert back.meta['frames_samples'] == {'A0': 8, 'D0': 8}

@@ -105,15 +105,23 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
 `capture --repeat N` collects N back-to-back frames in one start: the device re-arms between frames (register 0x00
 `HW_BASE_MODE` = 1) instead of the host starting a run per capture, which costs ~180 ms of protocol spacing.
 
-- One trigger setting only: repeat re-arms in hardware, so the mode is forced (`--trig-mode force`). Asking for a
-  triggered start is refused (`INVALID_ARG`) rather than silently recording one frame.
-- Each frame is decoded on its own: `Capture.frames` holds one dict per frame (analog, digital, `trig_index`).
-  `--measure`, the PNG and the NPZ describe the first frame. Bytes a frame carries beyond its record are device
-  buffer content, not signal, and are cut by the frame's tail.
-- Measured (1 analog channel, 5 us window at 400 MSa/s, 2048 samples per frame, every frame decoded): 2000 frames in
-  one start took 85 ms of frame time beyond the 380 ms setup, i.e. ~24 kframes/s including decode - 4500x the 5.26
-  frames/s of repeated single captures. The transfer alone reaches 31 kframes/s (32 us per frame, 256 MB/s); the
-  frame size has an 8192-byte floor, so 100 MSa/s tops out at ~17.5 kframes/s.
+- Two kinds of start, and they behave differently:
+  - **triggered** (`--trig A0:rise:1.4V --trig-mode normal`): the device re-arms for every frame, so each frame
+    waits for its own trigger. Measured (2026-11-16, 100 kHz square into A0, `--duration 250ms --repeat 3`): three
+    separate 250 ms records, 100.000 kHz and 2.89 Vpp, 99.7 % of the sample intervals exact, frames 0 %
+    byte-identical, stop normal, 1.1 s; with a 2 Hz source the same run takes 1.75 s. Works at any window: a
+    triggered start keeps `HW_BASE_MODE` at 1 (record) - only the untriggered form switches to the stream above
+    200 ms, and that one is refused with `INVALID_ARG`.
+  - **untriggered** (`--trig-mode force` or no trigger): the frames follow the start command back to back.
+- Each frame is decoded on its own: `Capture.frames` holds one dict per frame (analog, digital, `trig_index`); the
+  JSON has a `frames` list with per-frame basics, and the `.npz` stores every frame as `frames_analog_A1` /
+  `frames_digital_D0` (frames x samples) next to the 1-D `analog_A1` of frame 0. `--measure` and the PNG still
+  describe frame 0. Bytes a frame carries beyond its record are device buffer content, not signal, and are cut by
+  the frame's tail.
+- Measured on Linux over USB 3 (2026-11-16, 1 analog channel, default queue depth): 5 us window at 400 MSa/s, 2048
+  samples per frame, 2000 frames in 452 ms (380 ms of that is setup) = 4.4 kframes/s end to end, ~38 us per frame
+  after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. For comparison, repeated single captures cost ~180 ms
+  of protocol spacing each (5.26/s). Windows has not been timed.
 
 ### Above the readout limit: how `log` decides
 

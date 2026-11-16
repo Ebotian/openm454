@@ -221,8 +221,8 @@ def build_parser():
     c = sub.add_parser('capture', help='single triggered capture -> JSON measurements + PNG + NPZ')
     _capture_args(c)
     c.add_argument('--repeat', type=int, default=0, metavar='N',
-                   help='hardware repeat mode: collect N back-to-back frames in one start (default 0 = one capture); '
-                        'forces --trig-mode force, each frame has its own trigger point')
+                   help='hardware repeat mode: collect N frames in one start (default 0 = one capture); with a '
+                        'trigger every frame waits for its own, untriggered they follow back to back')
     w = sub.add_parser('watch', help='repeated captures, one JSON line each (real-time monitoring)')
     _capture_args(w, 'watch')
     g = w.add_argument_group('watch')
@@ -404,6 +404,23 @@ def build_parser():
 
 
 # ------------------------------------------------------------------------------------------- commands
+def _frame_summary(cap):
+    """Per-frame basics of a repeat run (the JSON's own `analog` block and the PNG describe frame 0 only)."""
+    import numpy as np
+    out = []
+    for i, f in enumerate(cap.frames or []):
+        item = {'index': i, 'trig_index': f.get('trig_index')}
+        for ch, codes in (f.get('analog') or {}).items():
+            sc = cap.scale(ch)
+            v = (np.asarray(codes, dtype=np.float32) - sc['zero_code']) * sc['volts_per_code'] * sc.get('probe', 1.0)
+            if len(v):
+                item.setdefault('analog', {})[ch] = {
+                    'vpp_v': round(float(v.max() - v.min()), 4), 'vmin_v': round(float(v.min()), 4),
+                    'vmax_v': round(float(v.max()), 4), 'vmean_v': round(float(v.mean()), 4)}
+        out.append(item)
+    return out
+
+
 def cmd_capture(args, scope, emit=True):
     from .scope import settings_from_args
     from . import plot as plotmod
@@ -415,6 +432,8 @@ def cmd_capture(args, scope, emit=True):
     win = window(args.window)
     res = {'ok': True, 'cmd': 'capture', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
     _report(cap, args, res, win)
+    if cap.frames and len(cap.frames) > 1:
+        res['frames'] = _frame_summary(cap)         # repeat mode: every frame, not only the first
     decoded = _decode(cap, args, win, res)
     files = {}
     if not args.no_save:
