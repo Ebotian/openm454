@@ -357,8 +357,23 @@ normal stop handshake. What it does **not** do is carry a frame the way mode 1 d
 | decoded without the tail | - | 100 kHz reads as 44.9 kHz (2.93 Vpp); the 4-channel setup reads 8.68 Vpp noise |
 
 So in mode 3 the per-frame tail stops describing the record, and the block layout is not the one `geometry()`
-derives: a raw transfer decoded as a single-channel record is not the signal. Until that is understood, a repeat run
-whose window exceeds 200 ms is refused - it would silently record mis-framed data.
+derives: a raw transfer decoded as a single-channel record is not the signal.
+
+**(hardware, 2026-11-16, the same setup) Mode 3 is a stream, not N acquisitions.** Five consecutive 204800-byte
+transfers of one `--repeat 5` run are 99 % byte-identical to each other, while mode 1 frames of the same signal are
+5 % identical (best alignment 1484 samples): in mode 3 every read returns a chunk of *the same* continuous buffer,
+not a separate recording. The discontinuities inside a chunk (95-99 % of the sample intervals are exactly 8 at
+800 kSa/s; at 8 kSa/s, same window, 99.3 % over 4096 samples) are where the buffer advanced between two reads, and
+they scale with the data rate - a readout effect, not framing.
+
+Consequence: `--repeat` is meaningful in mode 1 only (windows up to 200 ms, one acquisition per frame). Above that
+the device is a continuous stream, which is what `stream` and `log` are for, and a repeat run is refused rather than
+recorded as a run of mis-framed chunks.
+
+The vendor datasheet (V1.0.0, 2025-11-01) draws the same line from the other side: **实时 (real-time)** recording
+holds 4 Mpts and, at the maximum sample rate, 10 ms; **单次 (single)** holds 400 Mpts and 1 s. The product has two
+trigger modes (Auto, Normal) and no repeat mode at all - `:REPEATModeEnable` is a HAL command, and it produces
+separate records only while roll is off.
 
 **What is measured.** Repeat runs with windows below 200 ms (mode 1) are: 50/500/2000 frames in one start, every
 frame with its own tail and trigger index, stop normal (2026-11-13), and the 100 ms runs above. The untriggered

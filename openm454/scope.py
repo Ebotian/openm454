@@ -238,8 +238,9 @@ def repeat_window_guard(st, geom, n):
     if n and geom.get('roll'):
         raise DscopeError('INVALID_ARG', 'repeat mode with a %.3g s window switches the device to HW_BASE_MODE 3 '
                           '(repeat + stream)' % st.duration,
-                          'keep the window at or below 0.2 s (--duration); in mode 3 the per-frame tail no longer '
-                          'describes the record and the frames would be mis-framed (docs/PROTOCOL.md 8.2)')
+                          'keep the window at or below 0.2 s (--duration), or use `openm454 stream` for a '
+                          'continuous recording: in mode 3 the device streams one acquisition and the frames would '
+                          'be chunks of it, not separate runs (docs/PROTOCOL.md 8.2)')
     return n
 
 
