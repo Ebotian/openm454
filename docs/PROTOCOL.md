@@ -344,11 +344,27 @@ auto:
 So repeat with the trigger off and a window above 200 ms ends in `HW_BASE_MODE 3` in DSWave too, and there
 `transfer_count` follows the roll branch instead of the repeat 2.
 
-**What is measured and what is not.** The repeat runs measured on hardware so far (2026-11-13: 50/500/2000 frames
-in one start, every frame with its own tail and trigger index, stop normal) are mode 1 with windows below 200 ms.
-Mode 3 has never been measured by anyone, and the untriggered repeat program itself has no DSWave recording behind
-it: the only repeat scenario recorded from DSWave (`corpus4 repeat_mode`) is the triggered one, and a triggered
-repeat start is what this driver refuses with `INVALID_ARG`.
+**(hardware, 2026-11-16)** Mode 3 was measured: 100 kHz square, 0-2.8 V from the onboard generator into A0, trigger
+off, 250 ms window, 1-channel and 4-channel configurations. The wire shows `W 0x00 = 0x0003` (repeat + stream), one
+transfer per frame of `pkt_bytes` bytes (204800 for 1 channel at 800 kSa/s), the 4 KiB tail at `acqu_bytes`, and the
+normal stop handshake. What it does **not** do is carry a frame the way mode 1 does:
+
+| | mode 1 (100 ms window, 100 kSa/s) | mode 3 (250 ms window, 800 kSa/s) |
+| --- | --- | --- |
+| tail at `acqu_bytes` | yes | yes |
+| `tail.valid_words` | 20064 = `acq_words`: the whole record | 112, 880, ... from frame to frame: a running counter |
+| decoded with the tail | 80128 samples; 100.0 kHz, 2.89 Vpp | 448, 4576, ... samples (7, 55 blocks) |
+| decoded without the tail | - | 100 kHz reads as 44.9 kHz (2.93 Vpp); the 4-channel setup reads 8.68 Vpp noise |
+
+So in mode 3 the per-frame tail stops describing the record, and the block layout is not the one `geometry()`
+derives: a raw transfer decoded as a single-channel record is not the signal. Until that is understood, a repeat run
+whose window exceeds 200 ms is refused - it would silently record mis-framed data.
+
+**What is measured.** Repeat runs with windows below 200 ms (mode 1) are: 50/500/2000 frames in one start, every
+frame with its own tail and trigger index, stop normal (2026-11-13), and the 100 ms runs above. The untriggered
+repeat program still has no DSWave recording behind it: the only repeat scenario recorded from DSWave
+(`corpus4 repeat_mode`) is the triggered one, and a triggered repeat start is what this driver refuses with
+`INVALID_ARG`.
 
 ## 9. AWG (MCX output 0..3 V)
 
