@@ -210,18 +210,16 @@ def dfold_for(n):
     return 0 if n == 0 else _fold(n, [(2, 4), (4, 2), (8, 1)])
 
 
-HINT_REPEAT = ('repeat mode re-arms in hardware: each frame starts on its own, so the trigger must be off '
-               '(--trig-mode force) — one trigger per frame is not what this mode does')
-
-
 def repeat_plan(st):
-    """Frames to collect per start (0 = a normal single capture), refusing a combination this mode cannot honour."""
+    """Frames to collect per start (0 = a normal single capture).
+
+    Both starts are legal and they are not the same acquisition: with a trigger the device re-arms for every frame
+    (measured 2026-11-16: a 2 Hz source with a rise trigger gives three 250 ms frames in 1.75 s, each a separate
+    acquisition), and with the trigger off the frames follow back to back after the first one starts.
+    """
     n = int(getattr(st, 'repeat', 0) or 0)
     if n < 0:
         raise DscopeError('INVALID_ARG', 'repeat frame count must be >= 0 (%d)' % n, 'omit --repeat or pass a count >= 1')
-    if n and st.trig_source and st.trig_mode != 'force':
-        raise DscopeError('INVALID_ARG', 'repeat mode with a triggered start (%s, %s)' % (st.trig_source, st.trig_mode),
-                          HINT_REPEAT)
     return n
 
 
@@ -668,8 +666,7 @@ class Scope:
         mode = st.trig_mode
         triggered_wanted = bool(st.trig_source) and mode != 'force'
         wait = (st.auto_after if mode == 'auto' else st.timeout) + max(st.holdoff, 0.0)   # holdoff delays the first trigger
-        if repeat:          # the device re-arms every frame, so there is no trigger to wait for
-            triggered_wanted = False
+        if repeat and not triggered_wanted:     # untriggered: the frames follow the start command back to back
             wait = 2.0
         hal['trigger']['enable'] = int(triggered_wanted)
         prog, geom = self._compile_ok(hal, warnings)

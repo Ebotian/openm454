@@ -366,9 +366,17 @@ not a separate recording. The discontinuities inside a chunk (95-99 % of the sam
 800 kSa/s; at 8 kSa/s, same window, 99.3 % over 4096 samples) are where the buffer advanced between two reads, and
 they scale with the data rate - a readout effect, not framing.
 
-Consequence: `--repeat` is meaningful in mode 1 only (windows up to 200 ms, one acquisition per frame). Above that
-the device is a continuous stream, which is what `stream` and `log` are for, and a repeat run is refused rather than
-recorded as a run of mis-framed chunks.
+Consequence: the window limit applies to the **untriggered** form. A triggered repeat is not subject to it, and it
+is the form DSWave itself records (`corpus4 repeat_mode`): the device re-arms for every frame, so with the trigger on
+roll stays off and the mode is 1 at any window.
+
+**(hardware, 2026-11-16)** `--repeat 3 --trig A0:rise:1.4V --trig-mode normal --duration 250ms`, 100 kHz square into
+A0: three separate 250 ms records (200192 samples each at 800 kSa/s), 100.000 kHz and 2.89 Vpp in frame 0, 99.7 % of
+the sample intervals exactly 8, the three frames 0 % byte-identical to each other, stop normal, 1.1 s. With a 2 Hz
+source instead, three frames take 1.75 s - i.e. each frame waits for its own trigger.
+
+So `--repeat` carries two behaviours, chosen by the trigger, and only the untriggered one above 200 ms is refused
+(that is the stream, which `stream` and `log` are for).
 
 The vendor datasheet (V1.0.0, 2025-11-01) draws the same line from the other side: **实时 (real-time)** recording
 holds 4 Mpts and, at the maximum sample rate, 10 ms; **单次 (single)** holds 400 Mpts and 1 s. The product has two

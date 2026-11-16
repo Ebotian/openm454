@@ -1038,8 +1038,8 @@ def _budget(args):
             st.trig_edge in ('rise', 'rising', 'fall', 'falling'):   # misfire re-arms: one more run each
         per += max(0, st.trig_retries) * (rec + 0.5 + collect + 1.0 + 2e-7 * geom.get('acqu_bytes', 0))
     n = int(getattr(st, 'repeat', 0) or 0)
-    if n > 1:                                          # repeat: N frames back to back inside the one run
-        per += (n - 1) * (rec + geom.get('pkt_bytes', 0) / 2e8 + 5e-3)
+    if n > 1:                                          # repeat: N frames in the one run, each may wait for a trigger
+        per += (n - 1) * (wait + rec + geom.get('pkt_bytes', 0) / 2e8 + 5e-3)
     per += 2e-7 * geom.get('acqu_bytes', 0)            # decoding and the hint checks of deep records
     if args.measure == 'full':
         per += 2e-7 * geom.get('acqu_bytes', 0)        # a second measuring pass, with the edge lists

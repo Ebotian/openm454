@@ -33,12 +33,25 @@ def test_repeat_accepts_a_forced_or_untriggered_start(trigger, mode):
     assert scope.repeat_plan(st) == 3
 
 
-def test_repeat_refuses_a_triggered_start_instead_of_silently_ignoring_the_trigger():
-    st = scope.Settings(repeat=3, trig_source='A0', trig_mode='auto')
-    with pytest.raises(DscopeError) as e:
-        scope.repeat_plan(st)
-    assert e.value.code == 'INVALID_ARG'
-    assert 'force' in (e.value.hint or '')
+def test_a_triggered_start_is_allowed_and_stays_mode_1_above_200ms():
+    """Measured 2026-11-16: a 2 Hz source with a rise trigger gives three 250 ms frames in 1.75 s, each a separate
+    acquisition - the device re-arms for every frame. A triggered start keeps HW_BASE_MODE 1 at any window; only the
+    untriggered form switches to the stream (mode 3) above 200 ms."""
+    st = scope.Settings(repeat=3, trig_source='A0', trig_mode='normal', trig_level=1.4,
+                        duration=0.25, samples=250_000, analog=['A0'], digital=[])
+    assert scope.repeat_plan(st) == 3
+    hal, _, _, _ = scope.hal_config(st)
+    hal['trigger']['enable'] = 1
+    prog, geom = scope._compile(hal, scope._cached_zero())
+    assert geom['hw_mode'] == 1 and geom['roll'] is False
+
+
+def test_it_is_the_untriggered_form_that_becomes_the_stream_above_200ms():
+    st = scope.Settings(repeat=3, duration=0.25, samples=250_000, analog=['A0'], digital=[])
+    hal, _, _, _ = scope.hal_config(st)
+    hal['trigger']['enable'] = 0
+    prog, geom = scope._compile(hal, scope._cached_zero())
+    assert geom['hw_mode'] == 3 and geom['roll'] is True
 
 
 def test_a_negative_frame_count_is_refused():
