@@ -114,11 +114,12 @@ def decode_frames(raw, geom, hal):
     from . import packet
     layout = _layout(geom)
     out = []
-    for frame in getattr(raw, 'frames', []) or []:
-        dec = packet.decode(bytes(frame), layout, fill_stale=True)
+    for i, frame in enumerate(getattr(raw, 'frames', []) or []):
+        # one decode per frame; only the first frame follows a previous acquisition, so only it has stale levels
+        dec = packet.decode(bytes(frame), layout, fill_stale=(i == 0))
         tail = dec.get('tail')
         trig = packet.trigger_index(tail, layout) if (tail is not None and layout.pretrig is not None) else None
-        item = _decode_bytes(bytes(frame), geom, hal, layout, trig)
+        item = _decode_bytes(bytes(frame), geom, hal, layout, trig, dec=dec)
         item['trig_index'] = trig
         out.append(item)
     return out
@@ -130,9 +131,10 @@ def _layout(geom):
     return packet.layout_from_regs(geom['_regs'], rates=rates, trig_domain=geom['trig_domain'])
 
 
-def _decode_bytes(data, geom, hal, layout, trig):
+def _decode_bytes(data, geom, hal, layout, trig, dec=None):
     from . import packet
-    dec = packet.decode(data, layout, fill_stale=True)
+    if dec is None:
+        dec = packet.decode(data, layout, fill_stale=True)
     an_names = ['A%d' % i for i, a in enumerate(hal['analog']) if a['enable']]
     dg_names = ['D%d' % i for i, d in enumerate(hal['digital']) if d]
     out = {'analog': {}, 'digital': {}, 't0_analog': 0.0, 't0_digital': 0.0}

@@ -225,6 +225,35 @@ def repeat_plan(st):
     return n
 
 
+REPEAT_MAX_BYTES = 1 << 30       # host memory a repeat run may hold: N frames of pkt_bytes each
+
+
+def repeat_window_guard(st, geom, n):
+    """Refuse the window in which the device switches to HW_BASE_MODE 3 (repeat + stream).
+
+    DSWave makes the same switch (FUN_140350ad0: roll = auto_trig and sample_time > profile+0x70 = 200 ms), and in
+    that mode the per-frame 4 KiB tail stops describing the record: measured 2026-11-16, `valid_words` is a running
+    counter (112, 880, ...) instead of the record length, so the frames come out mis-framed (docs/PROTOCOL.md 8.2).
+    """
+    if n and geom.get('roll'):
+        raise DscopeError('INVALID_ARG', 'repeat mode with a %.3g s window switches the device to HW_BASE_MODE 3 '
+                          '(repeat + stream)' % st.duration,
+                          'keep the window at or below 0.2 s (--duration); in mode 3 the per-frame tail no longer '
+                          'describes the record and the frames would be mis-framed (docs/PROTOCOL.md 8.2)')
+    return n
+
+
+def repeat_memory_guard(n, geom):
+    """Refuse a frame count whose frames cannot be held in memory (one pkt_bytes per frame, tail included)."""
+    pkt = int(geom.get('pkt_bytes') or 0)
+    need = n * pkt
+    if n and need > REPEAT_MAX_BYTES:
+        raise DscopeError('INVALID_ARG', 'repeat mode would hold %d frames x %d B = %.1f MiB (limit %d MiB)'
+                          % (n, pkt, need / 2 ** 20, REPEAT_MAX_BYTES // 2 ** 20),
+                          'lower --repeat or shorten the window')
+    return n
+
+
 def hal_config(st):
     """User Settings -> SCPI-level HAL parameters (+ per-channel scaling) -> dict."""
     warnings, hints = [], []
@@ -611,6 +640,9 @@ class Scope:
         hal, scale, warnings, hints = hal_config(st)
         hal['trigger']['enable'] = int(bool(st.trig_source) and st.trig_mode != 'force')
         prog, geom = self._compile_ok(hal, warnings)
+        n = int(getattr(st, 'repeat', 0) or 0)
+        repeat_window_guard(st, geom, n)
+        repeat_memory_guard(n, geom)
         return {'hal': hal, 'geometry': {k: v for k, v in geom.items() if k != '_regs'}, 'writes': len(prog),
                 'program': ['%02X=%04X' % w for w in prog[:400]], 'warnings': warnings}
 
@@ -640,6 +672,8 @@ class Scope:
             wait = 2.0
         hal['trigger']['enable'] = int(triggered_wanted)
         prog, geom = self._compile_ok(hal, warnings)
+        repeat_window_guard(st, geom, repeat)
+        repeat_memory_guard(repeat, geom)
         collect = max(10.0, 1.5 * geom['record_s'] + 2.0)
         if repeat:          # back-to-back frames: 200 MB/s is a conservative floor for how long they take
             collect = max(collect, 1.5 * repeat * geom['pkt_bytes'] / 2e8 + 2.0)
@@ -650,6 +684,9 @@ class Scope:
             self._overdriven = True             # no data to check: an input may have been saturated while waiting
             if raw.aborted:
                 raise DscopeError('TIMEOUT_WATCHDOG', 'capture aborted before the trigger')
+            if repeat:                      # nothing to fall back to: the trigger is already off in this mode
+                raise DscopeError('PROTOCOL_ERROR', 'repeat mode: no head arrived (the device did not start)',
+                                  'run "openm454 release"; if it persists replug the scope')
             if mode == 'normal':
                 raise DscopeError('TIMEOUT_NO_TRIGGER', 'no trigger within %.3g s on %s (%.3g s wait + %.3g s record)'
                                   % (self._head_wait(geom, wait), st.trig_source, wait, geom['record_s']),
