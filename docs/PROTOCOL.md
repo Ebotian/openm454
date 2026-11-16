@@ -306,6 +306,50 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   MODE 0 2.33 s (drain 2.14 s: the 375 MB record read out after it was acquired), MODE 2 forced above the switch
   0.73 s (drain 0.54 s).
 
+### 8.2 Repeat mode (MODE 1 and 3): geometry, verified against DSWave 1.2.1
+
+`openm454/mso.py` derives the repeat branch from the same functions as the rest of the geometry. Checked against
+DSWave.exe 1.2.1 instruction by instruction (2026-11-16):
+
+| field | DSWave 1.2.1 | `mso.geometry()` |
+| --- | --- | --- |
+| `pkt_pri_samples` (mso+0x118) | `Mso_ComputeGeometry 0x351686`: int(pri_samples x n_blocks) | same |
+| `pkt_bytes` (mso+0x120) | 0x3516cd: `blk x nb`; 0x3516e6 rounds it up to `DEPTH_ALIGN_MASK` | `roundup(blk * nb, mask)` |
+| `small_pkt` (mso+0x129) | 0x3516fa: cleared in repeat mode | `small_pkt = False` |
+| `rd_bytes` (mso+0x140) | 0x351735: `blk x nb` | `blk * nb` |
+| `transfer_size` | `UsbBsp3x_GetDataTransferSize 0x349b00`: `pkt_bytes + 0x1000` | `pkt_bytes + BYTES_PER_FRAME` |
+| `transfer_count` | `UsbBsp3x_GetDataTransferCount 0x349bd0`: roll -> time-based, at most 64; repeat -> 2; otherwise 16 on USB 3 and 4 on USB 2 | same order |
+| `hw_mode` | `UsbBsp3x_vt158 0x34a7a0`: `repeat + loop*4 + (loop ? 0 : roll*2)` | same |
+
+Each data transfer carries exactly one frame: the data of the record plus its own 4096-byte tail, so the run's
+`repeat_frames` is also the frame count (`acquire.Engine.run(repeat_frames=...)`).
+
+**MODE 3 (repeat + stream) is DSWave's own path, not something this driver introduced.** The trigger-mode setter
+`FUN_140350ad0` owns `bsp+0x35` (roll) in repeat mode:
+
+```
+    mov  %dl,0xb0(mso)                 ; auto_trig
+    test %dl,%dl
+    jne  auto
+    movb $0,0x35(bsp)                  ; auto_trig = 0                -> roll = 0
+auto:
+    cmpb $0,0x34(bsp)                  ; repeat
+    je   0x35(bsp) = 0                 ; not repeat                   -> roll = 0
+    mov  0x78(mso),%r9                 ; sample_time_ps
+    cmp  %r9,0x70(profile)             ; 200 ms in the M454 USB 3 profile
+    setb %cl                           ; roll = sample_time > 200 ms
+    mov  %cl,0x35(bsp)
+```
+
+So repeat with the trigger off and a window above 200 ms ends in `HW_BASE_MODE 3` in DSWave too, and there
+`transfer_count` follows the roll branch instead of the repeat 2.
+
+**What is measured and what is not.** The repeat runs measured on hardware so far (2026-11-13: 50/500/2000 frames
+in one start, every frame with its own tail and trigger index, stop normal) are mode 1 with windows below 200 ms.
+Mode 3 has never been measured by anyone, and the untriggered repeat program itself has no DSWave recording behind
+it: the only repeat scenario recorded from DSWave (`corpus4 repeat_mode`) is the triggered one, and a triggered
+repeat start is what this driver refuses with `INVALID_ARG`.
+
 ## 9. AWG (MCX output 0..3 V)
 
 Indirect: W 0x08 = awg register, W 0x07 = value. `openm454/awg.py` matches all 13 recorded DSWave programs.
