@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, asdict
 
 import numpy as np
 
-from . import calib, mso, trigcheck
+from . import calib, mso, timing, trigcheck
 from .errors import DscopeError
 from .capture import Capture, CODES_PER_DIV, CODE_MIN, CODE_MAX
 
@@ -343,6 +343,7 @@ def cal_record(hal, scale, analog):
 # ------------------------------------------------------------------------------------------------ Scope
 class Scope:
     def __init__(self, log=None):
+        timing.activate()            # a bad OPENM454_TIMING is refused here, before the device is opened
         self.log = log
         self.dev = None
         self.engine = None
@@ -447,7 +448,7 @@ class Scope:
                                            'digital': {'1-2ch': 400e6, '3-4ch': 200e6, '5-8ch': 100e6}},
                            'max_samples_per_capture': MAX_SAMPLES, 'adc_bits': 8, 'vertical_divisions': 8,
                            'awg': {'v_min': 0.0, 'v_max': 3.0, 'f_max_hz': awg.F_MAX}},
-                'awg_last': self.awg_status()}
+                'awg_last': self.awg_status(), 'timing': timing.active()}
 
     def _awg_cal(self, cal):
         """The calibration document for a --cal generator command (None without), checked against this unit."""
@@ -921,6 +922,8 @@ class Scope:
                'complete': self._check_complete(raw, geom),
                'digital_samples': n_d if frame['digital'] else None,
                'elapsed_ms': round((time.time() - t_begin) * 1000)}
+        if timing.active():              # a shortened profile must be visible in the data it produced
+            acq['timing'] = timing.active()
         return {'version': 1, 'device': 'DSCope M454', 'time': time.strftime('%Y-%m-%dT%H:%M:%S'),
                 'applied': applied, 'acq': acq, 'channels': ch_scale, **({'cal': cal} if cal else {}),
                 'analog_rate_hz': geom.get('analog_rate'), 'digital_rate_hz': geom.get('digital_rate'),

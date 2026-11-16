@@ -657,6 +657,19 @@ def test_register_access_after_a_stop_waits_like_dswave():
     assert writes(sim)[-3:] == [(regs.CTRL, 0), (regs.ACTION, 4), (0x08, 3)]
 
 
+def test_shortening_the_gap_does_not_shorten_the_quiet_time(monkeypatch):
+    """The quiet time after a stop is its own constant (timing key `quiet`), not the spacing before the next run:
+    a profile that sets gap=0 still holds the register interface for the quiet time."""
+    monkeypatch.setattr(acq, 'GAP_BETWEEN_RUNS', 0.0)
+    monkeypatch.setattr(acq, 'QUIET_AFTER_STOP', 0.02)
+    sim, eng = engine(trigger=False)
+    eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=0.2)
+    t_stop = time.time()
+    eng.t.write(0x08, 3)
+    waited = time.time() - t_stop
+    assert 0.01 <= waited < 0.08, waited
+
+
 def _open_with(monkeypatch, done, **kw):
     from openm454 import device as devmod
     import openm454.firmware

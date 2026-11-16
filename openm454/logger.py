@@ -44,7 +44,7 @@ import zipfile
 
 import numpy as np
 
-from . import packet
+from . import packet, timing
 from .errors import DscopeError
 
 RING_BYTES = 512 * 2 ** 20           # device sample memory = loop ring
@@ -672,6 +672,8 @@ class _Writer(threading.Thread):
         line.update(extra or {})
         if final:
             line['final'] = True
+            if timing.active():          # the last line names the profile the whole log was taken with
+                line['timing'] = timing.active()
         self.lacc, self.line_blocks = {}, 0
         self.line += 1
         if self.emit:
@@ -820,6 +822,8 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                  'acq': {'mode': 'loop', 'analog_rate_hz': rate if st.analog else None,
                          'digital_rate_hz': rate if st.digital else None, 'triggered': False},
                  'trigger': {'source': None, 'mode': 'force'}, 'warnings': list(pl['warnings'])}
+    if timing.active():
+        meta_base['timing'] = timing.active()
     if applied.get('cal'):
         meta_base['cal'] = applied['cal']
     w = _Writer(layout, rate, pl['_scale'], storage, pl['_chunk_blocks'], stem, meta_base, emit, heartbeat,
