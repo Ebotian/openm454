@@ -1,0 +1,48 @@
+name: spec
+
+# The Quint model is checked on every change to the spec or the driver it abstracts, and nightly.
+on:
+  push:
+    paths: [specs/**, openm454/**, .github/workflows/spec.yml]
+  pull_request:
+    paths: [specs/**, openm454/**, .github/workflows/spec.yml]
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QUINT_VERSION: "0.33.1"
+  APALACHE_VERSION: "0.63.0"
+
+jobs:
+  quint:
+    name: quint test + Apalache verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install quint and Apalache
+        run: |
+          npm install -g "@informalsystems/quint@${QUINT_VERSION}"
+          curl -fsSL -o /tmp/apalache.tgz \
+            "https://github.com/apalache-mc/apalache/releases/download/v${APALACHE_VERSION}/apalache-${APALACHE_VERSION}.tgz"
+          mkdir -p "$HOME/apalache"
+          tar -xzf /tmp/apalache.tgz -C "$HOME/apalache" --strip-components=1
+          echo "$HOME/apalache/bin" >> "$GITHUB_PATH"
+      - name: Model runs (quint test)
+        run: |
+          quint test specs/quint/capture.qnt --main=capture \
+            --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
+      - name: Invariants (Apalache)
+        run: |
+          quint verify specs/quint/capture.qnt --main=capture --init=init --step=step \
+            --max-steps=12 --invariant=type_ok,no_repeat_in_stream_or_log,accepted_frames_only,repeats_are_capture_only,no_trigger_is_no_trigger,no_silent_fallback,quiet_after_untriggered_stop

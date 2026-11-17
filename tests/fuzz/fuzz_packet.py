@@ -1,13 +1,14 @@
 """Atheris target: arbitrary bytes through packet.split_frames/decode.
 
 Not collected by pytest. Run on Linux:
-    python tests/fuzz/fuzz_packet.py -max_total_time=300
+    python tests/fuzz/fuzz_packet.py -max_total_time=300 tests/fuzz/corpus/fuzz_packet
 """
 import sys
 
 import atheris
 
-from openm454 import packet, scope
+with atheris.instrument_imports():
+    from openm454 import packet, scope
 
 
 def _layout():
@@ -22,11 +23,15 @@ LAYOUT = _layout()
 
 
 def TestOneInput(data):
+    data = bytes(data)
     try:
-        frames = packet.split_frames(bytes(data), LAYOUT)
+        frames = packet.split_frames(data, LAYOUT, complete_only=False)
     except packet.PacketError:
-        return
-    for f in frames:
+        frames = []
+    # The split is cheap; the decoder is the interesting surface, so feed it both the split frames and the
+    # raw bytes (a frame's tail/head rules live in decode).
+    candidates = list(frames[:3]) + [data]
+    for f in candidates:
         try:
             packet.decode(f, LAYOUT, nsamples=min(len(f) // 2, 4096))
         except (packet.PacketError, ValueError):

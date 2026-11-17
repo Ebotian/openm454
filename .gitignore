@@ -16,3 +16,7 @@ dist/
 # vendor material: never redistribute (the application and its bitstream, datasheets)
 DSWave/
 *.pdf
+
+# Atheris: keep the checked-in seeds, ignore generated units and crash artifacts
+tests/fuzz/corpus/*/*
+!tests/fuzz/corpus/*/*.seed
