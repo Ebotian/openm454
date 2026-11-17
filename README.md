@@ -107,11 +107,14 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
 5.3 captures per second).
 
 - Two kinds of start, and they behave differently:
-  - **triggered** (`--trig SRC:EDGE[:LEVEL] --trig-mode normal`): every frame is its own acquisition and waits up to
-    `--timeout` (+ `--holdoff`) for its own trigger; `HW_BASE_MODE` stays 1 at any window. Measured (2026-11-16,
-    100 kHz square into A0, `--duration 250ms --repeat 3`): three separate 250 ms records, 100.000 kHz and 2.89 Vpp,
-    99.7 % of the sample intervals exact, frames 0 % byte-identical, stop normal, 1.1 s; with a 2 Hz source the same
-    run takes 1.75 s. `--trig-mode auto` (the CLI default) with `--repeat` and `--trig` is refused with
+  - **triggered** (`--trig SRC:EDGE[:LEVEL] --trig-mode normal`): every frame is its own acquisition and waits for
+    its own trigger, the first up to `--timeout` (+ `--holdoff`); after it the frames share one deadline that grows
+    by `--timeout` + `--holdoff` per frame, so a later frame may wait longer when earlier ones came quickly.
+    `HW_BASE_MODE` stays 1 at any window, and the register program is DSWave's recorded triggered repeat program
+    write for write. Measured (2026-11-17, Windows): A0 rise at 1.5 V on a 1 kHz square (10 MSa/s, 2 ms, 20 frames),
+    D0 rise and D0 fall on the 1 kHz calibration output (100 MSa/s, 200 us, 20 frames each) and A0 with a 250 ms
+    window (3 frames): every frame had its edge at t = 0. Earlier (2026-11-16, 100 kHz square, `--duration 250ms
+    --repeat 3`): three separate records, 0 % byte-identical, 1.1 s; with a 2 Hz source the same run takes 1.75 s. `--trig-mode auto` (the CLI default) with `--repeat` and `--trig` is refused with
     `INVALID_ARG`: repeat mode with a trigger has no auto mode (use `--trig-mode normal`, or `--trig-mode force` for
     untriggered frames). No trigger on the start is `TIMEOUT_NO_TRIGGER` (exit 5), with no forced fallback.
   - **untriggered** (no `--trig`, any trigger mode including auto, or `--trig-mode force`): the frames follow the
@@ -119,14 +122,22 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
     device to `HW_BASE_MODE 3`, a stream and not N acquisitions, and is refused with `INVALID_ARG`; the message
     names the applied window and says when the 1024-sample minimum of an explicit `--rate` lengthened `--duration`
     (`--rate 5k --duration 100ms` applies 0.256 s at 4 kSa/s). Raise or drop `--rate`, keep the window <= 0.2 s,
-    trigger the frames, or use `stream`. Untriggered repeat: hardware validation pending (owner bench).
+    trigger the frames, or use `stream`. This program has no DSWave recording (DSWave's own repeat scenario is the
+    triggered one); it differs from DSWave's recorded forced capture in one write, `HW_BASE_MODE` 1 instead of 0.
+    Validated on hardware (2026-11-17, Windows): 2858 frames over 8 configurations, D0/D1 on the 1 kHz calibration
+    output at 1-400 MSa/s with windows from 50 us to 200 ms, and A0 on the generator (10 kHz, 1 MHz): every run
+    complete with a normal stop, every frame a separate acquisition (the square's phase moves from frame to frame),
+    every analog frame at the generator frequency, and a normal capture after every run correct.
 - Limits: the run's deadline is max(10 s, 1.5 x record + 2 s, min(3600 s, ...)) with a per-frame cost of the record
-  plus 1 ms plus the transfer at 50 MB/s; a run whose frames alone need more than 3600 s (0.2 s window x 20000
-  frames) is refused with `INVALID_ARG` (lower `--repeat`, shorten the window, or use `log` / `stream`). The host
-  memory cap is 1 GiB for N x (the transfer with its 4 KiB tail + the decoded bytes, 1 byte per sample per channel,
-  digital unpacked from 1 bit to 1 byte): D0-D7, 1 ms, 100k samples, `--repeat 10000` is refused (about 8.6 GiB). A
-  negative `--repeat` is a usage error (exit 2); 0 is off. `stream` and `log` refuse repeat settings with
-  `INVALID_ARG`; the MCP `capture` tool has no repeat parameter.
+  plus 1 ms plus the transfer at 50 MB/s, plus (N-1) x (`--timeout` + `--holdoff`) for a triggered start; a run whose
+  planned time, 1.5 x N x (record + 1 ms + transfer) + 2 s plus those trigger waits, exceeds 3600 s is refused with
+  `INVALID_ARG` before the device is opened (lower `--repeat` or `--timeout`, shorten the window, or use `log` /
+  `stream`). The host memory cap is 1 GiB for N x (the transfer with its 4 KiB tail + the decoded bytes, 1 byte per
+  sample per channel, digital unpacked from 1 bit to 1 byte): D0-D7, 1 ms, 100k samples, `--repeat 10000` is refused
+  (8647 MiB, about 8.4 GiB). A negative `--repeat` is `INVALID_ARG` (exit 2), refused before the device is opened; 0
+  is off. Every repeat run is followed by the traced 100 ms hold whatever `OPENM454_TIMING` says (the device re-arms
+  after every frame). `stream` and `log` refuse repeat settings with `INVALID_ARG`; the MCP `capture` tool has no
+  repeat parameter.
 - Fewer frames than N: triggered gives `TIMEOUT_NO_TRIGGER` (exit 5, "collected k of N frames"), untriggered
   `TIMEOUT_DATA` (exit 6), an abort `TIMEOUT_DATA` "(aborted)"; the partial frames are not returned. A digital
   rise/fall trigger is neither checked for misfires nor re-armed (`--trig-retries` has no effect):
@@ -144,8 +155,9 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   cut by the frame's tail.
 - Measured on one Linux unit over USB 3 (2026-11-16, 1 analog channel, default queue depth): 5 us window at
   400 MSa/s, 2048 samples per frame, 2000 frames in 452 ms (380 ms of that is setup) = 4.4 kframes/s end to end,
-  ~38 us per frame after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. Repeated single captures cost
-  ~190 ms of protocol spacing each (5.3/s). Windows has not been timed.
+  ~38 us per frame after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. On Windows (2026-11-17, whole
+  call): A0 at 400 MSa/s, 20 us (8192 samples), 2000 frames in 0.29 s; D0/D1 at 400 MSa/s, 50 us, 500 frames in
+  0.29 s. Repeated single captures cost ~190 ms of protocol spacing each (5.3/s).
 
 ### Above the readout limit: how `log` decides
 
@@ -237,32 +249,42 @@ generated by a microcontroller, including deep captures and decoded streams.
 Every capture pays the spacing DSWave uses: 100 ms before the run, 50 ms between submitting the reads and the start
 writes, two 15 ms settles and 15 ms per register read - about 193 ms per capture, a little over 5 captures per second.
 A profile shortens selected waits for one session; the traced spacing stays the default and nothing changes without
-the variable. The floor profile measured about 26 ms per capture (p50) on one Windows bench and 28.6 ms on a second
-one:
+the variable. The floor profile measured 35 ms per capture (p50) on one Windows bench:
 
 ```bash
-OPENM454_TIMING=gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002,quiet=0.005   # ~26 ms per capture
+OPENM454_TIMING=gap=0.005,quiet=0.005,setup=0.002,submit=0.005   # 35 ms per capture instead of 193 ms
 ```
 
-Seven keys (traced value, floor): `gap` 100 / 5 ms (before every run), `quiet` 100 / 5 ms (no register access after
-the stop of a forced or triggered run), `submit` 50 / 5 ms, `setup` 15 / 2 ms, `start` 15 / 2 ms, `read` 15 / 2 ms
-(per register read) and `final` 1 / 1 ms (not shortened: it is the stop handshake itself). A profile only shortens.
-After the stop of a run that ended without a head (a normal/auto timeout with no trigger, or a stop request before
-the trigger) and after a repeat run stopped before its last frame, the driver always holds every register access for
-the traced 100 ms, whatever the profile: writes sent within ~10 ms of such a stop were dropped on hardware. The analog
-front-end settling (150 ms before the first analog run after a digital-only run or at session start, 300 ms after a
-saturated input) is device physics and is not adjustable: `wake=...` and `overdrive=...` are `INVALID_ARG`.
+Five keys (traced value, floor): `gap` 100 / 5 ms (before every run), `quiet` 100 / 5 ms (no register access after
+the stop of a forced or triggered single run), `submit` 50 / 5 ms, `setup` 15 / 2 ms and `final` 1 / 1 ms (not
+shortened: it is the stop handshake itself). A profile only shortens. Not adjustable, whatever the profile:
 
-An entry that is not `key=value`, an unknown key, a key given twice, a value that is not a finite non-negative number,
-or a value above the traced one or below its floor is `INVALID_ARG` (exit 2) before anything is sent or the device is
-opened, for every CLI command; the MCP tools report it too. Every `Scope()` reads the variable again. Zeroing
-`final` wedges the scope within 2-3 captures on Linux and on Windows (`DEVICE_ERROR: EP 0x84 handshake: expected 02,
-got timeout`, then it only answers again after a replug); the floor profile is the only set that ran without failure
-on both benches (all runs were forced or triggered captures). While a profile is active it is reported by `info`
-(`timing`), every capture's and stream's `acq.timing`, the `log` result document (the last line `log` prints) and
-every saved log file (`acq.timing`), `watch` (`timing` in its first and summary line), the selftest result, and the
-MCP summaries. `log --plan` applies it: the seam between stream records (`gap_s`) is 0.18 s traced and 0.014 s at the
-floor profile. Keys, evidence and ranges: `docs/PROTOCOL.md` section 7.1.
+- `start` (15 ms after the start write) and `read` (15 ms per register read): shortened to 2 ms, `start` alone gave
+  a capture taken with the settings of the capture before (1 of 300) and `read` alone ended the session in a STALL of
+  the data transfer at capture 70. `start=...` and `read=...` are `INVALID_ARG`.
+- The analog front-end settling (150 ms before the first analog run after a digital-only run or at session start,
+  300 ms after a saturated input) is device physics: `wake=...` and `overdrive=...` are `INVALID_ARG`.
+- After the stop of a run that ended without a head (a normal/auto timeout with no trigger, or a stop request before
+  the trigger) and after every repeat run, the driver holds every register access for the traced 100 ms: writes sent
+  within ~10 ms of such a stop were dropped on hardware.
+
+Why these floors: a shortened wait can make the scope miss register writes with no error at all - the capture then
+runs with the registers of the capture before while the host scales it with the new settings. On the owner's bench
+(2026-11-17), forced captures alternating two settings on a 100 kHz square, the floors first proposed (the five above
+plus `start` and `read` at 2 ms) gave 14 and 17 wrong readings in 300 and then a failed session (`DEVICE_ERROR: EP
+0x84 handshake: expected 02, got timeout`); the floor profile above gave none in 3000 forced and 300 triggered
+captures, nor after normal-mode timeouts followed at once by a new AWG program and V/div, auto-mode fallbacks, or
+repeat runs. Zeroing `final` wedged the scope within 2-3 captures on a second bench (then it only answered again
+after a replug). The full table: `docs/PROTOCOL.md` section 7.1.
+
+An entry that is not `key=value`, an unknown or non-adjustable key, a key given twice, a value that is not a finite
+non-negative number, or a value above the traced one or below its floor is `INVALID_ARG` (exit 2) before anything is
+sent or the device is opened, for every command that can reach the device (and `log --plan`, `bench --no-device`,
+`debug plan`); the MCP tools report it too. Every `Scope()` reads the variable again. While a profile is active it is
+reported by `info` (`timing`), every capture's and stream's `acq.timing`, the `log` result document (the last line
+`log` prints) and every saved log file (`acq.timing`), `watch` (`timing` in its first and summary line), the selftest
+result, and the MCP summaries. `log --plan` applies it: the restart part of the seam between stream records
+(`gap_s` = the drain, record x (D - R) / R, plus the restart) is 0.18 s traced and 0.027 s at the floor profile.
 
 ## CLI reference
 

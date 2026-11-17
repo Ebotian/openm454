@@ -197,10 +197,10 @@ Implementation (with the RVAs): `openm454/acquire.py`.
    ~10 ms are acknowledged on USB but dropped by the device (an AWG program right after a normal-mode timeout was
    lost in 3 of 3 rounds; with 10-50 ms of delay it applied every time; after triggered or forced runs it always
    applied). After the stop of a run that ended without a head (a normal/auto timeout with no trigger, or a stop
-   request before the trigger), and after a repeat run stopped before its last frame, the driver always holds every
-   register access for 100 ms (`Transport.hold`, `QUIET_AFTER_UNTRIGGERED_STOP`), whatever the profile of 7.1; the
-   `quiet` key shortens only the hold after forced or triggered runs, because every floor measurement was a forced
-   or triggered capture.
+   request before the trigger), and after every repeat run (the device re-arms after every frame and is never told
+   the count, so the stop can find it armed for the next one), the driver always holds every register access for
+   100 ms (`Transport.hold`, `QUIET_AFTER_UNTRIGGERED_STOP`), whatever the profile of 7.1; the `quiet` key shortens
+   only the hold after forced or triggered single runs, because every floor measurement was one.
    Front-end settling (hardware, not protocol; the same in every profile): after a run that saturated an analog
    input (or ended without data) the next run waits 0.3 s after its setup writes (1500 div of overdrive at 1 mV/div
    needed ~215 ms to settle within 0.5 LSB); the first analog run after a digital-only run (or of a session) waits
@@ -226,65 +226,80 @@ Implementation (with the RVAs): `openm454/acquire.py`.
 
 The waits in this section are DSWave's: reproducing them is how the driver keeps its fidelity without measuring
 anything. A session may shorten selected waits with an environment variable; the traced values stay the baseline,
-and nothing changes without the variable. The floor profile measured about 26 ms per capture (p50) on one Windows
-bench (device open 0.46 s) and 28.6 ms on a second one, against about 193 ms with the traced spacing:
+and nothing changes without the variable. The floor profile measured 35 ms per capture (p50) on one Windows bench,
+against 193 ms with the traced spacing:
 
 ```bash
-OPENM454_TIMING=gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002,quiet=0.005
+OPENM454_TIMING=gap=0.005,quiet=0.005,setup=0.002,submit=0.005
 ```
 
 | key | wait (`openm454` constant) | traced | a profile may set |
 | --- | --- | ---: | --- |
 | `gap` | before every run (`GAP_BETWEEN_RUNS`) | 100 ms | **5 ms** .. traced |
-| `quiet` | no register access after the stop of a run that had a head, i.e. forced or triggered (`QUIET_AFTER_STOP`) | 100 ms | **5 ms** .. traced |
+| `quiet` | no register access after the stop of a single run that had a head, i.e. forced or triggered (`QUIET_AFTER_STOP`) | 100 ms | **5 ms** .. traced |
 | `submit` | reads submitted -> start writes (`SUBMIT_TO_START`) | 50 ms | **5 ms** .. traced |
 | `setup` | after `W CTRL=0` (`SETUP_SETTLE`) | 15 ms | **2 ms** .. traced |
-| `start` | after `W CTRL=1` (`START_SETTLE`) | 15 ms | **2 ms** .. traced |
 | `final` | `W CTRL=0` -> `W ACTION=4` (`FINAL_GAP`) | 1 ms | **1 ms** (not shortened) |
-| `read` | per register read (`READ_DELAY`) | 15 ms | **2 ms** .. traced |
 
-A profile only shortens. After the stop of a run that ended without a head (a normal/auto timeout with no trigger,
-or a stop request before the trigger) and after a repeat run stopped before its last frame, the driver holds every
-register access for the traced 100 ms (`QUIET_AFTER_UNTRIGGERED_STOP`) whatever the profile: writes sent within
-~10 ms of such a stop were acknowledged but dropped (item 7 above). `wake` and `overdrive` are not profile keys: the
-analog front-end settling (150 ms before the first analog run after a digital-only run or at session start, 300 ms
-after a saturated input) is measured device physics, not DSWave's spacing, and is the same in every profile;
-`wake=...` or `overdrive=...` is `INVALID_ARG` with a hint saying why.
+Not adjustable, whatever the profile (a profile naming `start`, `read`, `wake` or `overdrive` is `INVALID_ARG` with a
+hint saying why):
+
+| wait | traced | why |
+| --- | ---: | --- |
+| after `W CTRL=1` (`START_SETTLE`, key `start`) | 15 ms | at 2 ms on its own, 1 of 300 forced captures came back with the settings of the capture before (table below) |
+| per register read (`READ_DELAY`, key `read`) | 15 ms | at 2 ms on its own, the session ended in a STALL of the data transfer at capture 70 |
+| analog front-end settling (`wake`, `overdrive`) | 150 / 300 ms | device physics: the inputs read 8-14 codes high for ~80 ms after a digital-only run (or at session start), and need ~215 ms after a saturated input |
+| hold after the stop of a run without a head, and after every repeat run (`QUIET_AFTER_UNTRIGGERED_STOP`) | 100 ms | writes sent within ~10 ms of such a stop were acknowledged but dropped (item 7 above) |
 
 The profile is refused with `INVALID_ARG` (exit 2, one JSON document) before anything is sent or the device is
-opened, for every CLI command (`info`, `capture`, `watch`, `stream`, `log` including `--plan`, `bench` including
-`--no-device`, `awg`, `release`, `recover`, `selftest`, `debug` including `plan`), and the MCP tools report
-`INVALID_ARG`: an entry that is not `key=value`, an unknown key, `wake` or `overdrive`, a key given twice, a value
-that is not a finite non-negative number, a value above the traced one or below its floor. A refused profile is
-never applied in part. Every `Scope()` reads `OPENM454_TIMING` again: a changed value is applied, an invalid one is
-refused, and what is reported always equals what is applied (keys left out are at their traced values).
+opened, for every CLI command that can reach the device (`info`, `capture`, `watch`, `stream`, `log` including
+`--plan`, `bench` including `--no-device`, `awg`, `release`, `recover`, `selftest`, `debug` including `plan`), and the
+MCP tools report `INVALID_ARG`: an entry that is not `key=value`, an unknown key, `start`, `read`, `wake` or
+`overdrive`, a key given twice, a value that is not a finite non-negative number, a value above the traced one or below
+its floor. A refused profile is never applied in part. Every `Scope()` reads `OPENM454_TIMING` again: a changed value
+is applied, an invalid one is refused, and what is reported always equals what is applied (keys left out are at their
+traced values).
 
-**Why the floors, and why they are exactly these.** Zeroing the spacing wedges the scope; the key that does it
-reliably is `final`, the 1 ms between `W CTRL=0` and the stop write `W ACTION=4`. Hardware evidence (every run was a
-forced or triggered capture, so none of it covers a stop without a trigger):
+**Why the floors, and why they are exactly these.** A shortened wait can make the device miss register writes
+without any error: the capture then runs with the registers of the capture before, while the host scales it with the
+new settings. Measured on one Windows bench (2026-11-17, one unit, fw `0x3110`, a 100 kHz square 0-2.8 V from the
+generator into A0). Every capture alternates two settings - 10 MSa/s requested (8 MSa/s applied) at 1 V/div for
+200 us, and 2 MSa/s at 0.5 V/div for 1 ms - so a capture taken with the other setting's registers reads 4x (or 1/4)
+the frequency and 2x (or half) the Vpp:
 
-* Floor profile `gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002` (`quiet` then equal to `gap`, 5 ms;
-  `final` 1 ms): one Windows bench, 300 forced and 300 normal-triggered captures, alternating two settings so that a
-  dropped write would show as a wrong reading: no wrong readings, 26 ms p50. A second bench: 10,000 captures on
-  Linux and 30 on Windows, no failure, 28.6 ms p50.
-* `gap=0,submit=0,setup=0,start=0,read=0` (`quiet` also 0, `final` 1 ms): the first bench got `DEVICE_ERROR` from
-  capture 19 on, control reads timed out, `recover` could not reach the scope and a replug was needed; the second
-  bench ran 12,000 captures on Linux and 100 on Windows with no failure.
-* `final=0` with everything else 0: dies at capture 2 (Linux) / 3 (Windows) with `DEVICE_ERROR: EP 0x84 handshake:
-  expected 02, got timeout`, then no register answer until a replug.
-* `final=1 ms` with everything else 0: 30 of 30 captures on Windows; with `quiet=5 ms` added, 100 of 100.
+| profile (keys not named: traced) | forced captures with a wrong reading | p50 per capture |
+| --- | ---: | ---: |
+| none (the traced spacing) | 0 of 299 | 193 ms |
+| `gap=0.005,quiet=0.005,setup=0.002,submit=0.005,start=0.002,read=0.002` (the floors first proposed) | 14 of 300 and 17 of 300; the next phase ended in `DEVICE_ERROR: EP 0x84 handshake: expected 02, got timeout` | 23 ms |
+| the same with `gap` and `quiet` at 100 ms | 8 of 300 | 123 ms |
+| the same with `setup` at 15 ms | 10 of 300 | 37 ms |
+| the same with `submit` at 50 ms | 4 of 300 | 70 ms |
+| `gap=0.005,quiet=0.005` | 0 of 300 | 95 ms |
+| `setup=0.002` | 0 of 300 | 181 ms |
+| `submit=0.005` | 0 of 300 | 148 ms |
+| `start=0.002` | 1 of 300 | 183 ms |
+| `read=0.002` | `DEVICE_ERROR: data transfer ended with status STALL` at capture 70, the session lost | - |
+| **the floor profile** `gap=0.005,quiet=0.005,setup=0.002,submit=0.005` | **0 of 3000** (and 0 of 300 normal-triggered) | **35 ms** |
 
-The floors are therefore the floor profile, the only set that ran without failure on both benches, and `final` is
-the stop handshake itself and is not shortened.
+With the floor profile, also all correct: 20 normal-mode timeouts each followed at once by a new AWG program and a new
+V/div, 20 auto-mode fallbacks, and 20 untriggered repeat runs (50 frames each) each followed by a capture. The scope
+answered a fresh open after every failed session above (no replug).
+
+Earlier runs: a second bench ran the first proposed floors for 10,000 forced captures on Linux without a failure, with
+one setting throughout (which cannot show a capture taken with the registers of the capture before). Zeroing `final`
+wedged the scope within 2-3 captures there (Linux and Windows): `DEVICE_ERROR: EP 0x84 handshake: expected 02, got
+timeout`, then no register answer until a replug; `final` is the stop handshake itself and is not shortened. On
+2026-11-14 the profile `gap=0,submit=0,setup=0,start=0,read=0` (`final` 1 ms) gave `DEVICE_ERROR` from capture 19 on
+the first bench, and needed a replug.
 
 `openm454 info` (top-level `timing`, `{}` with the traced spacing), every capture's metadata and the capture/stream
 JSON (`acq.timing`), the `log` result document - the last line `log` prints, also in its error document - and every
 saved log file (the RAM `.npz`, each disk chunk, the meta of `index.json`; `acq.timing`, the same place as captures),
 `watch` (`timing` in its first and its summary line), the selftest result (top-level `timing`) and the MCP summaries
 (capture, analyze, record_stop, record_status keep `acq.timing`; status and selftest keep `timing`) report the
-active profile, only while one is active. `log --plan` validates and applies the profile; its stream comparison seam
-(`gap_s`) is 0.18 s with the traced spacing and drops to `max(gap, quiet) + setup + submit + start`, 0.014 s at the
-floor profile.
+active profile, only while one is active. `log --plan` validates and applies the profile: in its stream comparison
+the seam between two records (`gap_s`) is the drain, record x (D - R) / R, plus the restart, and the restart is
+0.18 s with the traced spacing and 0.027 s at the floor profile (`max(gap, quiet)`, `setup` and `submit` shortened).
 
 ## 8. Data stream
 
@@ -411,6 +426,7 @@ returns at once in loop mode). Both apply the same rule: roll = auto_trig && win
     test %dl,%dl
     jne  auto
     movb $0,0x35(bsp)                  ; auto_trig = 0                -> roll = 0
+    jmp  done
 auto:
     cmpb $0,0x34(bsp)                  ; repeat
     je   done                          ; not repeat -> roll unchanged (Mso_ComputeGeometry sets it from the data rate)
@@ -449,8 +465,9 @@ they scale with the data rate - a readout effect, not framing.
 Consequence: the window limit applies to the **untriggered** form. A triggered repeat is not subject to it, and it
 is the form DSWave itself records (`corpus4 repeat_mode`): the device re-arms for every frame, so with the trigger on
 roll stays off and the mode is 1 at any window. From the corpus4 `repeat_mode` settings the driver's triggered repeat
-program matches DSWave's recorded setup block write by write (75 writes without CROSS; HW_BASE_MODE 1, 2 transfers,
-pkt_bytes 507904), and every recorded frame's own tail gives the trigger index DSWave's HAL logged
+program matches DSWave's recorded setup block write by write (75 writes without CROSS; HW_BASE_MODE 1, 2 transfers of
+transfer_size 507904 = pkt_bytes 503808 + the 4 KiB tail), and every recorded frame's own tail gives the trigger
+index DSWave's HAL logged
 (`tests/test_repeat_golden.py`, skipped without the local traces).
 
 **(hardware, 2026-11-16)** `--repeat 3 --trig A0:rise:1.4V --trig-mode normal --duration 250ms`, 100 kHz square into
@@ -460,8 +477,10 @@ source instead, three frames take 1.75 s - i.e. each frame waits for its own tri
 
 So `--repeat` carries two behaviours, chosen by the trigger:
 
-* **Triggered**: `--trig SRC:EDGE[:LEVEL] --trig-mode normal`. Every frame is its own acquisition and waits up to
-  `--timeout` (+ `--holdoff`) for its own trigger; `HW_BASE_MODE` stays 1 at any window. Repeat mode with a trigger
+* **Triggered**: `--trig SRC:EDGE[:LEVEL] --trig-mode normal`. Every frame is its own acquisition and waits for its
+  own trigger: the first up to `--timeout` (+ `--holdoff`); after it the frames share one deadline (below) that
+  grows by `--timeout` + `--holdoff` per frame, so a later frame may wait longer than `--timeout` when earlier ones
+  came quickly. `HW_BASE_MODE` stays 1 at any window. Repeat mode with a trigger
   has no auto mode (the device re-arms every frame, so a frame cannot fall back to an untriggered capture):
   `--repeat N` with `--trig` and `--trig-mode auto` (the CLI default) is refused with `INVALID_ARG` (exit 2) before
   the device is opened, with the hint to use `--trig-mode normal`, or `--trig-mode force` for untriggered frames.
@@ -478,24 +497,39 @@ holds 4 Mpts and, at the maximum sample rate, 10 ms; **单次 (single)** holds 4
 trigger modes (Auto, Normal) and no repeat mode at all - `:REPEATModeEnable` is a HAL command, and it produces
 separate records only while roll is off.
 
-**What is measured.** Repeat runs with windows below 200 ms (mode 1) are: 50/500/2000 frames in one start, every
-frame with its own tail and trigger index, stop normal (2026-11-13), and the 100 ms runs above. The untriggered
-repeat program has no DSWave recording behind it: the only repeat scenario recorded from DSWave
-(`corpus4 repeat_mode`) is the triggered one. Untriggered repeat: hardware validation pending (owner bench).
+**What is measured.** The untriggered repeat program has no DSWave recording behind it (the only repeat scenario
+recorded from DSWave, `corpus4 repeat_mode`, is the triggered one); it differs from DSWave's recorded forced single
+capture in one write, `HW_BASE_MODE` 1 instead of 0. On hardware (2026-11-17, one unit, fw `0x3110`, Windows; D0 and
+D1 on the 1 kHz calibration output, A0 on the generator): 2858 untriggered frames over 8 configurations - D0/D1 alone
+at 10 MSa/s x 3 ms x 50, 100 MSa/s x 1.5 ms x 50, 400 MSa/s x 50 us x 500, 1 MSa/s x 150 ms x 5 and x 200 ms x 3 (the
+largest window); A0 + D0/D1 at 10 MSa/s x 2 ms x 50 and 100 MSa/s x 200 us x 200 (10 kHz sine); A0 alone at
+400 MSa/s x 20 us x 2000 (1 MHz sine). Every run returned all its frames with a normal stop and one stop handshake;
+the frames are separate acquisitions (the calibration square's phase moves from frame to frame by a constant step,
+1000 us period, 50 % duty, D0 = D1); every analog frame read the generator frequency within its resolution (10 kHz
++-0.3 %, 1 MHz +-0.015 %) and 2.08-2.09 Vpp; a normal capture after every run was correct. Triggered (the same
+day): A0 rise at 1.5 V (1 kHz square, 10 MSa/s x 2 ms x 20), D0 rise and D0 fall (100 MSa/s x 200 us x 20 each) and
+A0 at 1 MSa/s x 250 ms x 3: every frame had its edge at t = 0; a trigger that never came gave `TIMEOUT_NO_TRIGGER`,
+auto mode was refused. Earlier: 50/500/2000 frames in one start, every frame with its own tail and trigger index,
+stop normal (2026-11-13), and the 100 ms runs above.
 
 **Repeat run limits and reporting.** Engine deadline after the head of a repeat run: max(10 s, 1.5 x record + 2 s,
-min(3600 s, 1.5 x N x (record + 1 ms per-frame floor + pkt_bytes / 50 MB/s) + 2 s [+ (N-1) x (`--timeout` +
-`--holdoff`) for a triggered start])); the 1 ms floor is about 10x the measured 38-108 us per frame. A run whose
-frames alone need more than 3600 s is refused offline with `INVALID_ARG` (0.2 s window x 20000 frames). Memory cap:
-1 GiB for N x (`pkt_bytes`, the transfer with its 4 KiB tail, + decoded bytes), where decoded bytes = analog_depth x
-analog channels + digital_depth x digital channels (1 byte per sample per channel, digital unpacked from 1 bit to
-1 byte); D0-D7, 1 ms, 100k samples, `--repeat 10000` is refused (about 8.6 GiB). With fewer than N frames collected,
+min(3600 s, 1.5 x N x (record + 1 ms per-frame floor + transfer_size / 50 MB/s) + 2 s [+ (N-1) x (`--timeout` +
+`--holdoff`) for a triggered start])); the 1 ms floor is about 10x the measured 38-108 us per frame, and
+transfer_size (the driver's `geom['pkt_bytes']`) is the transfer with its 4 KiB tail. A run whose planned time (the
+same sum without the 3600 s cap) exceeds 3600 s is refused offline with `INVALID_ARG` (it binds for long windows of
+few samples, where the memory cap does not, and for triggered runs, whose trigger waits count too), so a run is never
+cut at the cap. Memory cap: 1 GiB
+for N x (transfer_size + decoded bytes), where decoded bytes = analog_depth x analog channels + digital_depth x
+digital channels (1 byte per sample per channel, digital unpacked from 1 bit to 1 byte); D0-D7, 1 ms, 100k samples,
+`--repeat 10000` is refused (8647 MiB, about 8.4 GiB). Every repeat run is followed by the traced 100 ms hold
+(section 7, item 7), whatever `OPENM454_TIMING` says. With fewer than N frames collected,
 a triggered start gives `TIMEOUT_NO_TRIGGER` (exit 5), an untriggered one `TIMEOUT_DATA` (exit 6), an abort
 `TIMEOUT_DATA` "(aborted)"; none hints at USB 3 and the partial frames are not returned. A digital rise/fall trigger
 in repeat mode is neither checked for misfires nor re-armed (`--trig-retries` has no effect): `acq.trigger_check` is
 `unchecked`, `acq.trigger_check_reason` "repeat mode: frames are neither checked nor re-armed". `stream` and `log`
 (CLI and API) refuse `Settings.repeat != 0` with `INVALID_ARG`; the HAL repeat bit is set only when capture/plan
-pass a count > 0. A negative `--repeat` is a usage error (exit 2); 0 is off.
+pass a count > 0. A negative `--repeat` is `INVALID_ARG` (exit 2, one JSON document), refused before the device is
+opened; 0 is off.
 
 ## 9. AWG (MCX output 0..3 V)
 
