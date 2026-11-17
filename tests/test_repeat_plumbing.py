@@ -262,3 +262,13 @@ def test_a_repeat_capture_saves_every_frame(tmp_path):
     assert int(back.frames[2]['analog']['A0'][0]) == 2
     assert [f['trig_index'] for f in back.frames] == [200, 201, 202]
     assert back.meta['frames_samples'] == {'A0': 8, 'D0': 8}
+
+def test_the_repeat_collect_timeout_covers_every_frame():
+    """200 frames of 100 ms must not hit the 10 s timeout: each frame carries its own record time."""
+    geom = {'record_s': 0.1, 'pkt_bytes': 5_000_000}
+    n = 200
+    untriggered = scope.repeat_collect_seconds(geom, n, 2.0, False)
+    assert untriggered >= 1.5 * n * 0.1 + 2.0
+    triggered = scope.repeat_collect_seconds(geom, n, 2.0, True)
+    assert triggered >= 1.5 * n * (2.0 + 0.1) + 2.0
+    assert triggered > untriggered

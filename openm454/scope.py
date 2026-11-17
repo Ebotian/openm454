@@ -253,6 +253,18 @@ def repeat_memory_guard(n, geom):
     return n
 
 
+def repeat_collect_seconds(geom, n, wait, triggered):
+    """Timeout for N repeat frames: every frame records for record_s and then transfers pkt_bytes.
+
+    The old formula only added N x pkt_bytes / 200 MB/s, so a long record (e.g. 200 x 100 ms = 20 s) hit the
+    10 s floor after ~85 frames.  A triggered frame may also wait for its own trigger.
+    """
+    per_frame = geom['record_s'] + geom['pkt_bytes'] / 2e8
+    if triggered:
+        per_frame += wait
+    return max(10.0, 1.5 * n * per_frame + 2.0)
+
+
 def hal_config(st):
     """User Settings -> SCPI-level HAL parameters (+ per-channel scaling) -> dict."""
     warnings, hints = [], []
@@ -673,8 +685,8 @@ class Scope:
         repeat_window_guard(st, geom, repeat)
         repeat_memory_guard(repeat, geom)
         collect = max(10.0, 1.5 * geom['record_s'] + 2.0)
-        if repeat:          # back-to-back frames: 200 MB/s is a conservative floor for how long they take
-            collect = max(collect, 1.5 * repeat * geom['pkt_bytes'] / 2e8 + 2.0)
+        if repeat:          # every frame has its own record time; the transfer overlaps the next record
+            collect = max(collect, repeat_collect_seconds(geom, repeat, wait, triggered_wanted))
         raw = self._run(prog, geom, self._head_wait(geom, wait if triggered_wanted else 2.0), collect,
                         **({'repeat_frames': repeat} if repeat else {}))
         attempts.append(('triggered' if triggered_wanted else 'forced') if raw.head else 'no-trigger')
