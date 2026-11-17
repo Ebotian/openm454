@@ -76,7 +76,7 @@ module capture {
   action misfire = all {
     running,
     frames' = frames,
-    accepted' = accepted,
+    accepted' = accepted,     // SEEDED-DEFECT marker: a misfire never counts as accepted
     discarded' = discarded + 1,
     running' = running,
     mode' = mode,
@@ -140,7 +140,7 @@ module capture {
     logging' = true,
     streaming' = false,
     running' = false,
-    mode' = 3,
+    mode' = 0,                 // logging is a host path; it does not put the device in repeat mode 3
     repeat' = false,
     frames' = 0,
     accepted' = 0,
