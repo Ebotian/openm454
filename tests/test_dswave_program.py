@@ -14,6 +14,7 @@ The 12 writes DSWave sends before W 0x01=0 (its probe-configuration pre-pass, Se
 part of setup_program(); our program folds the same settings into the per-probe block, so the two sequences differ
 by that pre-pass and nothing else.
 """
+import hashlib
 import json
 from pathlib import Path
 
@@ -99,3 +100,31 @@ def test_the_recording_is_loop_mode_with_the_trigger_off(recorded):
     assert g.blk_bytes == 320
     assert (g.analog_mtxs, g.digital_mtxs) == (1, 1)
     assert g.pretrig == 0x7A140
+
+
+REPEAT_FIXTURE = Path(__file__).resolve().parent / 'fixtures' / 'dswave' / 'triggered_repeat_setup.json'
+REPEAT_NORMALIZED_SHA256 = '925b8f21b53c02b9d06998793bc8c8e14167c6140d5d3d17ad1025e705bbf49b'
+
+
+def test_the_repeat_recording_is_pinned():
+    """Pin the real DSWave repeat-mode recording, not a generator comparison.
+
+    DSWave re-applies its repeat state at Run, and its repeat mode handler also changes
+    auto rate/trigger/transfer (0x3f3/0x3e9/0x3ef/0x5e1/0x5e2), so a same-config baseline
+    that differs only in W 0x00 was not available from the UI. What is pinned here is the
+    real 75-write setup block DSWave 1.2.1 sent for repeat mode; the four per-probe VPWM
+    words are compared by address only.
+    """
+    recorded = json.loads(REPEAT_FIXTURE.read_text())
+
+    assert len(recorded['program']) == 75
+    assert recorded['program'][0] == '01=0000'
+    assert recorded['program'][-2:] == ['00=0001', 'F9=0000']
+    assert '30=0003' in recorded['program']       # auto trigger + trigger enable
+    assert set(recorded['wildcards']) == {'43', '53', '63', '73'}
+
+    normalized = []
+    for entry in recorded['program']:
+        addr = entry.partition('=')[0]
+        normalized.append(addr + '=*' if addr in recorded['wildcards'] else entry)
+    assert hashlib.sha256(json.dumps(normalized).encode()).hexdigest() == REPEAT_NORMALIZED_SHA256
