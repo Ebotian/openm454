@@ -26,10 +26,10 @@ git-ignored fixtures are absent.
 | passed (fast) | 823 | 832 | |
 | passed (full) | 823 | 833 | |
 | skipped | 554 | 554 | unchanged fixture-driven skips |
-| fast wall time | not selectable (86.4 s for everything) | **14.5 s** | excludes the 60 s MCP timeout + the 2.2 s logger test |
+| fast wall time | not selectable (86.4 s for everything) | **14.5 s** | excludes only the `slow`-marked 60 s MCP timeout test |
 | full wall time | 86.40 s | 65.3 s | xdist + one golden runner |
-| test files | 26 | 29 modules + 4 support + 2 fuzz + `conftest.py` | `tests/support` is not collected |
-| test LOC | 8396 | 8759 | `git ls-files 'tests/**/*.py'` (includes `support/`, `conftest.py`, `fuzz/`) |
+| test files | 26 | 29 modules + 5 support + 2 fuzz + `conftest.py` (37 `.py`) | `tests/support` is not collected |
+| test LOC | 8396 | 8760 | `git ls-files tests | grep '\.py$' | xargs cat | wc -l` (includes `support/`, `conftest.py`, `fuzz/`) |
 | tests > 3 s | 1 | 1 | `tests/integration/test_mcp.py::test_log_plan_and_awg_arguments` (60.0 s, `slow`) |
 
 Test LOC grew because Phase 3 added Hypothesis laws and the stateful machine, and because the shared support
@@ -62,14 +62,17 @@ Per-directory times are the junit sum of test durations, so they exceed the wall
 ## Formal model (Quint + Apalache)
 
 - Model: `specs/quint/capture.qnt` — modes 0/1/2/3, repeat, stream/log, trigger/misfire/retry, no-trigger, stop.
-- Invariants: `type_ok`, `no_repeat_in_stream_or_log`, `accepted_frames_only`, `repeats_are_capture_only`,
+- Invariants: `type_ok`, `no_repeat_in_stream_or_log`, `accepted_frames_only`, `misfire_discards_only`,
   `no_trigger_is_no_trigger`, `no_silent_fallback`, `quiet_after_untriggered_stop`; bounds `--max-steps=12`.
+  Each of the three redefined ones was checked to be falsifiable: forcing a repeat run in mode 0, a no-trigger that
+  keeps running, and a misfire that does not bump `discarded` each produces a counterexample.
 - Quint 0.33.1, Apalache 0.63.0 (server on `localhost:8822`; without a server `quint verify` downloads its own
   pinned 0.62.4). `quint test` runs the four named executions in 20 ms; `quint verify` returns `[ok] No violation
   found` in 0.64 s.
 - The first verification attempt found a real modeling bug (`log` set `mode = 3`); it is fixed in the model.
 - Seeded-defect check: `specs/quint/check-seeded.sh` injects "a misfire counts as accepted" and requires a
-  counterexample; the trace is kept in `specs/quint/counterexamples/accepted_frames_only.itf.json`.
+  counterexample. The script writes its trace to a temporary directory, so it never dirties the worktree; the
+  committed `specs/quint/counterexamples/accepted_frames_only.itf.json` is the recorded evidence from the first run.
 
 ## Fuzzing (Atheris)
 
@@ -82,12 +85,12 @@ The nightly job runs the same targets with `-max_total_time=300` (5 min each, in
 
 Only `PacketError`/`ValueError` are accepted; anything else is a crash.
 
-**These runs are crash-robustness checks, not coverage-guided exploration.** The targets import the driver inside
-`atheris.instrument_imports()`, but libFuzzer's own counters stay flat for the whole run (`cov: 72 ft: 72
-corp: 1/1b` in both five-minute logs), and the generated units in the corpus directory are only the ones the
-initial seed sweep produced. Atheris instruments native code, and the Python hooks it installs here do not move
-the counters. The targets are still worth running - three million executions per minute against the byte-level
-decoders with defined-error assertions - but this report does not claim corpus-driven exploration.
+**These runs are crash-robustness checks, not sustained coverage-guided exploration.** The targets
+import the driver inside `atheris.instrument_imports()`. The counters move a little at the start and then stay
+put: the packet target ends at `cov: 72 ft: 72 corp: 1/1b` and the adapter at `cov: 115 ft: 115 corp: 3/165b`,
+with no growth after the first minutes. Atheris instruments native code; the Python hooks it installs here do not
+keep finding new paths. The targets are still worth running - millions of executions per minute against the
+byte-level decoders with defined-error assertions - but no corpus-driven exploration is claimed.
 
 ## Seeded-defect acceptance (Python layers)
 
@@ -115,6 +118,11 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
 - `tests/support/` owns every shared fake: `fakes.py` (scope fakes, `ScriptEngine`, the selftest scope), `sim.py`
   (the USB transport simulator used by the engine tests), `cli.py` (CLI JSON and watch helpers) and `logging.py`
   (loop-mode logger fakes). No test imports another test module any more.
+- The stateful machine (`tests/stateful/test_capture_machine.py`) covers the decisions: misfire re-arm and
+  the retry being returned, repeat mode as one unchecked start, the no-trigger error, the untriggered-repeat
+  failure and the stream/log refusals. The engine hold times (the 100 ms stop) stay in
+  `tests/stateful/test_acquire_sim.py`, where the fake transport can observe them; the machine does not pretend to
+  cover them.
 - `tests/property/test_packet.py` checks the layout algebra only; the round-trip and split-frame laws were dropped
   after they disagreed with the recorded layouts (they encoded an assumption, not the protocol).
 - The spec job uses an Apalache server so `quint verify` does not download a second distribution inside CI.
@@ -129,6 +137,6 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
     quint verify specs/quint/capture.qnt --main=capture --init=init --step=step --max-steps=12 \
-      --server-endpoint localhost:8822 --invariant=type_ok,no_repeat_in_stream_or_log,accepted_frames_only,repeats_are_capture_only,no_trigger_is_no_trigger,no_silent_fallback,quiet_after_untriggered_stop
+      --server-endpoint localhost:8822 --invariant=type_ok,no_repeat_in_stream_or_log,accepted_frames_only,misfire_discards_only,no_trigger_is_no_trigger,no_silent_fallback,quiet_after_untriggered_stop
     QUINT=quint APALACHE_SERVER=localhost:8822 specs/quint/check-seeded.sh
     python tests/fuzz/fuzz_packet.py -max_total_time=300 tests/fuzz/corpus/fuzz_packet
