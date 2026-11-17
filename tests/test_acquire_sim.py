@@ -672,7 +672,7 @@ def test_shortening_the_gap_does_not_shorten_the_quiet_time(monkeypatch):
 
 
 # The floor profile (docs/PROTOCOL.md 7.1): every key at its floor.
-FLOOR = 'gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002,quiet=0.005'
+FLOOR = 'gap=0.005,quiet=0.005,setup=0.002,submit=0.005'
 
 
 @pytest.fixture

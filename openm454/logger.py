@@ -462,11 +462,11 @@ def _timing():
 def restart_s():
     """The seam between two refreshing stream records: RESTART_S with the traced spacing, less what the active
     OPENM454_TIMING profile takes off the waits it is made of (the post-stop quiet time or the gap before the next run,
-    whichever is longer, the setup settle, submit-to-start and the start settle). Stream records always have a head,
+    whichever is longer, the setup settle and submit-to-start). Stream records always have a head,
     so the profile's `quiet` applies there."""
     base, now = timing.baseline(), timing.current()
     saved = max(base['gap'], base['quiet']) - max(now['gap'], now['quiet'])
-    saved += sum(base[k] - now[k] for k in ('setup', 'submit', 'start'))
+    saved += sum(base[k] - now[k] for k in ('setup', 'submit'))
     return max(0.0, RESTART_S - saved)
 
 

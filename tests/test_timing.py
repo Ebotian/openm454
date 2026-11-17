@@ -17,8 +17,8 @@ from openm454.capture import load_capture
 from openm454.errors import DscopeError
 from openm454.fixture import UNKNOWN
 
-FLOOR = 'gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002,quiet=0.005'
-FLOOR_PROFILE = {'gap': 0.005, 'submit': 0.005, 'setup': 0.002, 'start': 0.002, 'read': 0.002, 'quiet': 0.005}
+FLOOR = 'gap=0.005,quiet=0.005,setup=0.002,submit=0.005'
+FLOOR_PROFILE = {'gap': 0.005, 'quiet': 0.005, 'setup': 0.002, 'submit': 0.005}
 
 
 @pytest.fixture(autouse=True)
@@ -43,23 +43,23 @@ def test_without_a_profile_nothing_changes():
     assert timing.active() == {}
     assert (acquire.GAP_BETWEEN_RUNS, acquire.QUIET_AFTER_STOP) == (0.100, 0.100)
     assert transport.READ_DELAY == 0.015
-    assert timing.baseline() == {'gap': 0.100, 'quiet': 0.100, 'submit': 0.050, 'setup': 0.015, 'start': 0.015,
-                                 'final': 0.001, 'read': 0.015}
+    assert timing.baseline() == {'gap': 0.100, 'quiet': 0.100, 'submit': 0.050, 'setup': 0.015, 'final': 0.001}
+    assert (acquire.START_SETTLE, transport.READ_DELAY) == (0.015, 0.015)
 
 
 def test_profile_parses_keys_not_module_names():
-    assert timing.profile('gap=0.005,read=0.003') == {'gap': 0.005, 'read': 0.003}
+    assert timing.profile('gap=0.005,setup=0.003') == {'gap': 0.005, 'setup': 0.003}
     assert timing.profile(' gap = 0.005 ,, submit=0.02 ') == {'gap': 0.005, 'submit': 0.02}
     assert timing.profile('') == {}
 
 
 def test_activate_shortens_the_constants_and_reports_them(monkeypatch):
-    monkeypatch.setenv(timing.ENV, 'gap=0.005,quiet=0.006,read=0.003')
-    assert timing.activate() == {'gap': 0.005, 'quiet': 0.006, 'read': 0.003}
+    monkeypatch.setenv(timing.ENV, 'gap=0.005,quiet=0.006,setup=0.003')
+    assert timing.activate() == {'gap': 0.005, 'quiet': 0.006, 'setup': 0.003}
     assert acquire.GAP_BETWEEN_RUNS == 0.005
     assert acquire.QUIET_AFTER_STOP == 0.006
-    assert transport.READ_DELAY == 0.003
-    assert timing.active() == {'gap': 0.005, 'quiet': 0.006, 'read': 0.003}
+    assert acquire.SETUP_SETTLE == 0.003
+    assert timing.active() == {'gap': 0.005, 'quiet': 0.006, 'setup': 0.003}
     assert applied_matches_reported()
 
 
@@ -107,6 +107,18 @@ def test_front_end_settling_is_not_adjustable(key, name):
     assert key not in timing.KEYS and getattr(scope, name) == before and timing.active() == {}
 
 
+@pytest.mark.parametrize('key, mod, name', [('start', acquire, 'START_SETTLE'), ('read', transport, 'READ_DELAY')])
+def test_start_and_read_are_not_adjustable(key, mod, name):
+    """Shortened to 2 ms on the owner's bench (2026-11-17), `start` gave a capture with the settings of the capture
+    before and `read` ended a session in a STALL: both stay at the traced 15 ms, the key is refused with the reason."""
+    for spec in ('%s=0.002' % key, '%s=0.01' % key, 'gap=0.005,%s=0.005' % key):
+        with pytest.raises(DscopeError) as e:
+            timing.activate(spec)
+        assert e.value.code == 'INVALID_ARG' and 'not adjustable' in e.value.message
+        assert '2026-11-17' in e.value.hint
+    assert key not in timing.KEYS and key not in timing.MIN and getattr(mod, name) == 0.015 and timing.active() == {}
+
+
 @pytest.mark.parametrize('spec', [
     'gap',                 # not key=value
     'nonsense=1',          # unknown key
@@ -122,9 +134,11 @@ def test_front_end_settling_is_not_adjustable(key, name):
     'quiet=0.001',
     'final=0',
     'gap=0.05,gap=0.005',  # a key given twice
-    'gap=0.005,read=0.003,gap=0.005',
+    'gap=0.005,setup=0.003,gap=0.005',
     'wake=0',              # front-end settling: not part of a profile
     'overdrive=0',
+    'start=0.002',         # shortened on hardware: wrong readings / a STALL (2026-11-17)
+    'read=0.002',
 ])
 def test_a_bad_profile_is_invalid_arg_and_changes_nothing(spec):
     with pytest.raises(DscopeError) as e:
@@ -150,19 +164,19 @@ def test_a_refused_profile_mid_list_leaves_no_half_applied_state():
 
 
 def test_a_new_profile_restores_every_key_the_old_one_shortened():
-    timing.activate('gap=0.005,read=0.003')
+    timing.activate('gap=0.005,setup=0.003')
     assert timing.activate('submit=0.01') == {'submit': 0.01}
-    assert (acquire.GAP_BETWEEN_RUNS, transport.READ_DELAY, acquire.SUBMIT_TO_START) == (0.100, 0.015, 0.01)
+    assert (acquire.GAP_BETWEEN_RUNS, acquire.SETUP_SETTLE, acquire.SUBMIT_TO_START) == (0.100, 0.015, 0.01)
     assert applied_matches_reported()
     assert timing.activate('') == {}
     assert timing.current() == timing.baseline() and applied_matches_reported()
 
 
 def test_a_refused_second_profile_keeps_the_first_one_whole():
-    timing.activate('gap=0.005,read=0.003')
+    timing.activate('gap=0.005,setup=0.003')
     with pytest.raises(DscopeError):
         timing.activate('submit=0.01,quiet=0')
-    assert timing.active() == {'gap': 0.005, 'read': 0.003} and applied_matches_reported()
+    assert timing.active() == {'gap': 0.005, 'setup': 0.003} and applied_matches_reported()
 
 
 def test_every_scope_reads_the_variable_again(monkeypatch):
@@ -170,14 +184,14 @@ def test_every_scope_reads_the_variable_again(monkeypatch):
     monkeypatch.setenv(timing.ENV, 'gap=0.005')
     scope.Scope()
     assert timing.active() == {'gap': 0.005}
-    monkeypatch.setenv(timing.ENV, 'read=0.003')
+    monkeypatch.setenv(timing.ENV, 'setup=0.003')
     scope.Scope()
-    assert timing.active() == {'read': 0.003} and acquire.GAP_BETWEEN_RUNS == 0.100 and applied_matches_reported()
+    assert timing.active() == {'setup': 0.003} and acquire.GAP_BETWEEN_RUNS == 0.100 and applied_matches_reported()
     monkeypatch.setenv(timing.ENV, 'gap=oops')
     with pytest.raises(DscopeError) as e:
         scope.Scope()
     assert e.value.code == 'INVALID_ARG'
-    assert timing.active() == {'read': 0.003} and applied_matches_reported()    # the refused one changed nothing
+    assert timing.active() == {'setup': 0.003} and applied_matches_reported()    # the refused one changed nothing
     monkeypatch.delenv(timing.ENV)
     scope.Scope()
     assert timing.active() == {} and timing.current() == timing.baseline()
@@ -187,9 +201,9 @@ def test_a_profile_given_through_the_api_stays_until_the_variable_is_set(monkeyp
     timing.activate('gap=0.005')
     scope.Scope()                                                 # the variable is not set: the API profile stays
     assert timing.active() == {'gap': 0.005} and applied_matches_reported()
-    monkeypatch.setenv(timing.ENV, 'read=0.003')
+    monkeypatch.setenv(timing.ENV, 'setup=0.003')
     scope.Scope()
-    assert timing.active() == {'read': 0.003} and applied_matches_reported()
+    assert timing.active() == {'setup': 0.003} and applied_matches_reported()
 
 
 def test_scope_refuses_a_bad_profile_before_opening_anything(monkeypatch):
@@ -202,8 +216,8 @@ def test_scope_refuses_a_bad_profile_before_opening_anything(monkeypatch):
 def test_the_stream_seam_estimate_follows_the_profile():
     assert logger.restart_s() == pytest.approx(logger.RESTART_S)          # the traced spacing: the measured seam
     timing.activate(FLOOR)
-    # 100 -> 5 ms quiet/gap, 15 -> 2 ms setup, 50 -> 5 ms submit, 15 -> 2 ms start
-    assert logger.restart_s() == pytest.approx(logger.RESTART_S - 0.095 - 0.013 - 0.045 - 0.013)
+    # 100 -> 5 ms quiet/gap, 15 -> 2 ms setup, 50 -> 5 ms submit (the start settle is not adjustable)
+    assert logger.restart_s() == pytest.approx(logger.RESTART_S - 0.095 - 0.013 - 0.045)
 
 
 def test_the_log_plan_compares_with_stream_at_the_active_spacing():
