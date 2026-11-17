@@ -6,9 +6,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
 
 | behavior | unit | property | stateful | golden | integration | fuzz | spec |
 | --- | :--: | :--: | :--: | :--: | :--: | :--: | :--: |
-| channel counts (1/2/4 analog, 1/2/4/8 digital, permutations) | ✅ | ✅ | ✅ | ✅ |  | ✅ |  |
-| timing: default profile, floor profile, fixed keys refused, untriggered 100 ms stop | ✅ | ✅ | ✅ |  |  |  | ✅ |
-| trigger: none, rise/fall, any, normal/auto/force, holdoff | ✅ |  | ✅ | ✅ |  |  | ✅ |
+| channel counts (1/2/4 analog, 1/2/4/8 digital, permutations) | ✅ | ✅ | ✅ | ✅ |  |  |  |
+| timing: default profile, floor profile, fixed keys refused, untriggered 100 ms stop | ✅ | ✅ | ✅ |  |  |  |  |
+| trigger: none, rise/fall, any, normal/auto/force, holdoff | ✅ |  | ✅ | ✅ |  |  |  |
 | trigger: misfire detection, re-arm, retries share the wait, no-trigger is `TIMEOUT_NO_TRIGGER` |  |  | ✅ |  | ✅ |  | ✅ |
 | repeat: 0/1/N frames, forced vs triggered, mode-3 refusal, plan limits | ✅ |  | ✅ | ✅ |  |  | ✅ |
 | repeat: misfire retry keeps the retry frames, stop holds 100 ms |  |  | ✅ |  |  |  |  |
@@ -16,7 +16,17 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
 | packet: head/tail, first vs later frame, block sizes, endianness/permutation, malformed input | ✅ | ✅ |  | ✅ |  | ✅ |  |
 | setup/stop: setup program, start, stop, cross-table caches, repeated runs |  |  | ✅ | ✅ |  |  | ✅ |
 | interfaces: CLI, MCP, API, save/load, info/watch/log | ✅ | ✅ |  |  | ✅ |  |  |
-| hardware: selftest, golden traces, real M454 (`hw` marker, never in CI) |  |  |  |  |  |  |  |
+| hardware: real M454 golden traces (`hw` marker; no pytest hardware test exists yet) |  |  |  |  |  |  |  |
+
+## Notes on the marks
+
+- **timing and spec:** the Quint model has a single `quiet` flag for the stop, not the capture-spacing profile, so
+  the profile floors are covered by unit, property and stateful tests only.
+- **channel counts and fuzz:** both fuzz targets use one fixed 2 analog / 2 digital layout, so they say nothing about
+  other channel counts; the fuzz mark on the packet row is about the byte surface, not the layout.
+- **hardware:** `test_selftest` is an offline fake-scope test and lives in `tests/unit/`; there is no pytest test that
+  needs the scope today, so the hardware row is documentation of recorded bench runs, not a CI layer.
+- **selftest** appears in the interfaces row because it is a CLI/MCP-facing command with an offline oracle.
 
 ## Layers
 

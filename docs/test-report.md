@@ -28,25 +28,26 @@ git-ignored fixtures are absent.
 | skipped | 554 | 554 | unchanged fixture-driven skips |
 | fast wall time | not selectable (86.4 s for everything) | **14.5 s** | excludes the 60 s MCP timeout + the 2.2 s logger test |
 | full wall time | 86.40 s | 65.3 s | xdist + one golden runner |
-| test files | 26 | 30 modules + 4 support + 2 fuzz | `tests/support` is not collected |
-| test LOC | 8396 | 8537 | `tests/**/*.py` including `support/`, `conftest.py`, `fuzz/` |
+| test files | 26 | 29 modules + 4 support + 2 fuzz + `conftest.py` | `tests/support` is not collected |
+| test LOC | 8396 | 8759 | `git ls-files 'tests/**/*.py'` (includes `support/`, `conftest.py`, `fuzz/`) |
 | tests > 3 s | 1 | 1 | `tests/integration/test_mcp.py::test_log_plan_and_awg_arguments` (60.0 s, `slow`) |
 
-Test LOC grew by 141 lines because Phase 3 added Hypothesis laws and the stateful machine; the LOC target was
-"measure first, then decide", and the Phase 2 consolidation removed the duplicated AWG golden file
-(`test_awg_golden.py`, 30 lines) into the shared runner without losing assertions.
+Test LOC grew because Phase 3 added Hypothesis laws and the stateful machine, and because the shared support
+package now owns the fakes, the USB simulator, the CLI helpers and the logger fakes (487 lines that used to be
+inline in three test modules). The LOC target was "measure first, then decide": the consolidation removed the
+duplicated AWG golden file and merged the DSWave loop-mode block into the runner without losing assertions.
 
 ## Per directory (fast / full)
 
 | directory | files | LOC | tests | skipped | fast | full |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `tests/unit` | 11 | 2392 | 276 | 0 | 3.74 s | 3.87 s |
-| `tests/property` | 4 | 116 | 7 | 0 | 0.17 s | 0.18 s |
-| `tests/stateful` | 4 | 2185 | 152 | 0 | 13.06 s | 13.00 s |
-| `tests/golden` | 6 | 1811 | 838 | 548 | 0.14 s | 0.17 s |
-| `tests/integration` | 5 | 2033 | 113 | 6 | 10.34 s | 70.09 s |
-| `tests/support` | 4 | — | 0 | 0 | — | — |
-| `tests/fuzz` | 2 (+2 seeds) | — | 0 | 0 | — | — |
+| `tests/unit` | 11 | 2336 | 276 | 0 | 3.79 s | 3.76 s |
+| `tests/property` | 4 | 111 | 7 | 0 | 0.33 s | 0.33 s |
+| `tests/stateful` | 4 | 1967 | 152 | 0 | 12.92 s | 12.91 s |
+| `tests/golden` | 5 | 1788 | 838 | 548 | 0.14 s | 0.13 s |
+| `tests/integration` | 5 | 1964 | 113 | 6 | 10.51 s | 70.19 s |
+| `tests/support` | 4 | 487 | 0 | 0 | — | — |
+| `tests/fuzz` | 2 | 84 | 0 | 0 | — | — |
 
 Per-directory times are the junit sum of test durations, so they exceed the wall time under xdist.
 
@@ -74,14 +75,19 @@ Per-directory times are the junit sum of test durations, so they exceed the wall
 
 | target | surface | 5 min run | corpus |
 | --- | --- | ---: | --- |
-| `fuzz_packet.py` | `packet.split_frames`, `packet.decode` with a 2 analog/2 digital repeat layout | 12,863,193 execs, 0 crashes | 4 seeds -> 18 units |
-| `fuzz_adapter.py` | `mso_adapter.decode` / `decode_frames` with a magic-valid head and a fuzzed trigger word | 12,841,387 execs, 0 crashes | 4 seeds -> 21 units |
+| `fuzz_packet.py` | `packet.split_frames`, `packet.decode` with a 2 analog/2 digital repeat layout | 12,863,193 execs, 0 crashes | 4 seeds + 7 generated units |
+| `fuzz_adapter.py` | `mso_adapter.decode` / `decode_frames` with a magic-valid head and a fuzzed trigger word | 12,841,387 execs, 0 crashes | 4 seeds + 17 generated units |
 
 The nightly job runs the same targets with `-max_total_time=300` (5 min each, inside the 5-10 min budget).
 
-Only `PacketError`/`ValueError` are accepted; anything else is a crash. Python coverage requires
-`atheris.instrument_imports()`: without it the corpus stays at one unit even at 1.5 M execs/s (observed), because
-only native interpreter paths are instrumented.
+Only `PacketError`/`ValueError` are accepted; anything else is a crash.
+
+**These runs are crash-robustness checks, not coverage-guided exploration.** The targets import the driver inside
+`atheris.instrument_imports()`, but libFuzzer's own counters stay flat for the whole run (`cov: 72 ft: 72
+corp: 1/1b` in both five-minute logs), and the generated units in the corpus directory are only the ones the
+initial seed sweep produced. Atheris instruments native code, and the Python hooks it installs here do not move
+the counters. The targets are still worth running - three million executions per minute against the byte-level
+decoders with defined-error assertions - but this report does not claim corpus-driven exploration.
 
 ## Seeded-defect acceptance (Python layers)
 
@@ -101,11 +107,14 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
 
 ## Deviations from the plan
 
-- The golden layer is one table-driven runner for the AWG programs and the old repeat snapshot
-  (`tests/golden/test_golden.py`); the large recorded-family suites (`test_mso_golden`, `test_packet_golden`,
-  `test_awg_modes_golden`, `test_repeat_golden`, `test_dswave_program`) stay as separate table-driven files
-  rather than being merged into one runner — merging them would have rewritten hundreds of recorded assertions for
-  no coverage gain.
+- The golden layer is one table-driven runner for the AWG programs, the old repeat snapshot and the DSWave
+  loop-mode setup block (`tests/golden/test_golden.py`). The recorded families that read their own traces
+  (`test_mso_golden`, `test_packet_golden`, `test_awg_modes_golden`, `test_repeat_golden`) stay as separate
+  table-driven files: they are already table-driven over their fixture, and merging them would rewrite hundreds of
+  recorded assertions for no coverage gain.
+- `tests/support/` owns every shared fake: `fakes.py` (scope fakes, `ScriptEngine`, the selftest scope), `sim.py`
+  (the USB transport simulator used by the engine tests), `cli.py` (CLI JSON and watch helpers) and `logging.py`
+  (loop-mode logger fakes). No test imports another test module any more.
 - `tests/property/test_packet.py` checks the layout algebra only; the round-trip and split-frame laws were dropped
   after they disagreed with the recorded layouts (they encoded an assumption, not the protocol).
 - The spec job uses an Apalache server so `quint verify` does not download a second distribution inside CI.
