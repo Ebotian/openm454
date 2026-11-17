@@ -385,9 +385,10 @@ separate records only while roll is off.
 
 **What is measured.** Repeat runs with windows below 200 ms (mode 1) are: 50/500/2000 frames in one start, every
 frame with its own tail and trigger index, stop normal (2026-11-13), and the 100 ms runs above. The untriggered
-repeat program still has no DSWave recording behind it: the only repeat scenario recorded from DSWave
-(`corpus4 repeat_mode`) is the triggered one, and a triggered repeat start is what this driver refuses with
-`INVALID_ARG`.
+repeat program still has no DSWave recording behind it. The only repeat scenario recorded from DSWave
+(`corpus4 repeat_mode`) is the triggered one, and that is the form this driver supports (2026-11-16: a 2 Hz source
+gives three 250 ms frames in 1.75 s, each waiting for its own trigger); the untriggered program is the one still
+waiting for a trace.
 
 ## 9. AWG (MCX output 0..3 V)
 
