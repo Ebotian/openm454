@@ -103,8 +103,8 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
 ### Repeat mode (`capture --repeat N`)
 
 `capture --repeat N` collects N back-to-back frames in one start: the device re-arms between frames (register 0x00
-`HW_BASE_MODE` = 1) instead of the host starting a run per capture, which costs ~190 ms of protocol spacing (about
-5.3 captures per second).
+`HW_BASE_MODE` = 1) instead of the host starting a run per capture, which costs ~193 ms of protocol spacing (about
+5.2 captures per second).
 
 - Two kinds of start, and they behave differently:
   - **triggered** (`--trig SRC:EDGE[:LEVEL] --trig-mode normal`): every frame is its own acquisition and waits for
@@ -121,9 +121,10 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
     start back to back. An applied window (the HAL sample time, not `--duration`) above 200 ms would switch the
     device to `HW_BASE_MODE 3`, a stream and not N acquisitions, and is refused with `INVALID_ARG`; the message
     names the applied window and says when the 1024-sample minimum of an explicit `--rate` lengthened `--duration`
-    (`--rate 5k --duration 100ms` applies 0.256 s at 4 kSa/s). Raise or drop `--rate`, keep the window <= 0.2 s,
+    (`-c A0 --rate 5k --duration 100ms` applies 0.256 s at 4 kSa/s). Raise or drop `--rate`, keep the window <= 0.2 s,
     trigger the frames, or use `stream`. This program has no DSWave recording (DSWave's own repeat scenario is the
-    triggered one); it differs from DSWave's recorded forced capture in one write, `HW_BASE_MODE` 1 instead of 0.
+    triggered one); it differs from DSWave's recorded forced capture of the same settings in one write, `HW_BASE_MODE` 1 instead
+    of 0 (2 below the 102.4 MB/s stream threshold).
     Validated on hardware (2026-11-17, Windows): 2858 frames over 8 configurations, D0/D1 on the 1 kHz calibration
     output at 1-400 MSa/s with windows from 50 us to 200 ms, and A0 on the generator (10 kHz, 1 MHz): every run
     complete with a normal stop, every frame a separate acquisition (the square's phase moves from frame to frame),
@@ -136,18 +137,18 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   sample per channel, digital unpacked from 1 bit to 1 byte): D0-D7, 1 ms, 100k samples, `--repeat 10000` is refused
   (8647 MiB, about 8.4 GiB). A negative `--repeat` is `INVALID_ARG` (exit 2), refused before the device is opened; 0
   is off. Every repeat run is followed by the traced 100 ms hold whatever `OPENM454_TIMING` says (the device re-arms
-  after every frame). `stream` and `log` refuse repeat settings with `INVALID_ARG`; the MCP `capture` tool has no
-  repeat parameter.
+  after every frame). `stream` and `log` have no `--repeat`; through the Python API they refuse
+  `Settings.repeat` with `INVALID_ARG`. The MCP `capture` tool has no repeat parameter.
 - Fewer frames than N: triggered gives `TIMEOUT_NO_TRIGGER` (exit 5, "collected k of N frames"), untriggered
   `TIMEOUT_DATA` (exit 6), an abort `TIMEOUT_DATA` "(aborted)"; the partial frames are not returned. A digital
   rise/fall trigger is neither checked for misfires nor re-armed (`--trig-retries` has no effect):
   `acq.trigger_check` is `unchecked` with `acq.trigger_check_reason`.
-- Each frame is decoded on its own. The JSON has `acq.repeat_frames` (asked) and `acq.frames` (collected) and, after
-  `files`/`hints`/`warnings`, `frames_summary` over every frame (`count`, `listed`, `without_trig_index`,
+- Each frame is decoded on its own. The JSON has `acq.repeat_frames` (asked) and `acq.frames` (collected) and, with
+  more than one frame, after `files`/`hints`/`warnings`, `frames_summary` over every frame (`count`, `listed`, `without_trig_index`,
   `without_trig_index_first`, and `analog` per channel with `vpp_v` / `vmin_v` / `vmax_v` as `{min, median, max}`)
   and `frames`, the first 100 frames only, each with `index`, `trig_index` and `analog` basics. `analyze` of a repeat
   `.npz` reports the same. `Capture.frames` holds one dict per frame (analog, digital, `trig_index`).
-- The `.npz` keeps every frame: `analog_A1` / `digital_D0` hold frame 0 as for a single capture, `frames_analog_A1`
+- The `.npz` keeps every frame (with more than one; `--repeat 1` saves a plain single capture): `analog_A1` / `digital_D0` hold frame 0 as for a single capture, `frames_analog_A1`
   is (frames, samples) uint8 codes, `frames_digital_D0` is (frames, ceil(samples/8)) uint8, each row packed with
   `np.packbits(bitorder='little')` (not frames x samples), plus meta `frames_samples` and `frame_trig_index`;
   `load_capture` unpacks them. `--measure`, `--edges`, `--dump`, `--decode`, the JSON analog/digital blocks and the
@@ -157,7 +158,7 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   400 MSa/s, 2048 samples per frame, 2000 frames in 452 ms (380 ms of that is setup) = 4.4 kframes/s end to end,
   ~38 us per frame after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. On Windows (2026-11-17, whole
   call): A0 at 400 MSa/s, 20 us (8192 samples), 2000 frames in 0.29 s; D0/D1 at 400 MSa/s, 50 us, 500 frames in
-  0.29 s. Repeated single captures cost ~190 ms of protocol spacing each (5.3/s).
+  0.29 s. Repeated single captures cost ~193 ms of protocol spacing each (5.2/s).
 
 ### Above the readout limit: how `log` decides
 

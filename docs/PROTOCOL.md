@@ -253,7 +253,7 @@ hint saying why):
 
 The profile is refused with `INVALID_ARG` (exit 2, one JSON document) before anything is sent or the device is
 opened, for every CLI command that can reach the device (`info`, `capture`, `watch`, `stream`, `log` including
-`--plan`, `bench` including `--no-device`, `awg`, `release`, `recover`, `selftest`, `debug` including `plan`), and the
+`--plan`, `bench` including `--no-device`, `awg`, `release`, `recover`, `selftest`, `debug` including `plan`, `cal import --bind`), and the
 MCP tools report `INVALID_ARG`: an entry that is not `key=value`, an unknown key, `start`, `read`, `wake` or
 `overdrive`, a key given twice, a value that is not a finite non-negative number, a value above the traced one or below
 its floor. A refused profile is never applied in part. Every `Scope()` reads `OPENM454_TIMING` again: a changed value
@@ -489,7 +489,7 @@ So `--repeat` carries two behaviours, chosen by the trigger:
   back to back; the head wait is 2 s + record + 0.5 s (no head: `PROTOCOL_ERROR`, exit 6). An untriggered repeat
   whose applied window (the HAL sample time, not `--duration`) is above 200 ms would switch the device to
   `HW_BASE_MODE 3` (the stream above) and is refused with `INVALID_ARG`; the message names the applied window and
-  says when the 1024-sample minimum of an explicit `--rate` lengthened `--duration` (`--rate 5k --duration 100ms`
+  says when the 1024-sample minimum of an explicit `--rate` lengthened `--duration` (`-c A0 --rate 5k --duration 100ms`
   applies 0.256 s at 4 kSa/s and is refused). `stream` and `log` are for that case.
 
 The vendor datasheet (V1.0.0, 2025-11-01) draws the same line from the other side: **实时 (real-time)** recording
@@ -499,7 +499,8 @@ separate records only while roll is off.
 
 **What is measured.** The untriggered repeat program has no DSWave recording behind it (the only repeat scenario
 recorded from DSWave, `corpus4 repeat_mode`, is the triggered one); it differs from DSWave's recorded forced single
-capture in one write, `HW_BASE_MODE` 1 instead of 0. On hardware (2026-11-17, one unit, fw `0x3110`, Windows; D0 and
+capture of the same settings in one write, `HW_BASE_MODE` 1 instead of 0 (2 below the 102.4 MB/s stream
+threshold). On hardware (2026-11-17, one unit, fw `0x3110`, Windows; D0 and
 D1 on the 1 kHz calibration output, A0 on the generator): 2858 untriggered frames over 8 configurations - D0/D1 alone
 at 10 MSa/s x 3 ms x 50, 100 MSa/s x 1.5 ms x 50, 400 MSa/s x 50 us x 500, 1 MSa/s x 150 ms x 5 and x 200 ms x 3 (the
 largest window); A0 + D0/D1 at 10 MSa/s x 2 ms x 50 and 100 MSa/s x 200 us x 200 (10 kHz sine); A0 alone at
@@ -527,7 +528,7 @@ a triggered start gives `TIMEOUT_NO_TRIGGER` (exit 5), an untriggered one `TIMEO
 `TIMEOUT_DATA` "(aborted)"; none hints at USB 3 and the partial frames are not returned. A digital rise/fall trigger
 in repeat mode is neither checked for misfires nor re-armed (`--trig-retries` has no effect): `acq.trigger_check` is
 `unchecked`, `acq.trigger_check_reason` "repeat mode: frames are neither checked nor re-armed". `stream` and `log`
-(CLI and API) refuse `Settings.repeat != 0` with `INVALID_ARG`; the HAL repeat bit is set only when capture/plan
+have no `--repeat` on the CLI, and through the API refuse `Settings.repeat != 0` with `INVALID_ARG`; the HAL repeat bit is set only when capture/plan
 pass a count > 0. A negative `--repeat` is `INVALID_ARG` (exit 2, one JSON document), refused before the device is
 opened; 0 is off.
 

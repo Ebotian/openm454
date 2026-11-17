@@ -65,6 +65,19 @@ python -m openm454 selftest
 - `log --plan`(无需设备)会输出针对某个采样率的结论、无间隙上限和建议(见下一节)、运行最长能持续多久(`max_duration_s`)以及数据去向:默认保存在内存(放不进预算时拒绝,除非加 `--keep-last`),`--storage disk` 写成约 256 MB 的分块文件(会警告 SSD 磨损:200 MB/s 相当于每小时 720 GB),`--storage none` 只做统计。
 - `bench` 测量这台电脑(空闲内存、解码速度、磁盘写入速度、USB 读出速度),并记录用户允许录制和数据文件夹使用多少内存和磁盘(`bench --ram 8GB --disk 50GB --dir <folder>`,保存在 `state/host.json`);`log` 的默认值取自这里。实测(一台主机):解码 468 MB/s,USB 读出 206 MB/s(4 个模拟 + 8 个数字)/ 267 MB/s(2 个模拟 + 8 个数字)。
 
+### 重复模式(`capture --repeat N`)
+
+`capture --repeat N` 在一次启动中连续采集 N 帧:设备在帧与帧之间自行重新待命(寄存器 0x00 `HW_BASE_MODE` = 1),而不是由主机为每次采集各启动一次运行,后者带来约 193 ms 的协议间隔(约每秒 5.2 次采集)。
+
+- 两种启动方式,行为不同:
+  - **触发**(`--trig SRC:EDGE[:LEVEL] --trig-mode normal`):每一帧都是各自的一次采集,并等待各自的触发,第一帧最多等 `--timeout`(+ `--holdoff`);此后各帧共用一个截止时间,每帧增加 `--timeout` + `--holdoff`,因此当前面的帧来得很快时,后面的帧可能等得更久。`HW_BASE_MODE` 在任何窗口下都保持为 1,寄存器程序与 DSWave 抓包记录的触发重复程序逐次写入完全一致。实测(2026-11-17,Windows):1 kHz 方波上 A0 在 1.5 V 上升沿(10 MSa/s,2 ms,20 帧)、1 kHz 校准输出上 D0 上升沿和 D0 下降沿(100 MSa/s,200 us,各 20 帧)以及 A0 使用 250 ms 窗口(3 帧):每一帧的边沿都在 t = 0。更早(2026-11-16,100 kHz 方波,`--duration 250ms --repeat 3`):三条独立记录,0 % 字节相同,1.1 s;信号源为 2 Hz 时同样的运行需要 1.75 s。`--repeat` 与 `--trig` 同时使用且 `--trig-mode auto`(CLI 默认值)会被拒绝,报 `INVALID_ARG`:带触发的重复模式没有 auto 模式(用 `--trig-mode normal`,或用 `--trig-mode force` 做无触发帧)。启动时没有触发则为 `TIMEOUT_NO_TRIGGER`(退出码 5),没有强制回退。
+  - **无触发**(没有 `--trig`,任何触发模式包括 auto,或 `--trig-mode force`):各帧紧接启动依次连续采集。应用后的窗口(HAL 的采样时间,而不是 `--duration`)超过 200 ms 会使设备切换到 `HW_BASE_MODE 3`,那是数据流而不是 N 次采集,因此被拒绝并报 `INVALID_ARG`;错误信息会给出应用后的窗口,并说明显式 `--rate` 的 1024 个采样点下限何时延长了 `--duration`(`-c A0 --rate 5k --duration 100ms` 在 4 kSa/s 下实际应用 0.256 s)。请提高或去掉 `--rate`,把窗口保持在 <= 0.2 s,给各帧加触发,或使用 `stream`。这个程序没有 DSWave 的抓包记录(DSWave 自己的重复场景是触发的那个);它与 DSWave 抓包记录的相同设置的强制采集只相差一次写入,即 `HW_BASE_MODE` 为 1 而不是 0(数据率低于 102.4 MB/s 的流阈值时为 2)。已在硬件上验证(2026-11-17,Windows):8 种配置共 2858 帧,D0/D1 接在 1 kHz 校准输出上,采样率 1-400 MSa/s,窗口从 50 us 到 200 ms,以及 A0 接在信号发生器上(10 kHz、1 MHz):每次运行都完整并正常停止,每一帧都是单独的一次采集(方波的相位逐帧移动),每个模拟帧都在信号发生器频率上,每次运行之后的一次普通 capture 也都正确。
+- 限制:运行的截止时间为 max(10 s, 1.5 x 记录时长 + 2 s, min(3600 s, ...)),每帧的开销为记录时长加 1 ms 加 50 MB/s 下的传输时间,触发启动时再加 (N-1) x (`--timeout` + `--holdoff`);计划时间 1.5 x N x (记录时长 + 1 ms + 传输时间) + 2 s 再加上这些触发等待,超过 3600 s 的运行会在打开设备之前被拒绝,报 `INVALID_ARG`(降低 `--repeat` 或 `--timeout`、缩短窗口,或使用 `log` / `stream`)。主机内存上限为 1 GiB,按 N x (传输数据加其 4 KiB 尾部 + 解码后的字节数,每通道每个采样点 1 字节,数字通道从 1 位展开为 1 字节)计算:D0-D7、1 ms、100k 个采样点、`--repeat 10000` 被拒绝(8647 MiB,约 8.4 GiB)。负的 `--repeat` 为 `INVALID_ARG`(退出码 2),在打开设备之前拒绝;0 表示关闭。无论 `OPENM454_TIMING` 如何设置,每次重复运行之后都会接着抓包记录的 100 ms 保持(设备在每一帧之后都会重新待命)。`stream` 和 `log` 没有 `--repeat`;通过 Python API 时它们会拒绝 `Settings.repeat`,报 `INVALID_ARG`。MCP 的 `capture` 工具没有重复参数。
+- 帧数少于 N:触发时为 `TIMEOUT_NO_TRIGGER`(退出码 5,"collected k of N frames"),无触发时为 `TIMEOUT_DATA`(退出码 6),中止时为 `TIMEOUT_DATA` "(aborted)";已采集的部分帧不会返回。数字上升/下降沿触发既不检查误触发,也不重新待命(`--trig-retries` 不起作用):`acq.trigger_check` 为 `unchecked`,并带有 `acq.trigger_check_reason`。
+- 每一帧单独解码。JSON 中有 `acq.repeat_frames`(要求的帧数)和 `acq.frames`(已采集的帧数),帧数多于一帧时,还在 `files`/`hints`/`warnings` 之后有覆盖所有帧的 `frames_summary`(`count`、`listed`、`without_trig_index`、`without_trig_index_first`,以及每个通道的 `analog`,其中 `vpp_v` / `vmin_v` / `vmax_v` 为 `{min, median, max}`)和 `frames`,后者只含前 100 帧,每帧有 `index`、`trig_index` 和 `analog` 基本信息。对重复 `.npz` 做 `analyze` 会报告相同内容。`Capture.frames` 为每一帧保存一个字典(analog、digital、`trig_index`)。
+- `.npz` 保留每一帧(多于一帧时;`--repeat 1` 保存为普通的单次 capture):`analog_A1` / `digital_D0` 与单次 capture 一样保存第 0 帧,`frames_analog_A1` 为 (帧数, 采样点数) 的 uint8 码值,`frames_digital_D0` 为 (帧数, ceil(采样点数/8)) 的 uint8,每行用 `np.packbits(bitorder='little')` 打包(不是 帧数 x 采样点数),另有元数据 `frames_samples` 和 `frame_trig_index`;`load_capture` 会将其解包。`--measure`、`--edges`、`--dump`、`--decode`、JSON 中的模拟/数字块以及 PNG 都只描述第 0 帧。一帧在其记录之外携带的字节是设备缓冲区内容,不是信号,会被该帧的尾部裁掉。
+- 在一台 Linux 设备上通过 USB 3 实测(2026-11-16,1 个模拟通道,默认队列深度):400 MSa/s 下 5 us 窗口,每帧 2048 个采样点,2000 帧用时 452 ms(其中 380 ms 是设置)= 端到端 4.4 kframes/s,设置之后每帧约 38 us;10 us / 4096 个采样点:2000 帧用时 478 ms。在 Windows 上(2026-11-17,整个调用):A0 400 MSa/s、20 us(8192 个采样点),2000 帧用时 0.29 s;D0/D1 400 MSa/s、50 us,500 帧用时 0.29 s。重复的单次 capture 每次约 193 ms 协议间隔(5.2/s)。
+
 ### 超过读出上限时:`log` 如何判断
 
 D = 数据率;R = 这台电脑在示波器采集时读取它的速度。R 取决于通道组合(一台主机实测:4 个模拟 + 8 个数字 50 MSa/s 为 202 MB/s,同样通道在 100 MSa/s 以及 2 个模拟 + 8 个数字 100 MSa/s 为 264 MB/s,4 个模拟 100 MSa/s 为 275 MB/s)。
@@ -109,6 +122,24 @@ python -m openm454 stream -c D0-D7 --rate 100M --duration 60s --every 1s
 无论是否给出 `--json`,每条命令都输出一个 JSON 文档(`watch`、`stream` 和 `log`:每行一个,最后是结果):包括测量值、实际应用的设置、文件路径。采样点从不打印(除非用 `--dump N` 要求输出抽取后的序列);采集结果保存为 `.npz`(原始码值 + 比例系数)和 `.png`。图中模拟通道的图例位于绘图区上方的一行(每个通道一项,例如 `A1  1V/div  Vpp 2.86V  f 1kHz`),标题在图例之上,数字通道的泳道标签位于右侧边距,波形上只绘制触发标记(t = 0 处的虚线、模拟触发电平的点线);解码出的帧不会画在图上,它们在 JSON 和 `<capture>_decode.json` 中。`python -m openm454 <command> --help` 列出所有选项。Python API:`openm454.scope.Scope`、`openm454.capture.load_capture`、`Capture.decode()`、`openm454.plot.render(cap, window=None, title=None, summary=None, channels=None)`(返回图形对象,由调用方关闭)、`openm454.firmware.status()` / `save_dswave()`。
 
 协议解码器(`--decode SPEC`,可重复,用于 `capture`、`watch`、`stream` 和 `analyze`):`uart:rx=D4,baud=115200|auto,bits=8,parity=none,stop=1,invert=0`、`spi:clk=..,mosi=..,miso=..,cs=..,mode=0..3`、`i2c:scl=..,sda=..`、`can:rx=..,bitrate=500k|auto,invert=0`。它们会报告每一帧(时间相对于触发点)及其错误(校验/帧错误、不完整的字、NACK、CRC/填充/格式错误),并去除慢边沿上的比较器抖动。输出格式:`docs/schemas/decode.json`。解码需要每位或每个时钟周期约 10 个采样点(I2C:每个 SCL 周期 9 个,无错误;每周期 5-6 个仍可解码,错误远低于 1 %)。它们已用微控制器产生的真实总线做过验证(SPI 最高 18 MHz、RS232、CAN 最高 1 Mbit/s、I2C 最高 400 kHz),包括深存储采集和解码后的数据流。
+
+### 采集间隔(`OPENM454_TIMING`)
+
+每次采集都要付出 DSWave 所用的间隔:运行前 100 ms,提交读取与启动写入之间 50 ms,两次 15 ms 的稳定等待,以及每次寄存器读取 15 ms,合计每次采集约 193 ms,每秒略多于 5 次采集。配置档(profile)可以在一次会话内缩短选定的等待;抓包记录到的间隔仍是默认值,不设置该变量时没有任何变化。下限配置档在一台 Windows 实验台上测得每次采集 35 ms(p50):
+
+```bash
+OPENM454_TIMING=gap=0.005,quiet=0.005,setup=0.002,submit=0.005   # 35 ms per capture instead of 193 ms
+```
+
+五个键(抓包记录值,下限):`gap` 100 / 5 ms(每次运行之前),`quiet` 100 / 5 ms(强制或触发的单次运行停止后不访问寄存器),`submit` 50 / 5 ms,`setup` 15 / 2 ms,`final` 1 / 1 ms(不缩短:它就是停止握手本身)。配置档只能缩短。无论配置档如何,以下各项不可调:
+
+- `start`(启动写入后 15 ms)和 `read`(每次寄存器读取 15 ms):缩短到 2 ms 时,单独缩短 `start` 会得到一次按上一次采集的设置采集的结果(300 次中 1 次),单独缩短 `read` 则在第 70 次采集时因数据传输 STALL 而结束会话。`start=...` 和 `read=...` 会报 `INVALID_ARG`。
+- 模拟前端的稳定时间(仅数字通道运行之后或会话开始后的第一次模拟运行前 150 ms,输入饱和之后 300 ms)是设备物理特性:`wake=...` 和 `overdrive=...` 会报 `INVALID_ARG`。
+- 在没有触发头的运行停止之后(normal/auto 超时且没有触发,或在触发之前收到停止请求),以及每次重复运行之后,驱动会按抓包记录的 100 ms 保持所有寄存器访问:在此类停止后约 10 ms 内发出的写入在硬件上被丢弃过。
+
+这些下限的原因:缩短等待可能使示波器在没有任何错误提示的情况下漏掉寄存器写入,此时采集仍按上一次采集的寄存器运行,而主机却用新的设置来换算。在用户的实验台上(2026-11-17),对 100 kHz 方波交替使用两组设置做强制采集时,最初提出的下限(上述五个键加上 `start` 和 `read` 均为 2 ms)在 300 次中出现 14 次和 17 次错误读数,随后会话失败(`DEVICE_ERROR: EP 0x84 handshake: expected 02, got timeout`);上面的下限配置档在 3000 次强制采集和 300 次触发采集中没有出现错误,在 normal 模式超时后立即接着设置新的 AWG 程序和 V/div、auto 模式回退或重复运行之后也没有。把 `final` 置零会使示波器在第二台实验台上 2-3 次采集内卡死(之后要重新插拔才会再次响应)。完整表格:`docs/PROTOCOL.md` 第 7.1 节。
+
+不是 `key=value` 的条目、未知或不可调的键、重复给出的键、不是有限非负数的值,以及高于抓包记录值或低于其下限的值,对每个可能访问设备的命令(以及 `log --plan`、`bench --no-device`、`debug plan`)都会在发送任何数据或打开设备之前报 `INVALID_ARG`(退出码 2);MCP 工具也会报告。每个 `Scope()` 都会重新读取该变量。配置档生效时,它会出现在 `info`(`timing`)、每次 capture 和 stream 的 `acq.timing`、`log` 的结果文档(`log` 打印的最后一行)以及每个保存的 log 文件(`acq.timing`)、`watch`(第一行和汇总行中的 `timing`)、自检结果和 MCP 摘要中。`log --plan` 会应用它:stream 记录之间接缝的重启部分(`gap_s` = 排空时间,即 记录时长 x (D - R) / R,加上重启)在抓包记录值下为 0.18 s,在下限配置档下为 0.027 s。
 
 ## CLI 参考
 
