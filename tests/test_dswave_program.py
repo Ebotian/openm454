@@ -8,7 +8,9 @@ that follow from the geometry (packet size, read bytes, trigger memory, pre-trig
 57 of the 61 writes are expected to match exactly without any per-unit data. The other four are the per-probe
 VPWM word, which mixes the probe's PWM full-scale and the division's PWM offset, both from the EEPROM zero info:
 with this unit's zero info cached (state/cache/zero_info_from_trace.bin, per unit, not in the repo) all 61 match
-and the second test checks that. The shippable test compares the four by address only.
+and the second test checks that. The shippable test compares the four by address only. CI has no per-unit file,
+so it runs the first test only: 57 values byte for byte, the four VPWM writes by address. The 61/61 test is skipped
+there.
 
 The 12 writes DSWave sends before W 0x01=0 (its probe-configuration pre-pass, SetAfold/ClearAwr per probe) are not
 part of setup_program(); our program folds the same settings into the per-probe block, so the two sequences differ
@@ -79,9 +81,13 @@ def test_recorded_program_is_reproduced(recorded):
 
 
 @pytest.mark.skipif(not ZERO_BIN.exists(),
-                    reason="this unit's zero info is not cached (state/cache/zero_info_from_trace.bin)")
+                    reason="this unit's zero info is not cached (state/cache/zero_info_from_trace.bin; CI has no "
+                           "per-unit file)")
 def test_every_write_matches_with_the_units_zero_info(recorded):
-    """With the unit's EEPROM zero info the four VPWM words match too: 61 of 61, order and values."""
+    """Locally, with the unit's EEPROM zero info, the four VPWM words match too: 61 of 61, order and values.
+
+    CI has no per-unit file and skips this test; it runs the 57-value/address test above.
+    """
     cfg = _config(recorded['config'])
     ours = mso.setup_program(cfg, mso.load_zero_info(), include_cross=False)
     assert ours == [_parse(e) for e in recorded['program']]
