@@ -28,6 +28,7 @@ Issues = "https://github.com/FrostFlops/openm454/issues"
 
 [project.optional-dependencies]
 test = ["pytest", "hypothesis>=6.170,<7", "pytest-xdist>=3.6,<4"]
+fuzz = ["atheris>=3.1,<4"]
 
 [project.scripts]
 openm454 = "openm454.cli:main"
