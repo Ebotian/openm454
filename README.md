@@ -97,36 +97,60 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   200 MB/s is 720 GB per hour), `--storage none` for statistics only.
 - `bench` measures this PC (free RAM, decode speed, disk write speed, USB readout) and records how much RAM and disk
   the owner allows for recordings and the data folder (`bench --ram 8GB --disk 50GB --dir <folder>`,
-  `state/host.json`); `log` takes its defaults from there. Measured here: decode 468 MB/s, USB readout 206 MB/s
+  `state/host.json`); `log` takes its defaults from there. Measured on one host: decode 468 MB/s, USB readout 206 MB/s
   (4 analog + 8 digital) / 267 MB/s (2 analog + 8 digital).
 
 ### Repeat mode (`capture --repeat N`)
 
 `capture --repeat N` collects N back-to-back frames in one start: the device re-arms between frames (register 0x00
-`HW_BASE_MODE` = 1) instead of the host starting a run per capture, which costs ~180 ms of protocol spacing.
+`HW_BASE_MODE` = 1) instead of the host starting a run per capture, which costs ~190 ms of protocol spacing (about
+5.3 captures per second).
 
 - Two kinds of start, and they behave differently:
-  - **triggered** (`--trig A0:rise:1.4V --trig-mode normal`): the device re-arms for every frame, so each frame
-    waits for its own trigger. Measured (2026-11-16, 100 kHz square into A0, `--duration 250ms --repeat 3`): three
-    separate 250 ms records, 100.000 kHz and 2.89 Vpp, 99.7 % of the sample intervals exact, frames 0 %
-    byte-identical, stop normal, 1.1 s; with a 2 Hz source the same run takes 1.75 s. Works at any window: a
-    triggered start keeps `HW_BASE_MODE` at 1 (record) - only the untriggered form switches to the stream above
-    200 ms, and that one is refused with `INVALID_ARG`.
-  - **untriggered** (`--trig-mode force` or no trigger): the frames follow the start command back to back.
-- Each frame is decoded on its own: `Capture.frames` holds one dict per frame (analog, digital, `trig_index`); the
-  JSON has a `frames` list with per-frame basics, and the `.npz` stores every frame as `frames_analog_A1` /
-  `frames_digital_D0` (frames x samples) next to the 1-D `analog_A1` of frame 0. `--measure` and the PNG still
-  describe frame 0. Bytes a frame carries beyond its record are device buffer content, not signal, and are cut by
-  the frame's tail.
-- Measured on Linux over USB 3 (2026-11-16, 1 analog channel, default queue depth): 5 us window at 400 MSa/s, 2048
-  samples per frame, 2000 frames in 452 ms (380 ms of that is setup) = 4.4 kframes/s end to end, ~38 us per frame
-  after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. For comparison, repeated single captures cost ~180 ms
-  of protocol spacing each (5.26/s). Windows has not been timed.
+  - **triggered** (`--trig SRC:EDGE[:LEVEL] --trig-mode normal`): every frame is its own acquisition and waits up to
+    `--timeout` (+ `--holdoff`) for its own trigger; `HW_BASE_MODE` stays 1 at any window. Measured (2026-11-16,
+    100 kHz square into A0, `--duration 250ms --repeat 3`): three separate 250 ms records, 100.000 kHz and 2.89 Vpp,
+    99.7 % of the sample intervals exact, frames 0 % byte-identical, stop normal, 1.1 s; with a 2 Hz source the same
+    run takes 1.75 s. `--trig-mode auto` (the CLI default) with `--repeat` and `--trig` is refused with
+    `INVALID_ARG`: repeat mode with a trigger has no auto mode (use `--trig-mode normal`, or `--trig-mode force` for
+    untriggered frames). No trigger on the start is `TIMEOUT_NO_TRIGGER` (exit 5), with no forced fallback.
+  - **untriggered** (no `--trig`, any trigger mode including auto, or `--trig-mode force`): the frames follow the
+    start back to back. An applied window (the HAL sample time, not `--duration`) above 200 ms would switch the
+    device to `HW_BASE_MODE 3`, a stream and not N acquisitions, and is refused with `INVALID_ARG`; the message
+    names the applied window and says when the 1024-sample minimum of an explicit `--rate` lengthened `--duration`
+    (`--rate 5k --duration 100ms` applies 0.256 s at 4 kSa/s). Raise or drop `--rate`, keep the window <= 0.2 s,
+    trigger the frames, or use `stream`. Untriggered repeat: hardware validation pending (owner bench).
+- Limits: the run's deadline is max(10 s, 1.5 x record + 2 s, min(3600 s, ...)) with a per-frame cost of the record
+  plus 1 ms plus the transfer at 50 MB/s; a run whose frames alone need more than 3600 s (0.2 s window x 20000
+  frames) is refused with `INVALID_ARG` (lower `--repeat`, shorten the window, or use `log` / `stream`). The host
+  memory cap is 1 GiB for N x (the transfer with its 4 KiB tail + the decoded bytes, 1 byte per sample per channel,
+  digital unpacked from 1 bit to 1 byte): D0-D7, 1 ms, 100k samples, `--repeat 10000` is refused (about 8.6 GiB). A
+  negative `--repeat` is a usage error (exit 2); 0 is off. `stream` and `log` refuse repeat settings with
+  `INVALID_ARG`; the MCP `capture` tool has no repeat parameter.
+- Fewer frames than N: triggered gives `TIMEOUT_NO_TRIGGER` (exit 5, "collected k of N frames"), untriggered
+  `TIMEOUT_DATA` (exit 6), an abort `TIMEOUT_DATA` "(aborted)"; the partial frames are not returned. A digital
+  rise/fall trigger is neither checked for misfires nor re-armed (`--trig-retries` has no effect):
+  `acq.trigger_check` is `unchecked` with `acq.trigger_check_reason`.
+- Each frame is decoded on its own. The JSON has `acq.repeat_frames` (asked) and `acq.frames` (collected) and, after
+  `files`/`hints`/`warnings`, `frames_summary` over every frame (`count`, `listed`, `without_trig_index`,
+  `without_trig_index_first`, and `analog` per channel with `vpp_v` / `vmin_v` / `vmax_v` as `{min, median, max}`)
+  and `frames`, the first 100 frames only, each with `index`, `trig_index` and `analog` basics. `analyze` of a repeat
+  `.npz` reports the same. `Capture.frames` holds one dict per frame (analog, digital, `trig_index`).
+- The `.npz` keeps every frame: `analog_A1` / `digital_D0` hold frame 0 as for a single capture, `frames_analog_A1`
+  is (frames, samples) uint8 codes, `frames_digital_D0` is (frames, ceil(samples/8)) uint8, each row packed with
+  `np.packbits(bitorder='little')` (not frames x samples), plus meta `frames_samples` and `frame_trig_index`;
+  `load_capture` unpacks them. `--measure`, `--edges`, `--dump`, `--decode`, the JSON analog/digital blocks and the
+  PNG describe frame 0 only. Bytes a frame carries beyond its record are device buffer content, not signal, and are
+  cut by the frame's tail.
+- Measured on one Linux unit over USB 3 (2026-11-16, 1 analog channel, default queue depth): 5 us window at
+  400 MSa/s, 2048 samples per frame, 2000 frames in 452 ms (380 ms of that is setup) = 4.4 kframes/s end to end,
+  ~38 us per frame after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. Repeated single captures cost
+  ~190 ms of protocol spacing each (5.3/s). Windows has not been timed.
 
 ### Above the readout limit: how `log` decides
 
 D = the data rate; R = how fast this PC reads the scope while it acquires. R depends on the channel set (measured
-here: 202 MB/s for 4 analog + 8 digital at 50 MSa/s, 264 MB/s for the same at 100 MSa/s and for 2 analog + 8
+on one host: 202 MB/s for 4 analog + 8 digital at 50 MSa/s, 264 MB/s for the same at 100 MSa/s and for 2 analog + 8
 digital at 100 MSa/s, 275 MB/s for 4 analog at 100 MSa/s).
 
 1. R is measured, not assumed: the first `log` above 150 MB/s with a channel set runs a probe of up to 2 s (a
@@ -151,7 +175,7 @@ digital at 100 MSa/s, 275 MB/s for 4 analog at 100 MSa/s).
 5. While running, every statistics line has `backlog_mb`; while the backlog grows, also `backlog_growth_mb_s`,
    `ring_full_in_s` and `gapfree_projected_s`. The result has `unread_at_stop_mb` (acquired, never read).
 
-Examples here: 12 channels at 50 MSa/s (250 MB/s, R = 204): gap-free 8.88 s vs stream records of 2.03 s with 0.64 s
+Examples: 12 channels at 50 MSa/s (250 MB/s, R = 204): gap-free 8.88 s vs stream records of 2.03 s with 0.64 s
 gaps, so `NEEDS_FORCE`; forced, the run stopped after 8.84 s (8.30 s with R = 202 in an earlier run), every period
 present up to the last sample. 12 channels at 100 MSa/s (500 MB/s, R = 264): 1.13 s vs 1.02 s records with 1.09 s
 gaps, still `NEEDS_FORCE`; with a readout below ~250 MB/s `stream` would win. 200 MB/s read at 190 MB/s: 10 MB/s
@@ -213,20 +237,32 @@ generated by a microcontroller, including deep captures and decoded streams.
 Every capture pays the spacing DSWave uses: 100 ms before the run, 50 ms between submitting the reads and the start
 writes, two 15 ms settles and 15 ms per register read - about 193 ms per capture, a little over 5 captures per second.
 A profile shortens selected waits for one session; the traced spacing stays the default and nothing changes without
-the variable:
+the variable. The floor profile measured about 26 ms per capture (p50) on one Windows bench and 28.6 ms on a second
+one:
 
 ```bash
-OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0.005   # ~26 ms per capture
+OPENM454_TIMING=gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002,quiet=0.005   # ~26 ms per capture
 ```
 
-A profile only shortens, and only down to a floor per key: `gap`/`submit`/`quiet` 5 ms, `setup`/`start`/`read`
-2 ms, `final` 1 ms (not shortened - it is the stop handshake itself). An unknown key, a negative or non-finite
-value, a value above the traced one or below its floor is `INVALID_ARG` before the device is opened. Zeroing `final`
-wedges the scope within 2-3 captures on Linux and on Windows (`DEVICE_ERROR: EP 0x84 handshake: expected 02, got
-timeout`, then it only answers again after a replug); the floors are the conservative profile, the only set that has
-never done that on any bench. `info`, every capture's metadata
-(`acq.timing`) and the last line of a `log` name the active profile. Keys, ranges and the floor: `docs/PROTOCOL.md`
-section 7.1.
+Seven keys (traced value, floor): `gap` 100 / 5 ms (before every run), `quiet` 100 / 5 ms (no register access after
+the stop of a forced or triggered run), `submit` 50 / 5 ms, `setup` 15 / 2 ms, `start` 15 / 2 ms, `read` 15 / 2 ms
+(per register read) and `final` 1 / 1 ms (not shortened: it is the stop handshake itself). A profile only shortens.
+After the stop of a run that ended without a head (a normal/auto timeout with no trigger, or a stop request before
+the trigger) and after a repeat run stopped before its last frame, the driver always holds every register access for
+the traced 100 ms, whatever the profile: writes sent within ~10 ms of such a stop were dropped on hardware. The analog
+front-end settling (150 ms before the first analog run after a digital-only run or at session start, 300 ms after a
+saturated input) is device physics and is not adjustable: `wake=...` and `overdrive=...` are `INVALID_ARG`.
+
+An entry that is not `key=value`, an unknown key, a key given twice, a value that is not a finite non-negative number,
+or a value above the traced one or below its floor is `INVALID_ARG` (exit 2) before anything is sent or the device is
+opened, for every CLI command; the MCP tools report it too. Every `Scope()` reads the variable again. Zeroing
+`final` wedges the scope within 2-3 captures on Linux and on Windows (`DEVICE_ERROR: EP 0x84 handshake: expected 02,
+got timeout`, then it only answers again after a replug); the floor profile is the only set that ran without failure
+on both benches (all runs were forced or triggered captures). While a profile is active it is reported by `info`
+(`timing`), every capture's and stream's `acq.timing`, the `log` result document (the last line `log` prints) and
+every saved log file (`acq.timing`), `watch` (`timing` in its first and summary line), the selftest result, and the
+MCP summaries. `log --plan` applies it: the seam between stream records (`gap_s`) is 0.18 s traced and 0.014 s at the
+floor profile. Keys, evidence and ranges: `docs/PROTOCOL.md` section 7.1.
 
 ## CLI reference
 
