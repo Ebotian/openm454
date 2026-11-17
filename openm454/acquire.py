@@ -64,7 +64,7 @@ QUIET_AFTER_STOP = 0.100       # ... and no register access for 100 ms after a s
                                # held after a run that had a head (forced or triggered); OPENM454_TIMING `quiet` may
                                # shorten it down to timing.MIN['quiet']
 QUIET_AFTER_UNTRIGGERED_STOP = 0.100   # ... after a run that may have ended with the device still waiting for a
-                               # trigger (no head, or a repeat run short of its frames): always the traced 100 ms,
+                               # trigger (no head, or any repeat run): always the traced 100 ms,
                                # never part of a profile. Writes sent within ~10 ms of such a stop were dropped on
                                # hardware (docs/PROTOCOL.md section 7, item 7)
 SETUP_SETTLE = 0.015           # SetupAcquire: "1 ms" after W CTRL=0 (recorded 14-31 ms)
@@ -513,9 +513,10 @@ class Engine:
     # ------------------------------------------------------------------ stop
     def _untriggered_stop(self, cap):
         """True when the stop may have found the device still waiting for a trigger: no head arrived (a timeout, or a
-        stop before the trigger), or a repeat run ended before its last frame. Only stops of runs that had a head
-        (forced or triggered) were ever measured with a shortened quiet time."""
-        return cap.head is None or bool(self._repeat_frames) and len(cap.frames) < self._repeat_frames
+        stop before the trigger), or any repeat run. The device is never told the frame count: it re-arms after every
+        frame, so the stop of a repeat run, complete or not, can find it armed for the next one. Only stops of single
+        runs that had a head (forced or triggered) were ever measured with a shortened quiet time."""
+        return cap.head is None or bool(self._repeat_frames)
 
     def _stop_normal(self, cap):
         """DSWave StopAcquire + Drain + ForceAcquire. Returns None, or the reason the run ended in the error state."""

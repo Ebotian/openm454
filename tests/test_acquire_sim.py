@@ -745,6 +745,18 @@ def test_a_repeat_run_short_of_its_frames_holds_the_traced_100ms(floor_profile, 
     assert _since_stop(stamps, n) >= 0.100
 
 
+def test_a_complete_repeat_run_holds_the_traced_100ms(floor_profile, stamps):
+    """The device is never told the frame count and re-arms after every frame, so even a repeat run that got all its
+    frames is stopped with the device armed for the next one: no floor measurement covers that stop."""
+    sim, eng = engine()
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=None, n_transfers=2, trigger_timeout=1.0, collect_timeout=5.0,
+                  repeat_frames=3)
+    assert cap.head is not None and len(cap.frames) == 3 and cap.stop == 'normal'
+    n = len(stamps)
+    eng.t.write(0x08, 3)
+    assert _since_stop(stamps, n) >= 0.100
+
+
 def _open_with(monkeypatch, done, **kw):
     from openm454 import device as devmod
     import openm454.firmware

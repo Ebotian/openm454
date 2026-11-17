@@ -454,9 +454,13 @@ def test_the_watchdog_covers_the_engine_deadlines(argv, n, triggered):
 
 
 def test_a_triggered_repeat_budget_is_bounded():
-    b = _budget_of('--duration', '1ms', '--samples', '10k', '--repeat', '10000', '--trig', 'A0:rise:1.4V',
+    b = _budget_of('--duration', '1ms', '--samples', '10k', '--repeat', '100', '--trig', 'A0:rise:1.4V',
                    '--trig-mode', 'normal', '--timeout', '30s')
-    assert b <= scope.REPEAT_MAX_S + 200.0               # was 300110 s (3.5 days)
+    assert b <= scope.REPEAT_MAX_S + 200.0
+    with pytest.raises(DscopeError) as e:                 # 9999 x 30 s of trigger waits: refused, not a 3.5-day budget
+        _budget_of('--duration', '1ms', '--samples', '10k', '--repeat', '10000', '--trig', 'A0:rise:1.4V',
+                   '--trig-mode', 'normal', '--timeout', '30s')
+    assert e.value.code == 'INVALID_ARG'
 
 
 # 5. repeat is a capture setting: stream and loop-mode logs refuse it, and never compile it
@@ -500,11 +504,26 @@ def test_record_refuses_repeat():
 
 # 6. a negative frame count never reaches the device
 
-def test_a_negative_count_is_refused_by_the_command_line():
-    from openm454.cli import build_parser
-    with pytest.raises(SystemExit) as e:
-        build_parser().parse_args(['capture', '--repeat', '-1'])
-    assert e.value.code == 2
+def test_a_negative_count_is_refused_by_the_command_line(capsys):
+    """One JSON INVALID_ARG document with exit 2, refused offline (Scope.plan) before the device is opened."""
+    import json
+    from openm454 import cli
+    assert cli.main(['capture', '-c', 'A0', '--repeat', '-1']) == 2
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 1
+    res = json.loads(out[0])
+    assert res['ok'] is False and res['error']['code'] == 'INVALID_ARG'
+
+
+def test_a_triggered_run_whose_trigger_waits_do_not_fit_the_run_limit_is_refused():
+    """The engine deadline is capped at REPEAT_MAX_S; a triggered run whose (N - 1) trigger waits would pass it is
+    refused offline instead of being cut at the cap with every frame lost."""
+    n = int(scope.REPEAT_MAX_S / 5.0) + 50                     # (N - 1) x 5 s > 3600 s
+    with pytest.raises(DscopeError) as e:
+        _plan(repeat=n, trig_source='A0', trig_level=1.4, trig_mode='normal', timeout=5.0, duration=1e-3)
+    assert e.value.code == 'INVALID_ARG' and 'trigger wait' in e.value.message and '--timeout' in e.value.hint
+    _plan(repeat=n, trig_source='A0', trig_level=1.4, trig_mode='normal', timeout=1.0, duration=1e-3)
+    _plan(repeat=n, duration=1e-3)                               # untriggered: no trigger waits
 
 
 def test_a_negative_count_is_refused_by_plan():

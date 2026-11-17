@@ -213,17 +213,6 @@ def _decode_args(g):
                         'list to <file>_decode.json')
 
 
-def _frame_count(text):
-    """argparse type of --repeat: an integer >= 0 (a negative count is refused before the device is opened)."""
-    try:
-        n = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError('expected an integer frame count, got %r' % text)
-    if n < 0:
-        raise argparse.ArgumentTypeError('the frame count must be >= 0 (got %d)' % n)
-    return n
-
-
 def build_parser():
     ap = argparse.ArgumentParser(prog='openm454', description='DSCope M454 oscilloscope / logic analyzer / AWG for agents')
     ap.add_argument('--max-wall', default=None,
@@ -236,10 +225,11 @@ def build_parser():
     sub.add_parser('info', help='device, firmware, calibration, limits')
     c = sub.add_parser('capture', help='single triggered capture -> JSON measurements + PNG + NPZ')
     _capture_args(c)
-    c.add_argument('--repeat', type=_frame_count, default=0, metavar='N',
+    c.add_argument('--repeat', type=int, default=0, metavar='N',
                    help='hardware repeat mode: collect N frames in one start (default 0 = one capture); with --trig '
-                        'and --trig-mode normal every frame waits up to --timeout for its own trigger (auto mode is '
-                        'refused), untriggered (no --trig or --trig-mode force) they follow back to back')
+                        'and --trig-mode normal every frame waits for its own trigger (the first up to --timeout, '
+                        'the rest share a deadline of about (N-1) x --timeout; auto mode is refused), untriggered '
+                        '(no --trig or --trig-mode force) they follow back to back')
     w = sub.add_parser('watch', help='repeated captures, one JSON line each (real-time monitoring)')
     _capture_args(w, 'watch')
     g = w.add_argument_group('watch')

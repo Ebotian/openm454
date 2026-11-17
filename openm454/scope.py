@@ -227,7 +227,7 @@ def repeat_plan(st):
     if n and st.trig_source and st.trig_mode == 'auto':
         raise DscopeError('INVALID_ARG', 'repeat mode with a trigger has no auto mode: the device re-arms for every '
                           'frame, so a frame whose trigger does not come cannot fall back to an untriggered capture',
-                          'use --trig-mode normal (every frame waits up to --timeout for its own trigger), or '
+                          'use --trig-mode normal (every frame waits for its own trigger), or '
                           '--trig-mode force for untriggered frames')
     return n
 
@@ -310,14 +310,29 @@ def repeat_memory_guard(n, geom, hal=None):
     return n
 
 
-def repeat_time_guard(n, geom):
-    """Refuse a frame count whose frames alone (no trigger waits) cannot finish within REPEAT_MAX_S."""
-    if n and 1.5 * n * repeat_frame_s(geom) + 2.0 > REPEAT_MAX_S:
-        raise DscopeError('INVALID_ARG', 'repeat mode: %d frames of %.3g s need about %.0f s (record + %.0f ms per '
-                          'frame + transfer, 1.5x margin); one repeat run is limited to %.0f s'
-                          % (n, geom['record_s'], 1.5 * n * repeat_frame_s(geom) + 2.0, REPEAT_FRAME_FLOOR_S * 1e3,
-                             REPEAT_MAX_S),
-                          'lower --repeat or shorten the window; for long recordings use `openm454 log` or `stream`')
+def repeat_trigger_wait(st):
+    """Per-frame trigger wait of a triggered repeat start (--timeout + --holdoff), None for an untriggered one."""
+    if st.trig_source and st.trig_mode != 'force':
+        return st.timeout + max(st.holdoff, 0.0)
+    return None
+
+
+def repeat_time_guard(n, geom, trigger_wait=None):
+    """Refuse a frame count whose planned run (the frames, plus (N - 1) trigger waits for a triggered start) does not
+    fit in REPEAT_MAX_S, the cap of the engine deadline: otherwise the run would be accepted and then cut at the cap,
+    losing every frame."""
+    if not n:
+        return n
+    need = 1.5 * n * repeat_frame_s(geom) + 2.0
+    waits = (n - 1) * max(trigger_wait, 0.0) if trigger_wait is not None else 0.0
+    if need + waits > REPEAT_MAX_S:
+        raise DscopeError('INVALID_ARG', 'repeat mode: %d frames of %.3g s plan about %.0f s (record + %.0f ms per '
+                          'frame + transfer, 1.5x margin%s); one repeat run is limited to %.0f s'
+                          % (n, geom['record_s'], need + waits, REPEAT_FRAME_FLOOR_S * 1e3,
+                             ', + %d x %.3g s trigger wait' % (n - 1, trigger_wait) if waits else '', REPEAT_MAX_S),
+                          'lower --repeat%s, or shorten the window; for long recordings use `openm454 log` or `stream`'
+                          % (' or --timeout (each frame after the first may wait up to --timeout + --holdoff)'
+                             if waits else ''))
     return n
 
 
@@ -325,7 +340,7 @@ def repeat_guards(st, hal, geom, n):
     """Every refusal of a repeat program, offline (Scope.plan) and again before the run (Scope.capture)."""
     repeat_window_guard(st, geom, n, hal)
     repeat_memory_guard(n, geom, hal)
-    repeat_time_guard(n, geom)
+    repeat_time_guard(n, geom, repeat_trigger_wait(st))
     return n
 
 
@@ -840,8 +855,9 @@ class Scope:
                               'trigger wait + %.3g s record per frame)'
                               % (got, want, st.trig_source, collect,
                                  ': the limit of one repeat run' if capped else '', wait, geom['record_s']),
-                              'every frame waits up to --timeout for its own trigger: check that the signal keeps '
-                              'triggering (level/edge, how often it repeats), raise --timeout or lower --repeat')
+                              'the frames after the first share one deadline of about (N - 1) x (--timeout + '
+                              '--holdoff) + the frame times: check that the signal keeps triggering (level/edge, how '
+                              'often it repeats), %s' % ('lower --repeat' if capped else 'raise --timeout or lower --repeat'))
         raise DscopeError('TIMEOUT_DATA', 'repeat mode collected %d of %d frames: frames stopped arriving (%.4g s '
                           'after the first frame, %.3g s record per frame)' % (got, want, collect, geom['record_s']),
                           'retry once; if it repeats, lower --repeat or shorten the window')

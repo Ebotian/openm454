@@ -14,7 +14,7 @@ or repeated key, a value that is not a finite non-negative number, above the tra
 
 Not part of a profile:
   * The hold after the stop of a run that ended while the device could still be waiting for a trigger (no head:
-    a normal/auto timeout or a stop before the trigger; or a repeat run stopped before its last frame) is always the
+    a normal/auto timeout or a stop before the trigger; or any repeat run, which re-arms after every frame) is always the
     traced 100 ms (acquire.QUIET_AFTER_UNTRIGGERED_STOP): register writes sent within ~10 ms of such a stop were
     dropped on hardware (docs/PROTOCOL.md section 7, item 7). `quiet` shortens the hold only after a run that had a
     head (forced or triggered), the only kind of stop the floor evidence covers.
