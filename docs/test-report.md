@@ -1,7 +1,8 @@
 # Test suite report
 
-Measured 2026-11-17 on Linux, Python 3.14.6, `origin/main` `47fcb6c` + `test/consolidate`.
-Baseline numbers are the pre-phase measurement of the same commit (`docs/test-inventory.md`).
+Measured 2026-11-17 on Linux, Python 3.14.6, `origin/main` `47fcb6c` + this branch.
+Baseline numbers are the pre-change measurement of the same commit: 823 passed, 554 skipped, 86.40 s, 26 test
+files, 8396 test LOC.
 
 ## Suite
 
@@ -127,8 +128,9 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
   after they disagreed with the recorded layouts (they encoded an assumption, not the protocol).
 - The spec job uses an Apalache server so `quint verify` does not download a second distribution inside CI.
 - The old DSWave repeat snapshot and the new remote repeat trace coexist, as required; both are pinned.
-- No hardware was used for this phase; the Linux 1000/1000 floor evidence and the Win11 question are documented in
-  `docs/formal-testing-plan.md` §9.
+- No hardware was used for this change. The timing-floor evidence is a recorded Linux/M454 1000/1000 run
+  (0 errors, 499.55 s, 2026-11-17) with the floor profile `gap=5 ms, quiet=5 ms, submit=5 ms, setup=2 ms, final=1 ms`;
+  the capture-spacing contract itself is unchanged by this branch.
 
 ## Reproduce
 
