@@ -302,6 +302,7 @@ def test_summary_shows_the_queue_depth_only_when_it_was_lowered():
     assert (log['acq']['transfers'], log['acq']['transfers_wanted']) == (8, 10)
 
 
+@pytest.mark.slow
 def test_log_plan_and_awg_arguments(fake):
     call(fake, 'log_plan', {'rate': '1M', 'duration': '10min', 'channels': 'A1,D0', 'vdiv': 'A1=2V'})
     assert fake.argv()[-1] == ['log', '-c', 'A1,D0', '--vdiv', 'A1=2V', '--rate', '1M', '--duration', '10min',

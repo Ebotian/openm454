@@ -26,7 +26,7 @@ import pytest
 
 from openm454 import mso
 
-FIXTURE = Path(__file__).resolve().parent / 'fixtures' / 'dswave' / 'loop_mode_setup.json'
+FIXTURE = Path(__file__).resolve().parents[1] / 'fixtures' / 'dswave' / 'loop_mode_setup.json'
 
 
 def _config(spec):

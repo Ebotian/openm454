@@ -8,7 +8,7 @@ from openm454 import protosim as sim
 from openm454.capture import Capture
 from openm454.decode import decode
 
-SCHEMA = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'docs', 'schemas',
+SCHEMA = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'docs', 'schemas',
                                      'decode.json'), encoding='utf-8'))
 TYPES = {'object': dict, 'array': list, 'string': str, 'boolean': bool, 'null': type(None)}
 

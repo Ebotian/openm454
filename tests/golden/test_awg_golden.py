@@ -3,7 +3,7 @@ import json, os
 import pytest
 from openm454 import awg
 
-FIX = json.load(open(os.path.join(os.path.dirname(__file__), 'fixtures', 'awg_programs.json')))
+FIX = json.load(open(os.path.join(os.path.dirname(__file__), '..', 'fixtures', 'awg_programs.json')))
 
 
 def _final(seq):

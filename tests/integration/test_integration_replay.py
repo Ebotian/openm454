@@ -7,7 +7,7 @@ import pytest
 from openm454 import scope as scopemod
 from openm454.acquire import RawCapture
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SESS = os.path.join(ROOT, 're', 'traces', 'S01_warm')
 pytestmark = pytest.mark.skipif(not os.path.exists(os.path.join(SESS, 'bulk_in.bin')), reason='recorded traces not present')
 

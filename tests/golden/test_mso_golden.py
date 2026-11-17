@@ -25,7 +25,7 @@ import pytest
 from openm454 import mso
 from openm454.regs import name as reg_name
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 SCEN_DIR = REPO / 're' / 'traces' / 'S01_warm' / 'scen'
 ZERO_BIN = REPO / 'state' / 'cache' / 'zero_info_from_trace.bin'
 CORPORA = [REPO / 'tests' / 'fixtures' / 'scenarios' / ('corpus%d.json' % i) for i in range(1, 5)]

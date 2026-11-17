@@ -15,7 +15,7 @@ import pytest
 from openm454 import scope as scopemod
 from openm454.acquire import RawCapture
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SESS = os.path.join(ROOT, 're', 'traces', 'S01_warm')
 SCEN = os.path.join(SESS, 'scen', 'repeat_mode.json')
 ZERO = os.path.join(ROOT, 'state', 'cache', 'zero_info_from_trace.bin')
