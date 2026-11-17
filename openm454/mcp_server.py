@@ -352,9 +352,10 @@ class Job:
 # ------------------------------------------------------------------------------------------------ summaries
 A_KEYS = ('freq_hz', 'vpp_v', 'vmin_v', 'vmax_v', 'vmean_v', 'duty_pct', 'rise_s', 'fall_s')
 D_KEYS = ('state', 'freq_hz', 'duty_pct', 'edges', 'high_frac')
-ACQ_KEYS = ('triggered', 'trigger_check', 'trigger_misfires', 'mode', 'analog_rate_hz', 'digital_rate_hz', 'rate_hz',
-            'samples', 'duration_s', 'complete', 'stop_reason', 'transfers', 'transfers_wanted', 'host_mb_s',
-            'backlog_max_mb', 'unread_at_stop_mb')
+ACQ_KEYS = ('triggered', 'trigger_check', 'trigger_check_reason', 'trigger_misfires', 'mode', 'analog_rate_hz',
+            'digital_rate_hz', 'rate_hz', 'samples', 'duration_s', 'complete', 'stop_reason', 'transfers',
+            'transfers_wanted', 'host_mb_s', 'backlog_max_mb', 'unread_at_stop_mb',
+            'repeat_frames', 'frames')          # a repeat-mode file (capture --repeat N): frames asked for / held
 ACQ_SKIP = {'trigger_check': ('unchecked',), 'trigger_misfires': (0,)}       # left out of summaries when uneventful
 LONG_TEXT = 400
 PLAN_KEYS = ('rate_hz', 'channels', 'data_mb_s', 'verdict', 'readout_mb_s', 'gapfree_max_s', 'recommendation',
@@ -461,8 +462,9 @@ def summarize(doc):
                 out[group][ch] = d
     if doc.get('decode'):
         out['decode'] = [_trim_decode(r) for r in doc['decode']]
+    # frames_summary covers every frame of a repeat-mode file; the per-frame `frames` list is left to the CLI
     for k in ('error', 'files', 'plan', 'hook', 'device', 'awg', 'awg_last', 'cal', 'persists_after_exit', 'note', 'records',
-              'signal_s', 'seams_s', 'stopped_by', 'warnings', 'hints'):
+              'signal_s', 'seams_s', 'stopped_by', 'frames_summary', 'warnings', 'hints'):
         if doc.get(k) not in (None, {}, []):
             out[k] = doc[k]
     if isinstance(out.get('plan'), dict):

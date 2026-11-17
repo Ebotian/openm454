@@ -143,10 +143,13 @@ class Capture:
         return path
 
     def _add_frames(self, arrays):
-        """Every frame of a repeat run: <frames_analog_A1> is (frames, samples), digital packed the same way.
+        """Every frame of a repeat run: <frames_analog_A1> is (frames, samples) uint8 codes, <frames_digital_D0> is
+        (frames, ceil(samples / 8)) uint8, each frame packed with np.packbits(bitorder='little') (load_capture
+        unpacks it and cuts it to `frames_samples`).
 
         The frames of one run can differ by a few samples (each is cut by its own tail), so they are trimmed to the
-        shortest and that length is recorded in `frames_samples`; frame 0 stays the 1-D `analog_A1`, unchanged."""
+        shortest and that length is recorded per channel in `frames_samples`; frame 0 stays the 1-D `analog_A1`,
+        unchanged. `frame_trig_index` lists every frame's trigger index (None: the frame's tail gave none)."""
         self.meta['frames_samples'] = {}
         self.meta['frame_trig_index'] = [f.get('trig_index') for f in self.frames]
         for ch in self.analog:
@@ -186,13 +189,14 @@ def load_capture(path):
     if frames_analog or frames_digital:              # repeat mode: every frame, trimmed at save time
         n = meta.get('frames', 0) or next(len(a) for a in list(frames_analog.values()) + list(frames_digital.values()))
         trig = meta.get('frame_trig_index') or [None] * n
+        lengths = meta.get('frames_samples') or {}
         cap.frames = []
         for i in range(n):
             item = {'analog': {}, 'digital': {}, 'trig_index': trig[i] if i < len(trig) else None}
             for ch, a in frames_analog.items():
                 item['analog'][ch] = a[i]
-            for ch, a in frames_digital.items():
-                item['digital'][ch] = np.unpackbits(a[i], bitorder='little')
+            for ch, a in frames_digital.items():       # packed 8 samples per byte: cut the padding of the last byte
+                item['digital'][ch] = np.unpackbits(a[i], bitorder='little')[:lengths.get(ch)]
             cap.frames.append(item)
     return cap
 

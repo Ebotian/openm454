@@ -152,8 +152,9 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     remeasure: ignore the cached R (with defer: measure it again before deciding).
     keep_last: a RAM log longer than the budget keeps the newest budget's worth (ring) instead of being refused.
     disk_budget: bytes a disk log may use (default: the owner's allowance in state/host.json, else 90 % of free)."""
-    from .scope import _cached_zero
+    from .scope import _cached_zero, no_repeat
     from . import mso_adapter, host
+    no_repeat(st, 'log')                             # a loop log with repeat would be HW_BASE_MODE 7: never measured
     na, nd = len(st.analog), len(st.digital)
     if not na and not nd:
         raise DscopeError('INVALID_ARG', 'no channels enabled')
@@ -787,7 +788,8 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
     stop; the data up to the stop is kept). Device errors raise DscopeError after the files were closed.
     out_stem None: nothing is written (RAM data is dropped at the end). on_final(nbytes) is called before the
     final RAM file is written (the CLI extends its watchdog for the write)."""
-    from .scope import queue_depth
+    from .scope import queue_depth, no_repeat
+    no_repeat(st, 'log')                             # before anything is sent (plan() refused it already)
     geom = dict(pl['_geom'])
     rate = pl['rate_hz']
     layout = packet.layout_from_regs(geom['_regs'], rates={'analog': rate, 'digital': rate})

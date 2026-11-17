@@ -79,6 +79,11 @@ def _idle(n_values=0):
 
 
 def _n_values(cap):
+    """Samples the host still processes once the device is idle (repeat mode: every frame, which the frames summary
+    and the .npz cover)."""
+    frames = getattr(cap, 'frames', None)
+    if frames and len(frames) > 1:
+        return sum(len(v) for f in frames for g in ('analog', 'digital') for v in (f.get(g) or {}).values())
     return sum(len(v) for v in cap.analog.values()) + sum(len(v) for v in cap.digital.values())
 
 
@@ -208,6 +213,17 @@ def _decode_args(g):
                         'list to <file>_decode.json')
 
 
+def _frame_count(text):
+    """argparse type of --repeat: an integer >= 0 (a negative count is refused before the device is opened)."""
+    try:
+        n = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError('expected an integer frame count, got %r' % text)
+    if n < 0:
+        raise argparse.ArgumentTypeError('the frame count must be >= 0 (got %d)' % n)
+    return n
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog='openm454', description='DSCope M454 oscilloscope / logic analyzer / AWG for agents')
     ap.add_argument('--max-wall', default=None,
@@ -220,9 +236,10 @@ def build_parser():
     sub.add_parser('info', help='device, firmware, calibration, limits')
     c = sub.add_parser('capture', help='single triggered capture -> JSON measurements + PNG + NPZ')
     _capture_args(c)
-    c.add_argument('--repeat', type=int, default=0, metavar='N',
-                   help='hardware repeat mode: collect N frames in one start (default 0 = one capture); with a '
-                        'trigger every frame waits for its own, untriggered they follow back to back')
+    c.add_argument('--repeat', type=_frame_count, default=0, metavar='N',
+                   help='hardware repeat mode: collect N frames in one start (default 0 = one capture); with --trig '
+                        'and --trig-mode normal every frame waits up to --timeout for its own trigger (auto mode is '
+                        'refused), untriggered (no --trig or --trig-mode force) they follow back to back')
     w = sub.add_parser('watch', help='repeated captures, one JSON line each (real-time monitoring)')
     _capture_args(w, 'watch')
     g = w.add_argument_group('watch')
@@ -404,21 +421,63 @@ def build_parser():
 
 
 # ------------------------------------------------------------------------------------------- commands
-def _frame_summary(cap):
-    """Per-frame basics of a repeat run (the JSON's own `analog` block and the PNG describe frame 0 only)."""
+FRAMES_LISTED = 100          # repeat mode: frames listed one by one in the JSON (frames_summary covers all of them)
+FRAMES_NO_TRIG_LISTED = 20   # indices of frames without a trigger index named in frames_summary
+
+
+def _frame_stats(cap, f):
+    """{ch: {vpp_v, vmin_v, vmax_v, vmean_v}} of one repeat frame's analog channels."""
     import numpy as np
-    out = []
-    for i, f in enumerate(cap.frames or []):
-        item = {'index': i, 'trig_index': f.get('trig_index')}
-        for ch, codes in (f.get('analog') or {}).items():
-            sc = cap.scale(ch)
-            v = (np.asarray(codes, dtype=np.float32) - sc['zero_code']) * sc['volts_per_code'] * sc.get('probe', 1.0)
-            if len(v):
-                item.setdefault('analog', {})[ch] = {
-                    'vpp_v': round(float(v.max() - v.min()), 4), 'vmin_v': round(float(v.min()), 4),
-                    'vmax_v': round(float(v.max()), 4), 'vmean_v': round(float(v.mean()), 4)}
-        out.append(item)
+    out = {}
+    for ch, codes in (f.get('analog') or {}).items():
+        codes = np.asarray(codes)
+        if not codes.size:
+            continue
+        sc = cap.scale(ch)
+        k = sc['volts_per_code'] * sc.get('probe', 1.0)
+        lo, hi = (float(int(codes.min()) - sc['zero_code']) * k, float(int(codes.max()) - sc['zero_code']) * k)
+        mean = (float(codes.mean(dtype=np.float64)) - sc['zero_code']) * k
+        out[ch] = {'vpp_v': round(hi - lo, 4), 'vmin_v': round(lo, 4), 'vmax_v': round(hi, 4),
+                   'vmean_v': round(mean, 4)}
     return out
+
+
+def _frame_summary(cap, listed=FRAMES_LISTED):
+    """Repeat run -> (the first `listed` frames' basics, a summary over every frame). The JSON's own `analog` block,
+    --measure and the PNG describe frame 0 only; the .npz keeps every frame. The summary: count, listed, per analog
+    channel the min/median/max over the frames of vpp_v/vmin_v/vmax_v, and the frames without a trigger index."""
+    import numpy as np
+    frames = cap.frames or []
+    items, cols = [], {}
+    for i, f in enumerate(frames):
+        stats = _frame_stats(cap, f)
+        for ch, m in stats.items():
+            c = cols.setdefault(ch, {'vpp_v': [], 'vmin_v': [], 'vmax_v': []})
+            for k in c:
+                c[k].append(m[k])
+        if i < listed:
+            item = {'index': i, 'trig_index': f.get('trig_index')}
+            if stats:
+                item['analog'] = stats
+            items.append(item)
+    no_trig = [i for i, f in enumerate(frames) if f.get('trig_index') is None]
+    summary = {'count': len(frames), 'listed': len(items), 'without_trig_index': len(no_trig)}
+    if no_trig:
+        summary['without_trig_index_first'] = no_trig[:FRAMES_NO_TRIG_LISTED]
+    if cols:
+        summary['analog'] = {ch: {k: {'min': round(float(np.min(v)), 4), 'median': round(float(np.median(v)), 4),
+                                      'max': round(float(np.max(v)), 4)} for k, v in c.items()}
+                             for ch, c in cols.items()}
+    return items, summary
+
+
+def _frames_into(cap, res):
+    """Repeat mode: frames_summary (every frame) and the capped frames list, placed after files/hints/warnings so a
+    reader that cuts a long document still sees those."""
+    if cap.frames and len(cap.frames) > 1:
+        items, summary = _frame_summary(cap)
+        res['frames_summary'] = summary
+        res['frames'] = items
 
 
 def cmd_capture(args, scope, emit=True):
@@ -432,8 +491,6 @@ def cmd_capture(args, scope, emit=True):
     win = window(args.window)
     res = {'ok': True, 'cmd': 'capture', 'applied': cap.meta['applied'], 'acq': cap.meta['acq']}
     _report(cap, args, res, win)
-    if cap.frames and len(cap.frames) > 1:
-        res['frames'] = _frame_summary(cap)         # repeat mode: every frame, not only the first
     decoded = _decode(cap, args, win, res)
     files = {}
     if not args.no_save:
@@ -453,6 +510,7 @@ def cmd_capture(args, scope, emit=True):
     res['hints'] = cap.meta.get('hints', [])
     res['warnings'] = cap.meta.get('warnings', [])
     _awg_into(res, awg_st)
+    _frames_into(cap, res)                          # repeat mode: summary over every frame + the first frames
     if emit:
         _emit(res)
     return cap, res
@@ -1010,6 +1068,7 @@ def cmd_offline(args):
         if args.dump:
             res['dump'] = {ch: cap.dump(ch, args.dump, win) for ch in (chans or cap.channels())}
         _decode(cap, args, win, res)
+        _frames_into(cap, res)
         _emit(res)
 
 
@@ -1039,9 +1098,12 @@ def _budget(args):
     check(args.decode, list(st.analog) + list(st.digital))
     if args.cmd == 'watch':
         _watch_fields(args)
-    geom = Scope().plan(st)['geometry']
+    geom = Scope().plan(st)['geometry']            # refuses a bad repeat run (count, auto, window, memory, time)
     rec = geom['record_s']
     collect = max(10.0, 1.5 * rec + 2.0)
+    n = int(getattr(st, 'repeat', 0) or 0)
+    if args.cmd == 'capture' and n:
+        return _repeat_budget(st, geom, n), None
     if args.cmd == 'stream':
         per = 5.0 + 2.5 * rec + 5.0 + 60.0 + 2e-8 * geom.get('acqu_bytes', 0)
         return (per, per) if chained else (per, None)       # a refreshing stream re-arms after every record
@@ -1056,9 +1118,6 @@ def _budget(args):
     if (st.trig_source or '').startswith('D') and st.trig_mode != 'force' and \
             st.trig_edge in ('rise', 'rising', 'fall', 'falling'):   # misfire re-arms: one more run each
         per += max(0, st.trig_retries) * (rec + 0.5 + collect + 1.0 + 2e-7 * geom.get('acqu_bytes', 0))
-    n = int(getattr(st, 'repeat', 0) or 0)
-    if n > 1:                                          # repeat: N frames in the one run, each may wait for a trigger
-        per += (n - 1) * (wait + rec + geom.get('pkt_bytes', 0) / 2e8 + 5e-3)
     per += 2e-7 * geom.get('acqu_bytes', 0)            # decoding and the hint checks of deep records
     if args.measure == 'full':
         per += 2e-7 * geom.get('acqu_bytes', 0)        # a second measuring pass, with the edge lists
@@ -1066,6 +1125,18 @@ def _budget(args):
         return max(60.0, per + 30.0), None
     per_iter = per + si(args.every, 's', '--every') + 30.0
     return per_iter, per_iter
+
+
+def _repeat_budget(st, geom, n):
+    """Watchdog of `capture --repeat N`: the same head wait and collect deadline the engine gets
+    (scope.repeat_collect_timeout: a per-frame trigger wait only for a triggered start), decoding and saving the
+    frames, and a margin. No forced fallback and no misfire re-arms: repeat mode runs neither."""
+    from .scope import Scope, repeat_collect_timeout
+    triggered = bool(st.trig_source) and st.trig_mode != 'force'
+    wait = st.timeout + max(st.holdoff, 0.0) if triggered else 2.0
+    per = Scope._head_wait(geom, wait) + repeat_collect_timeout(geom, n, wait if triggered else None) + 5.0
+    per += 3e-7 * n * geom.get('pkt_bytes', 0)      # decoding every frame, the frames summary and the .npz
+    return max(60.0, per + 30.0)
 
 
 def _watchdog_fire(cmd, max_wall, scope, done, wait=5.0):
