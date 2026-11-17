@@ -12,7 +12,7 @@ Baseline numbers are the pre-phase measurement of the same commit (`docs/test-in
 | hardware | `python -m pytest tests -m hw` | needs the M454, never in CI | — |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
-| fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=45` | ~2.0 M execs, no crash | 46 s |
+| fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
 
 The fast suite is the default marker set (`not hw and not slow`) under `pytest-xdist -n auto --dist loadscope`;
 the full suite adds the `slow` test. The 554 skips are the recorded-trace and firmware tests that skip when the
@@ -72,10 +72,12 @@ Per-directory times are the junit sum of test durations, so they exceed the wall
 
 ## Fuzzing (Atheris)
 
-| target | surface | 45 s run | corpus |
+| target | surface | 5 min run | corpus |
 | --- | --- | ---: | --- |
-| `fuzz_packet.py` | `packet.split_frames`, `packet.decode` with a 2 analog/2 digital repeat layout | 1,974,611 execs, 0 crashes | 4 seeds → 11 units |
-| `fuzz_adapter.py` | `mso_adapter.decode` / `decode_frames` with a magic-valid head and a fuzzed trigger word | 1,969,906 execs, 0 crashes | 4 seeds → 19 units |
+| `fuzz_packet.py` | `packet.split_frames`, `packet.decode` with a 2 analog/2 digital repeat layout | 12,863,193 execs, 0 crashes | 4 seeds -> 18 units |
+| `fuzz_adapter.py` | `mso_adapter.decode` / `decode_frames` with a magic-valid head and a fuzzed trigger word | 12,841,387 execs, 0 crashes | 4 seeds -> 21 units |
+
+The nightly job runs the same targets with `-max_total_time=300` (5 min each, inside the 5-10 min budget).
 
 Only `PacketError`/`ValueError` are accepted; anything else is a crash. Python coverage requires
 `atheris.instrument_imports()`: without it the corpus stays at one unit even at 1.5 M execs/s (observed), because
