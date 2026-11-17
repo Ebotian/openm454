@@ -337,12 +337,12 @@ Measured with every input on a ~1 kHz square; a lost or overwritten packet shows
   blocks with 16 reads at >= 102,400 kB/s); the host may read in larger multiples.
   `tests/fixtures/dswave/loop_mode_setup.json` is the first recording of DSWave 1.2.1's loop-mode (Recorder,
   HW_BASE_MODE 6) setup block and the first setup-program golden that runs without local traces, in CI;
-  `tests/test_mso_golden.py` already pins MODE 0/1/2 against the local recorded runs, which CI skips. The capture holds
+  `tests/golden/test_mso_golden.py` already pins MODE 0/1/2 against the local recorded runs, which CI skips. The capture holds
   only the bRequest 0xB0 control writes (2026-11-16). Its `config` is reconstructed from those writes, using the
   Recorder's settings: AUTORATE off, analog = digital rate 1 MSa/s, trigger off, LOOPModeEnable 1, storage depth
   4,000,000 (the OSC default, which the HAL keeps), no window; `:SAMPLEtime` is ignored in loop mode, so any window
   gives the same program. The writes that only echo config inputs are listed in the fixture under `echoes`.
-  `tests/test_dswave_program.py` compares 57 of the 61 writes exactly and the four VPWM words (W 0x43/0x53/0x63/0x73)
+  `tests/golden/test_golden.py` compares 57 of the 61 writes exactly and the four VPWM words (W 0x43/0x53/0x63/0x73)
   by address only: VPWM holds the recorded unit's per-unit PWM calibration (its EEPROM zero info), which is not
   available.
 * **Rates are fold x 100 MHz / N for any integer N** (HORI_ADIV / HORI_DDIV: the low register holds N's low 16
@@ -468,7 +468,7 @@ roll stays off and the mode is 1 at any window. From the corpus4 `repeat_mode` s
 program matches DSWave's recorded setup block write by write (75 writes without CROSS; HW_BASE_MODE 1, 2 transfers of
 transfer_size 507904 = pkt_bytes 503808 + the 4 KiB tail), and every recorded frame's own tail gives the trigger
 index DSWave's HAL logged
-(`tests/test_repeat_golden.py`, skipped without the local traces).
+(`tests/golden/test_repeat_golden.py`, skipped without the local traces).
 
 **(hardware, 2026-11-16)** `--repeat 3 --trig A0:rise:1.4V --trig-mode normal --duration 250ms`, 100 kHz square into
 A0: three separate 250 ms records (200192 samples each at 800 kSa/s), 100.000 kHz and 2.89 Vpp in frame 0, 99.7 % of
@@ -560,7 +560,7 @@ apart); its 0 V reads +5 mV; noise mode is Gaussian-like around (low+high)/2 wit
 
 ### 9.1 Modulation, sweep, burst (MODE 1 / 2 / 3)
 Register programs derived from the decompiled HAL and
-confirmed against DSWave for the 73 scenarios of `tests/fixtures/scenarios/corpus5.json` (`tests/test_awg_modes_golden.py`,
+confirmed against DSWave for the 73 scenarios of `tests/fixtures/scenarios/corpus5.json` (`tests/golden/test_awg_modes_golden.py`,
 fixture `tests/fixtures/awg_modes_programs.json`). Implementation: `openm454/awg_modes.py` (`program_modulation`,
 `program_sweep`, `program_burst`), started with the basic START. Verified on A0:
 * Sweep: linear 1 -> 10 kHz in 10 ms ramps at 0.9 MHz/s and restarts every 10 ms; log 1 -> 100 kHz in 100 ms has

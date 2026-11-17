@@ -1,0 +1,45 @@
+name: fuzz
+
+# Atheris targets are not part of the PR gate: they run nightly and on dispatch.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  atheris:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_packet, fuzz_adapter]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: libusb
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,fuzz]"
+      - name: Fuzz for 5 minutes
+        env:
+          OPENM454_NO_USB: "1"
+        run: |
+          corpus=tests/fuzz/corpus/${{ matrix.target }}
+          mkdir -p "$corpus"
+          python "tests/fuzz/${{ matrix.target }}.py" -max_total_time=300 -rss_limit_mb=2048 \
+            -artifact_prefix="$corpus/" "$corpus"
+      - name: Keep corpus and crashes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: tests/fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: ignore
