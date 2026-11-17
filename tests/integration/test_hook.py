@@ -12,7 +12,7 @@ from openm454.capture import load_capture
 from openm454.errors import DscopeError
 from openm454.hook import Block, Hook
 
-from test_logger import A2D8, FakeScope, fake_signal, make_plan, settings
+from tests.support.logging import A2D8, FakeScope, fake_signal, make_plan, settings
 
 
 @pytest.fixture(autouse=True)
