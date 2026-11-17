@@ -60,6 +60,8 @@ LIVE_READ = 2 * MIB               # larger reads only come from a live stream ab
 HEAD_MAGIC = b'\x55\x55\x55\x55'
 EP_DATA = 0x86
 GAP_BETWEEN_RUNS = 0.100       # FUN_14033f270: 100 ms before every run
+QUIET_AFTER_STOP = 0.100       # ... and no register access for 100 ms after a stop (see Transport.hold); a profile
+                               # may shorten it down to timing.MIN['quiet'] and never below
 SETUP_SETTLE = 0.015           # SetupAcquire: "1 ms" after W CTRL=0 (recorded 14-31 ms)
 SUBMIT_TO_START = 0.050        # TransferThread: 50 ms between submitting and the start writes
 START_SETTLE = 0.015           # StartAcquire: "1 ms" after W CTRL=1 (first EP 0x84 read >= 14.7 ms later)
@@ -68,6 +70,7 @@ POLL_AFTER = 0.100             # progress polling starts 100 ms after the start 
 POLL_EVERY = 0.015
 DRAIN_TIMEOUT = 2.0            # cancelled transfers must be back within this time
 MAX_EVENTS_PER_PASS = 32       # events handled between two checks of abort / stop_flag / deadlines
+
 
 _STATUS = {usb1.TRANSFER_COMPLETED: 'COMPLETED', usb1.TRANSFER_ERROR: 'ERROR', usb1.TRANSFER_TIMED_OUT: 'TIMED_OUT',
            usb1.TRANSFER_CANCELLED: 'CANCELLED', usb1.TRANSFER_STALL: 'STALL', usb1.TRANSFER_NO_DEVICE: 'NO_DEVICE',
@@ -532,7 +535,7 @@ class Engine:
             t.write(regs.CTRL, 0x0000)
             time.sleep(FINAL_GAP)
             t.write(regs.ACTION, 0x0004)
-            t.hold(GAP_BETWEEN_RUNS)            # writes right after this can be dropped (run without trigger)
+            t.hold(QUIET_AFTER_STOP)            # writes right after this can be dropped (run without trigger)
         except DscopeError as e:
             why = 'final stop write failed: %s' % e.message
             t.fail(why)

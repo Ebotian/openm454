@@ -218,6 +218,53 @@ Implementation (with the RVAs): `openm454/acquire.py`.
    (A1 + D0 at 400 MSa/s each, normal trigger, including runs without a trigger) without a problem, as well as
    12/12 selftest checks, 11 hardware tests, watch, stream and stop requests.
 
+### 7.1 Capture spacing (`OPENM454_TIMING`)
+
+The waits in this section are DSWave's: reproducing them is how the driver keeps its fidelity without measuring
+anything. A session may shorten selected waits with an environment variable; the traced values stay the baseline,
+and nothing changes without the variable.
+
+```bash
+OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0.005
+```
+
+| key | wait (`openm454` constant) | traced | a profile may set |
+| --- | --- | ---: | --- |
+| `gap` | before every run (`GAP_BETWEEN_RUNS`) | 100 ms | **5 ms** .. traced |
+| `quiet` | no register access after a stop (`QUIET_AFTER_STOP`) | 100 ms | **5 ms** .. traced |
+| `submit` | reads submitted -> start writes (`SUBMIT_TO_START`) | 50 ms | **5 ms** .. traced |
+| `setup` | after `W CTRL=0` (`SETUP_SETTLE`) | 15 ms | **2 ms** .. traced |
+| `start` | after `W CTRL=1` (`START_SETTLE`) | 15 ms | **2 ms** .. traced |
+| `final` | `W CTRL=0` -> `W ACTION=4` (`FINAL_GAP`) | 1 ms | **1 ms** (not shortened) |
+| `read` | per register read (`READ_DELAY`) | 15 ms | **2 ms** .. traced |
+| `wake` | analog front end before its first run (`ANALOG_WAKE_SETTLE`) | 150 ms | 0 .. traced |
+| `overdrive` | after a saturated input (`OVERDRIVE_SETTLE`) | 300 ms | 0 .. traced |
+
+The profile is refused before anything is sent: an unknown key, a value that is not a finite, non-negative number,
+a value above the traced one, or a value below its floor is `INVALID_ARG`. A profile is never applied partially.
+
+**Why the floors, and why they are exactly these.** Zeroing the spacing wedges the scope, and the one key that
+does it reliably is `final`, the 1 ms between `W CTRL=0` and the stop write `W ACTION=4`:
+
+* `final=0` (everything else zero as well): capture **2** on Linux and capture **3** on Windows die with
+  `DEVICE_ERROR: EP 0x84 handshake: expected 02, got timeout`; afterwards the scope does not answer register reads
+  and needs a replug (measured 2026-11-16, same driver, same unit).
+* `final=1 ms` with everything else zeroed: 30 of 30 captures on Windows, and 100 of 100 with `quiet=5 ms` on top.
+* The same profile the earlier soak used - five keys zeroed, `final` left at its 1 ms default, which the bench tool
+  did without the record saying so - ran 12000 captures on Linux without a failure. That is the profile the original
+  claim was about; it is not all-zero.
+
+The maintainer's bench died at ~19 captures with the five-key-zero profile (`DEVICE_ERROR`, control reads timing
+out, `recover` unable to reach it), which this machine does not reproduce: 12000 captures on Linux and 100 on a
+Windows VM are clean, so something about that bench (a driver that issues control transfers faster than a virtualised
+one, firmware state) is stricter than either of ours. That is why the floors are the conservative profile and not a
+margin above zero: it is the only set that has never failed on any of the three benches - 300 captures in each
+trigger mode there (2026-11-13), 12000 on Linux, 100-130 on Windows (2026-11-16). `final` is the stop handshake
+itself and is not shortened at all.
+
+`openm454 info`, every capture's metadata (`acq.timing`) and the last line of a `log` name the active profile, so a
+measurement taken with a shortened profile is never mistaken for a baseline one.
+
 ## 8. Data stream
 
 * **Head** (4096 bytes): u32[0] = 0x55555555; u32[2]: bit31 set = not triggered (free-run), otherwise the trigger
