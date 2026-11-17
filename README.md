@@ -197,7 +197,12 @@ OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0
 ```
 
 A profile only shortens, and only down to a floor per key: `gap`/`submit`/`quiet` 5 ms, `setup`/`start`/`read`
-2 ms, `final` 1 ms (not shortened - it is the stop handshake itself). An unknown key, a negative or non-finite
+2 ms, `final` 1 ms (not shortened - it is the stop handshake itself). `wake` and `overdrive` are **fidelity-only**:
+they may be zeroed, but they are not wedge-safety floors. Zeroing `wake` can leave the inputs 8-14 codes high
+(~80 ms) after a run without analog channels; zeroing `overdrive` can leave a saturated front end unsettled
+(~215 ms for 1500 divisions at 1 mV/div, `docs/PROTOCOL.md` 7.7). The seven floors are the whole conservative
+profile that ran 300/300; a mixed profile at or above them is accepted on the monotonicity assumption, not as a
+per-key measurement. An unknown key, a negative or non-finite
 value, a value above the traced one or below its floor is `INVALID_ARG` before the device is opened. Zeroing `final`
 wedges the scope within 2-3 captures on Linux and on Windows (`DEVICE_ERROR: EP 0x84 handshake: expected 02, got
 timeout`, then it only answers again after a replug); the floors are the conservative profile, the only set that has

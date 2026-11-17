@@ -7,9 +7,18 @@ shortens selected ones, for a session whose fidelity is judged by the signal tha
     OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0.005
 
 Keys (seconds): gap, submit, setup, start, final, read, wake, overdrive, quiet.  A profile may only shorten a
-wait, and only down to MIN: below those values the scope has wedged (DEVICE_ERROR in the handshake, then no answer
-until it is replugged) on both the maintainer's bench and this one.  MIN is the conservative profile that ran
-300/300 captures there and 100+/100+ here; every other key may be zeroed.  See docs/PROTOCOL.md, section 7.
+wait.  Two kinds of key:
+
+* the seven wedge-safety keys in MIN (gap, submit, setup, start, final, read, quiet): below MIN the scope has
+  wedged (DEVICE_ERROR in the handshake, then no answer until it is replugged) on both the maintainer's bench and
+  this one.  MIN is not seven independent floors: it is the one conservative profile that ran 300/300 captures
+  there and 100+/100+ here, every key at its floor.  A mixed profile at or above every floor is accepted on the
+  monotonicity assumption (a longer wait does not make the wedge more likely), which has not been measured
+  combination by combination.
+* the two fidelity-only keys, wake and overdrive: they are not in MIN and may be zeroed.  They are not a wedge
+  risk, but zeroing them can corrupt an analog reading: the inputs start 8-14 codes high and settle in ~80 ms
+  after a run without analog channels (wake), and a saturated front end needs ~215 ms for 1500 divisions of
+  overdrive at 1 mV/div (overdrive).  See docs/PROTOCOL.md 7.7.
 
 The active profile is reported by `openm454 info`, in every capture's metadata (`acq.timing`) and in the log's
 final line, so a measurement taken with a shortened profile cannot be mistaken for a baseline one.
@@ -26,13 +35,18 @@ KEYS = {'gap': ('acquire', 'GAP_BETWEEN_RUNS'), 'submit': ('acquire', 'SUBMIT_TO
         'final': ('acquire', 'FINAL_GAP'), 'read': ('transport', 'READ_DELAY'),
         'wake': ('scope', 'ANALOG_WAKE_SETTLE'), 'overdrive': ('scope', 'OVERDRIVE_SETTLE'),
         'quiet': ('acquire', 'QUIET_AFTER_STOP')}
-#: The lowest value of each key with hardware evidence: the conservative profile, which ran 300 captures in each
+#: The lowest value of each wedge-safety key with hardware evidence: the conservative profile, which ran 300 captures in each
 #: trigger mode on the maintainer's Windows bench (2026-11-13) and 100+ captures per run here (2026-11-16).  The
 #: fully zeroed profile wedges the scope after 8-15 captures (DEVICE_ERROR: "EP 0x84 handshake: expected 02, got
 #: timeout", then no register answer until a replug), and adding any single key back does not make it safe: `quiet`
 #: alone survived 30 in one session and died at 15 in another.  `final` is the stop handshake itself (W CTRL=0,
 #: 1 ms, W ACTION=4) and is not shortened at all.
+#: The evidence is the whole profile above, not seven independent boundaries; a mixed profile at or above every
+#: floor is accepted on the monotonicity assumption (docs/PROTOCOL.md 7.1).  `wake` and `overdrive` are not here:
+#: they are fidelity-only (FIDELITY_ONLY) and zeroing them can leave the analog front end unsettled.
 MIN = {'gap': 0.005, 'submit': 0.005, 'setup': 0.002, 'start': 0.002, 'read': 0.002, 'quiet': 0.005, 'final': 0.001}
+#: Fidelity-only keys: accepted at 0, but zeroing them can corrupt analog readings (docs/PROTOCOL.md 7.7).
+FIDELITY_ONLY = ('wake', 'overdrive')
 #: kept for callers that only ask about the post-stop quiet time
 MIN_QUIET_AFTER_STOP = MIN['quiet']
 

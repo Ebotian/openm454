@@ -61,9 +61,21 @@ def test_every_key_with_evidence_has_a_floor(key):
     timing.activate('%s=%g' % (key, timing.MIN[key]))          # the floor itself is accepted
 
 
-def test_keys_without_evidence_may_be_zeroed(monkeypatch):
+def test_fidelity_only_keys_may_be_zeroed_but_are_flagged(monkeypatch):
+    """wake/overdrive are not wedge-safety floors; zeroing them is allowed but can corrupt analog readings."""
+    assert set(timing.FIDELITY_ONLY) == {'wake', 'overdrive'}
+    assert set(timing.MIN).isdisjoint(timing.FIDELITY_ONLY)
+    assert set(timing.MIN) | set(timing.FIDELITY_ONLY) == set(timing.KEYS)
     monkeypatch.setenv(timing.ENV, 'wake=0,overdrive=0')
     assert timing.activate() == {'wake': 0.0, 'overdrive': 0.0}
+
+
+def test_the_floors_are_one_conservative_profile_not_per_key_evidence():
+    """The 300/300 evidence is for the all-MIN profile; mixed profiles rest on the monotonicity assumption."""
+    assert timing.MIN == {'gap': 0.005, 'submit': 0.005, 'setup': 0.002, 'start': 0.002,
+                          'read': 0.002, 'quiet': 0.005, 'final': 0.001}
+    timing.activate('quiet=0.005,gap=0.1')       # mixed, at/above every floor; not separately measured
+    assert acquire.QUIET_AFTER_STOP == 0.005 and acquire.GAP_BETWEEN_RUNS == 0.1
 
 
 @pytest.mark.parametrize('spec', [

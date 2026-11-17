@@ -240,6 +240,13 @@ OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0
 | `wake` | analog front end before its first run (`ANALOG_WAKE_SETTLE`) | 150 ms | 0 .. traced |
 | `overdrive` | after a saturated input (`OVERDRIVE_SETTLE`) | 300 ms | 0 .. traced |
 
+`wake` and `overdrive` are fidelity-only, not wedge-safety: zeroing them is accepted, but it can corrupt an
+analog reading.  `wake` too short leaves the inputs 8-14 codes high and ~80 ms to settle after a run without
+analog channels; `overdrive` too short leaves a saturated front end unsettled (~215 ms for 1500 divisions at
+1 mV/div; §7.7).  The seven floors are the conservative profile as a whole (300/300), not seven independent
+boundaries: a mixed profile at or above every floor is accepted on the monotonicity assumption (a longer wait
+does not make a wedge more likely), which has not been measured combination by combination.
+
 The profile is refused before anything is sent: an unknown key, a value that is not a finite, non-negative number,
 a value above the traced one, or a value below its floor is `INVALID_ARG`. A profile is never applied partially.
 
