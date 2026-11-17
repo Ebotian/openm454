@@ -1,13 +1,38 @@
 {
-  "what": "DSWave 1.2.1, Recorder (HW_BASE_MODE 6 = loop + roll), 4 analog + 8 digital, 1 MSa/s, ~1.003 s window",
-  "captured": "2026-11-16, usbmon on the host (bus 4), every control-OUT with bRequest 0xB0: payload [addr, lo, hi]. DSWave ran in a Windows 10 VM, the scope was passed through as a usb-host device, so the host sees the same URBs QEMU issues for it.",
+  "what": "DSWave 1.2.1, Recorder (Data Acquisition: loop mode, HW_BASE_MODE 6), 4 analog + 8 digital at 1 MSa/s, trigger off",
+  "captured": "2026-11-16: a USB capture of the control writes while DSWave 1.2.1 drove the scope; every control-OUT with bRequest 0xB0, payload [addr, lo, hi].",
   "scope": "one acquisition: the setup block DSWave sends between the stop of the previous run and the start writes. The 12 writes before W 0x01=0 are DSWave's probe-configuration pre-pass (SetAfold / ClearAwr per probe); the block below starts at W 0x01=0, as setup_program() does.",
   "wildcards": {
-    "43": "VPWM of probe 0: (voff/255)*pwm_scale + vga pwm offset, and pwm_scale is per unit (EEPROM zero info).",
+    "43": "VPWM of probe 0: (voff/255)*pwm_scale + the VGA entry's PWM offset. pwm_scale is per-unit PWM calibration from the EEPROM zero info of the unit that was recorded, which is not available, so this word is checked by address only.",
     "53": "VPWM of probe 1, same.",
     "63": "VPWM of probe 2, same.",
     "73": "VPWM of probe 3, same."
   },
+  "config_note": "Not recorded. The capture holds only the bRequest 0xB0 writes, so 'config' is reconstructed from them by inverting the encoder. Where DSWave's Recorder fixes a setting, the value is the Recorder's (DAQ collect init 0x301080): AUTORATE off with one explicit rate for analog and digital (1,000,000, the DAQ default and the only table rate that gives the recorded dividers), trigger off, LOOPModeEnable 1. storage_depth is 4,000,000, DSWave's OSC default depth, which the HAL keeps because the Recorder sends no :STORAGEdepth (any value 3,997,444..4,013,824 gives the same HORI_DEPTH). There is no sample_time_ps and no window: Mso_SetHoriTime 0x351200 returns at once in loop mode and the encoder does not read the window on this path, so any value gives the same writes. The other inputs (enables, coupling, V/div, offsets, threshold, trigger level, pre-trigger index, margin) were read back from the writes they produce: those writes are listed in 'echoes' and check nothing about the encoder; the writes in 'derived' do.",
+  "echoes": {
+    "40 50 60 70": "BASE per probe: enable (1) + DC coupling (4) + 20 MHz limit (8)",
+    "42 52 62 72": "VOFF per probe: voff_code as is (128)",
+    "23": "digital enable mask",
+    "21": "threshold_uv, linear (2.4968..2.5032 V give 0x0183)",
+    "11 12": "HORI_DEPTH: storage_depth / 4 + one trigger block, 4096-aligned",
+    "15 16 17 18": "dividers: 100 MHz / rate (fold 0 with every channel on)",
+    "19 1A": "rate ratio: equal analog and digital rates give 0",
+    "30 3A": "trigger enable, auto and pulse bits",
+    "31 32": "trig_sample_index rounded up to a 64-sample block (499,968..500,031 give 0x7A140)",
+    "35": "trig_level_code of A0, the trigger channel, as is (142)",
+    "37 38 39": "trig_margin, trig_hold_ps"
+  },
+  "derived": {
+    "00": "HW_BASE_MODE 6: repeat + loop*4 + (loop ? 2 : roll*2)",
+    "10": "horizontal word: analog block primary (2) + trigger channel analog (1)",
+    "13 14": "HORI_RWORDS: one loop packet (20 ms at 5000 kB/s = 313 blocks of 320 bytes) - 1 word",
+    "1B": "(4096 - block bytes) / 4",
+    "20 28": "channels x 0x100 + fold (0)",
+    "29 2A": "cross table of the enabled set, inversion bits (the hardware inverts all four probes)",
+    "41 51 61 71": "VERT: the default VGA table entry for 1 V/div",
+    "33 34": "PREW: pre-trigger blocks x block bytes / 8"
+  },
+  "constants": ["01", "2B", "22", "09", "F9"],
   "config": {
     "analog": [
       {"enable": true, "coupling": "dc", "bw20": false, "invert": false, "vdiv_uv": 1000000, "voff_code": 128, "trig_level_code": 142},
@@ -17,9 +42,10 @@
     ],
     "digital": [true, true, true, true, true, true, true, true],
     "threshold_uv": 2500000,
-    "sample_time_ps": 1003456000000,
-    "storage_depth": 4013824,
-    "auto_rate": true,
+    "storage_depth": 4000000,
+    "auto_rate": false,
+    "analog_rate": 1000000,
+    "digital_rate": 1000000,
     "trig_enable": false,
     "trig_mode": 0,
     "trig_channel_type": 1,
