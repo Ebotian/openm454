@@ -1,0 +1,53 @@
+{
+  "what": "DSWave 1.2.1, Recorder (HW_BASE_MODE 6 = loop + roll), 4 analog + 8 digital, 1 MSa/s, ~1.003 s window",
+  "captured": "2026-11-16, usbmon on the host (bus 4), every control-OUT with bRequest 0xB0: payload [addr, lo, hi]. DSWave ran in a Windows 10 VM, the scope was passed through as a usb-host device, so the host sees the same URBs QEMU issues for it.",
+  "scope": "one acquisition: the setup block DSWave sends between the stop of the previous run and the start writes. The 12 writes before W 0x01=0 are DSWave's probe-configuration pre-pass (SetAfold / ClearAwr per probe); the block below starts at W 0x01=0, as setup_program() does.",
+  "wildcards": {
+    "43": "VPWM of probe 0: (voff/255)*pwm_scale + vga pwm offset, and pwm_scale is per unit (EEPROM zero info).",
+    "53": "VPWM of probe 1, same.",
+    "63": "VPWM of probe 2, same.",
+    "73": "VPWM of probe 3, same."
+  },
+  "config": {
+    "analog": [
+      {"enable": true, "coupling": "dc", "bw20": false, "invert": false, "vdiv_uv": 1000000, "voff_code": 128, "trig_level_code": 142},
+      {"enable": true, "coupling": "dc", "bw20": false, "invert": false, "vdiv_uv": 1000000, "voff_code": 128, "trig_level_code": 128},
+      {"enable": true, "coupling": "dc", "bw20": false, "invert": false, "vdiv_uv": 1000000, "voff_code": 128, "trig_level_code": 128},
+      {"enable": true, "coupling": "dc", "bw20": false, "invert": false, "vdiv_uv": 1000000, "voff_code": 128, "trig_level_code": 128}
+    ],
+    "digital": [true, true, true, true, true, true, true, true],
+    "threshold_uv": 2500000,
+    "sample_time_ps": 1003456000000,
+    "storage_depth": 4013824,
+    "auto_rate": true,
+    "trig_enable": false,
+    "trig_mode": 0,
+    "trig_channel_type": 1,
+    "trig_channel": 0,
+    "trig_type": 0,
+    "trig_pulse_ps": 0,
+    "trig_margin": 5,
+    "trig_hold_ps": 0,
+    "trig_sample_index": 500000,
+    "loop_mode": true
+  },
+  "program": [
+    "01=0000",
+    "40=0005", "28=0400", "2B=0000", "41=8018", "2B=0000", "42=0080", "43=01BA",
+    "50=0005", "28=0400", "2B=0000", "51=8018", "2B=0000", "52=0080", "53=01BC",
+    "60=0005", "28=0400", "2B=0000", "61=8018", "2B=0000", "62=0080", "63=01BB",
+    "70=0005", "28=0400", "2B=0000", "71=8018", "2B=0000", "72=0080", "73=01CB",
+    "28=0400", "29=0000", "2A=000F",
+    "23=00FF", "20=0800", "22=0000",
+    "15=0064", "16=0000", "17=0064", "18=0000",
+    "19=0000", "1A=0000", "10=0003", "1B=03B0", "11=3D40", "12=0000", "13=61CF", "14=0000",
+    "30=0002",
+    "09=0000", "3A=0000",
+    "31=A140", "32=0007", "33=C4C8", "34=0004",
+    "35=008E",
+    "37=0005", "38=0000", "39=0000",
+    "21=0183",
+    "00=0006",
+    "F9=0000"
+  ]
+}
