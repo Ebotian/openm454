@@ -25,12 +25,12 @@ server=()
 set +e
 "$quint" verify "$tmp/capture.qnt" --main=capture --init=init --step=step --max-steps=12 \
   "${server[@]}" --invariant=accepted_frames_only \
-  --out-itf="$here/counterexamples/accepted_frames_only.itf.json" > "$tmp/verify.log" 2>&1
+  --out-itf="$tmp/caught.itf.json" > "$tmp/verify.log" 2>&1
 status=$?
 set -e
 if [ "$status" -eq 0 ]; then
   echo "seeded defect was NOT caught" >&2
   exit 1
 fi
-echo "seeded defect caught (exit $status); trace: counterexamples/accepted_frames_only.itf.json"
+echo "seeded defect caught (exit $status); trace: $tmp/caught.itf.json (not written into the repo)"
 tail -3 "$tmp/verify.log"

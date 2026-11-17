@@ -1,8 +1,6 @@
 /// Abstract capture/trigger/repeat/stream state machine for the openm454 driver.
 /// This is a design model, not the USB packet encoding.
 module capture {
-  const N: int
-
   var mode: int
   var repeat: bool
   var running: bool
@@ -185,14 +183,15 @@ module capture {
   val accepted_frames_only =
     accepted <= frames and discarded >= 0
 
-  val repeats_are_capture_only =
-    not((streaming or logging) and (mode == 1 or mode == 3))
+  val misfire_discards_only =
+    (error == "MISFIRE_RETRY") implies (discarded >= 1)
 
   val no_trigger_is_no_trigger =
-    error != "DEVICE_DID_NOT_START"
+    (error == "TIMEOUT_NO_TRIGGER") implies (not(running) and not(streaming) and not(logging))
 
+  // repeat compiles to HW_BASE_MODE 1; running a repeat capture in any other mode would be a silent fallback
   val no_silent_fallback =
-    not(running and (mode == 3) and repeat)
+    not(running and repeat and mode != 1)
 
   val quiet_after_untriggered_stop =
     (not(streaming) and not(logging) and not(running)) implies quiet
