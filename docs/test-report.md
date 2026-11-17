@@ -29,11 +29,11 @@ git-ignored fixtures are absent.
 | fast wall time | not selectable (86.4 s for everything) | **14.5 s** | excludes only the `slow`-marked 60 s MCP timeout test |
 | full wall time | 86.40 s | 65.3 s | xdist + one golden runner |
 | test files | 26 | 29 modules + 5 support + 2 fuzz + `conftest.py` (37 `.py`) | `tests/support` is not collected |
-| test LOC | 8396 | 8760 | `git ls-files tests | grep '\.py$' | xargs cat | wc -l` (includes `support/`, `conftest.py`, `fuzz/`) |
+| test LOC | 8396 | 8843 | `git ls-files tests | grep '\.py$' | xargs cat | wc -l` (includes `support/`, `conftest.py`, `fuzz/`) |
 | tests > 3 s | 1 | 1 | `tests/integration/test_mcp.py::test_log_plan_and_awg_arguments` (60.0 s, `slow`) |
 
 Test LOC grew because Phase 3 added Hypothesis laws and the stateful machine, and because the shared support
-package now owns the fakes, the USB simulator, the CLI helpers and the logger fakes (487 lines that used to be
+package now owns the fakes, the USB simulator, the CLI helpers and the logger fakes (488 lines that used to be
 inline in three test modules). The LOC target was "measure first, then decide": the consolidation removed the
 duplicated AWG golden file and merged the DSWave loop-mode block into the runner without losing assertions.
 
@@ -43,10 +43,10 @@ duplicated AWG golden file and merged the DSWave loop-mode block into the runner
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `tests/unit` | 11 | 2336 | 276 | 0 | 3.79 s | 3.76 s |
 | `tests/property` | 4 | 111 | 7 | 0 | 0.33 s | 0.33 s |
-| `tests/stateful` | 4 | 1967 | 152 | 0 | 12.92 s | 12.91 s |
+| `tests/stateful` | 4 | 2050 | 152 | 0 | 12.92 s | 12.91 s |
 | `tests/golden` | 5 | 1788 | 838 | 548 | 0.14 s | 0.13 s |
 | `tests/integration` | 5 | 1964 | 113 | 6 | 10.51 s | 70.19 s |
-| `tests/support` | 4 | 487 | 0 | 0 | — | — |
+| `tests/support` | 5 | 488 | 0 | 0 | — | — |
 | `tests/fuzz` | 2 | 84 | 0 | 0 | — | — |
 
 Per-directory times are the junit sum of test durations, so they exceed the wall time under xdist.
