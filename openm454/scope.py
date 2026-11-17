@@ -64,6 +64,7 @@ class Settings:
     trig_retries: int = 4             # digital rise/fall trigger: re-arms after a misfire on the other edge
     cal: bool = False                 # opt-in PC-side calibration (openm454.calib); off: values exactly as before
     cal_mode: str = None              # calibration table mode override ('34' for loop logs without interleave)
+    repeat: int = 0                   # hardware repeat mode: frames collected per start (0 = off, one capture)
 
 
 def settings_from_args(a):
@@ -184,6 +185,7 @@ def _timing_from_args(st, a):
     st.timeout = si(a.timeout, 's', '--timeout')
     st.holdoff = si(a.holdoff, 's', '--holdoff')
     st.sensitivity = a.sensitivity
+    st.repeat = int(getattr(a, 'repeat', 0) or 0)
     r = getattr(a, 'trig_retries', None)
     if r is not None:
         st.trig_retries = int(si(r, None, '--trig-retries'))
@@ -206,6 +208,49 @@ def afold_for(n):
 
 def dfold_for(n):
     return 0 if n == 0 else _fold(n, [(2, 4), (4, 2), (8, 1)])
+
+
+def repeat_plan(st):
+    """Frames to collect per start (0 = a normal single capture).
+
+    Both starts are legal and they are not the same acquisition: with a trigger the device re-arms for every frame
+    (measured 2026-11-16: a 2 Hz source with a rise trigger gives three 250 ms frames in 1.75 s, each a separate
+    acquisition), and with the trigger off the frames follow back to back after the first one starts.
+    """
+    n = int(getattr(st, 'repeat', 0) or 0)
+    if n < 0:
+        raise DscopeError('INVALID_ARG', 'repeat frame count must be >= 0 (%d)' % n, 'omit --repeat or pass a count >= 1')
+    return n
+
+
+REPEAT_MAX_BYTES = 1 << 30       # host memory a repeat run may hold: N frames of pkt_bytes each
+
+
+def repeat_window_guard(st, geom, n):
+    """Refuse the window in which the device switches to HW_BASE_MODE 3 (repeat + stream).
+
+    DSWave makes the same switch (FUN_140350ad0: roll = auto_trig and sample_time > profile+0x70 = 200 ms), and in
+    that mode the per-frame 4 KiB tail stops describing the record: measured 2026-11-16, `valid_words` is a running
+    counter (112, 880, ...) instead of the record length, so the frames come out mis-framed (docs/PROTOCOL.md 8.2).
+    """
+    if n and geom.get('roll'):
+        raise DscopeError('INVALID_ARG', 'repeat mode with a %.3g s window switches the device to HW_BASE_MODE 3 '
+                          '(repeat + stream)' % st.duration,
+                          'keep the window at or below 0.2 s (--duration), or use `openm454 stream` for a '
+                          'continuous recording: in mode 3 the device streams one acquisition and the frames would '
+                          'be chunks of it, not separate runs (docs/PROTOCOL.md 8.2)')
+    return n
+
+
+def repeat_memory_guard(n, geom):
+    """Refuse a frame count whose frames cannot be held in memory (one pkt_bytes per frame, tail included)."""
+    pkt = int(geom.get('pkt_bytes') or 0)
+    need = n * pkt
+    if n and need > REPEAT_MAX_BYTES:
+        raise DscopeError('INVALID_ARG', 'repeat mode would hold %d frames x %d B = %.1f MiB (limit %d MiB)'
+                          % (n, pkt, need / 2 ** 20, REPEAT_MAX_BYTES // 2 ** 20),
+                          'lower --repeat or shorten the window')
+    return n
 
 
 def hal_config(st):
@@ -321,7 +366,7 @@ def hal_config(st):
     hal = {'analog': ana, 'digital': [int('D%d' % i in st.digital) for i in range(8)],
            'threshold_uv': int(round(thr_prog * 1e6)),
            'sample_time_ps': time_ps, 'storage_depth': storage, 'auto_rate': 1,
-           'trigger': trig, 'repeat': 0, 'roll': 0}
+           'trigger': trig, 'repeat': 1 if getattr(st, 'repeat', 0) else 0, 'roll': 0}
     if doc:
         hal['cal'] = dict(calib.summary(doc), mode=cal_mode,
                           threshold={'target_v': round(calib.threshold_output(doc, thr_prog), 6) if thr_clamped else thr,
@@ -594,6 +639,9 @@ class Scope:
         hal, scale, warnings, hints = hal_config(st)
         hal['trigger']['enable'] = int(bool(st.trig_source) and st.trig_mode != 'force')
         prog, geom = self._compile_ok(hal, warnings)
+        n = int(getattr(st, 'repeat', 0) or 0)
+        repeat_window_guard(st, geom, n)
+        repeat_memory_guard(n, geom)
         return {'hal': hal, 'geometry': {k: v for k, v in geom.items() if k != '_regs'}, 'writes': len(prog),
                 'program': ['%02X=%04X' % w for w in prog[:400]], 'warnings': warnings}
 
@@ -611,21 +659,32 @@ class Scope:
     def capture(self, st):
         self._check_link()
         self._cal_check(st)
+        repeat = repeat_plan(st)
         hal, scale, warnings, hints = hal_config(st)
         t_begin = time.time()
         attempts = []
         mode = st.trig_mode
         triggered_wanted = bool(st.trig_source) and mode != 'force'
         wait = (st.auto_after if mode == 'auto' else st.timeout) + max(st.holdoff, 0.0)   # holdoff delays the first trigger
+        if repeat and not triggered_wanted:     # untriggered: the frames follow the start command back to back
+            wait = 2.0
         hal['trigger']['enable'] = int(triggered_wanted)
         prog, geom = self._compile_ok(hal, warnings)
+        repeat_window_guard(st, geom, repeat)
+        repeat_memory_guard(repeat, geom)
         collect = max(10.0, 1.5 * geom['record_s'] + 2.0)
-        raw = self._run(prog, geom, self._head_wait(geom, wait if triggered_wanted else 2.0), collect)
+        if repeat:          # back-to-back frames: 200 MB/s is a conservative floor for how long they take
+            collect = max(collect, 1.5 * repeat * geom['pkt_bytes'] / 2e8 + 2.0)
+        raw = self._run(prog, geom, self._head_wait(geom, wait if triggered_wanted else 2.0), collect,
+                        **({'repeat_frames': repeat} if repeat else {}))
         attempts.append(('triggered' if triggered_wanted else 'forced') if raw.head else 'no-trigger')
         if raw.head is None:
             self._overdriven = True             # no data to check: an input may have been saturated while waiting
             if raw.aborted:
                 raise DscopeError('TIMEOUT_WATCHDOG', 'capture aborted before the trigger')
+            if repeat:                      # nothing to fall back to: the trigger is already off in this mode
+                raise DscopeError('PROTOCOL_ERROR', 'repeat mode: no head arrived (the device did not start)',
+                                  'run "openm454 release"; if it persists replug the scope')
             if mode == 'normal':
                 raise DscopeError('TIMEOUT_NO_TRIGGER', 'no trigger within %.3g s on %s (%.3g s wait + %.3g s record)'
                                   % (self._head_wait(geom, wait), st.trig_source, wait, geom['record_s']),
@@ -642,7 +701,15 @@ class Scope:
             raise DscopeError('TIMEOUT_DATA', 'incomplete record: %d of %d data bytes (%s)' % (
                 len(raw.data), geom['need_bytes'], 'aborted' if raw.aborted else 'data stopped arriving'),
                 'retry once; if it repeats, check the USB 3 connection')
-        frame = _decode(raw, geom, hal)
+        frames = None
+        if repeat:                                          # one frame per transfer, each decoded on its own
+            frames = _decode_frames(raw, geom, hal)
+            if len(frames) < repeat:
+                raise DscopeError('TIMEOUT_DATA', 'repeat mode collected %d of %d frames' % (len(frames), repeat),
+                                  'retry once; if it repeats, check the USB 3 connection')
+            frame = frames[0]
+        else:
+            frame = _decode(raw, geom, hal)
         self._overdriven = _saturated(frame)
         check, misfires = 'unchecked', 0
         if attempts[-1] == 'triggered' and trigcheck.checked_edge(st.trig_edge) and st.trig_source.startswith('D'):
@@ -652,6 +719,10 @@ class Scope:
         meta['acq']['trigger_check'] = check
         meta['acq']['trigger_misfires'] = misfires
         cap = Capture(meta, frame['analog'], frame['digital'])
+        if frames is not None:
+            cap.frames = frames
+            cap.meta['acq']['repeat_frames'] = repeat
+            cap.meta['acq']['frames'] = len(frames)
         cap.meta['hints'] = _hints(cap) + hints
         return cap
 
@@ -1019,3 +1090,9 @@ def _decode(raw, geom, hal):
     """-> {'analog': {ch: uint8}, 'digital': {ch: uint8}, 't0_analog': s, 't0_digital': s}. Bound to openm454.packet."""
     from . import mso_adapter
     return mso_adapter.decode(raw, geom, hal)
+
+
+def _decode_frames(raw, geom, hal):
+    """Repeat mode: the same dict per frame, each cropped to its own record and trigger."""
+    from . import mso_adapter
+    return mso_adapter.decode_frames(raw, geom, hal)

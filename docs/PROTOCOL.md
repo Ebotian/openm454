@@ -357,8 +357,31 @@ normal stop handshake. What it does **not** do is carry a frame the way mode 1 d
 | decoded without the tail | - | 100 kHz reads as 44.9 kHz (2.93 Vpp); the 4-channel setup reads 8.68 Vpp noise |
 
 So in mode 3 the per-frame tail stops describing the record, and the block layout is not the one `geometry()`
-derives: a raw transfer decoded as a single-channel record is not the signal. Until that is understood, a repeat run
-whose window exceeds 200 ms is refused - it would silently record mis-framed data.
+derives: a raw transfer decoded as a single-channel record is not the signal.
+
+**(hardware, 2026-11-16, the same setup) Mode 3 is a stream, not N acquisitions.** Five consecutive 204800-byte
+transfers of one `--repeat 5` run are 99 % byte-identical to each other, while mode 1 frames of the same signal are
+5 % identical (best alignment 1484 samples): in mode 3 every read returns a chunk of *the same* continuous buffer,
+not a separate recording. The discontinuities inside a chunk (95-99 % of the sample intervals are exactly 8 at
+800 kSa/s; at 8 kSa/s, same window, 99.3 % over 4096 samples) are where the buffer advanced between two reads, and
+they scale with the data rate - a readout effect, not framing.
+
+Consequence: the window limit applies to the **untriggered** form. A triggered repeat is not subject to it, and it
+is the form DSWave itself records (`corpus4 repeat_mode`): the device re-arms for every frame, so with the trigger on
+roll stays off and the mode is 1 at any window.
+
+**(hardware, 2026-11-16)** `--repeat 3 --trig A0:rise:1.4V --trig-mode normal --duration 250ms`, 100 kHz square into
+A0: three separate 250 ms records (200192 samples each at 800 kSa/s), 100.000 kHz and 2.89 Vpp in frame 0, 99.7 % of
+the sample intervals exactly 8, the three frames 0 % byte-identical to each other, stop normal, 1.1 s. With a 2 Hz
+source instead, three frames take 1.75 s - i.e. each frame waits for its own trigger.
+
+So `--repeat` carries two behaviours, chosen by the trigger, and only the untriggered one above 200 ms is refused
+(that is the stream, which `stream` and `log` are for).
+
+The vendor datasheet (V1.0.0, 2025-11-01) draws the same line from the other side: **实时 (real-time)** recording
+holds 4 Mpts and, at the maximum sample rate, 10 ms; **单次 (single)** holds 400 Mpts and 1 s. The product has two
+trigger modes (Auto, Normal) and no repeat mode at all - `:REPEATModeEnable` is a HAL command, and it produces
+separate records only while roll is off.
 
 **What is measured.** Repeat runs with windows below 200 ms (mode 1) are: 50/500/2000 frames in one start, every
 frame with its own tail and trigger index, stop normal (2026-11-13), and the 100 ms runs above. The untriggered
