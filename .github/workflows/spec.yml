@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"        # Apalache 0.63.0 is compiled for Java 21
       - name: Install quint and Apalache
         run: |
           npm install -g "@informalsystems/quint@${QUINT_VERSION}"
@@ -38,6 +38,17 @@ jobs:
           mkdir -p "$HOME/apalache"
           tar -xzf /tmp/apalache.tgz -C "$HOME/apalache" --strip-components=1
           echo "$HOME/apalache/bin" >> "$GITHUB_PATH"
+      # quint test downloads its Rust evaluator through the GitHub API, which is rate limited on shared
+      # runners; seed the cache with the pinned release asset instead.
+      - name: Seed the Quint evaluator
+        run: |
+          pkg="$(npm root -g)/@informalsystems/quint"
+          version="$(node -p "require('$pkg/dist/src/rust/binaryManager').QUINT_EVALUATOR_VERSION")"
+          curl -fsSL --retry 5 --retry-all-errors -o /tmp/quint-evaluator.tar.gz \
+            "https://github.com/quint-co/quint/releases/download/evaluator/${version}/quint_evaluator-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p "$HOME/.quint/rust-evaluator-${version}"
+          tar -xzf /tmp/quint-evaluator.tar.gz -C "$HOME/.quint/rust-evaluator-${version}"
+          chmod +x "$HOME/.quint/rust-evaluator-${version}/quint_evaluator"
       - name: Model runs (quint test)
         run: |
           quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'

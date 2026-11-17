@@ -27,7 +27,7 @@ Homepage = "https://github.com/FrostFlops/openm454"
 Issues = "https://github.com/FrostFlops/openm454/issues"
 
 [project.optional-dependencies]
-test = ["pytest", "hypothesis>=6.170,<7", "pytest-xdist>=3.6,<4"]
+test = ["pytest", "hypothesis>=6.168,<7", "pytest-xdist>=3.6,<4"]   # 6.169+ needs Python 3.11
 fuzz = ["atheris>=3.1,<4"]
 
 [project.scripts]
