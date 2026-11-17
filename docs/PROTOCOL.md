@@ -225,13 +225,13 @@ anything. A session may shorten selected waits with an environment variable; the
 and nothing changes without the variable.
 
 ```bash
-OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0.005
+OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003
 ```
 
 | key | wait (`openm454` constant) | traced | a profile may set |
 | --- | --- | ---: | --- |
 | `gap` | before every run (`GAP_BETWEEN_RUNS`) | 100 ms | **5 ms** .. traced |
-| `quiet` | no register access after a stop (`QUIET_AFTER_STOP`) | 100 ms | **5 ms** .. traced |
+| `quiet` | no register access after a stop (`QUIET_AFTER_STOP`) | 100 ms | **100 ms** (not shortened) |
 | `submit` | reads submitted -> start writes (`SUBMIT_TO_START`) | 50 ms | **5 ms** .. traced |
 | `setup` | after `W CTRL=0` (`SETUP_SETTLE`) | 15 ms | **2 ms** .. traced |
 | `start` | after `W CTRL=1` (`START_SETTLE`) | 15 ms | **2 ms** .. traced |
@@ -243,9 +243,11 @@ OPENM454_TIMING=gap=0.005,submit=0.02,setup=0.005,start=0.005,read=0.003,quiet=0
 `wake` and `overdrive` are fidelity-only, not wedge-safety: zeroing them is accepted, but it can corrupt an
 analog reading.  `wake` too short leaves the inputs 8-14 codes high and ~80 ms to settle after a run without
 analog channels; `overdrive` too short leaves a saturated front end unsettled (~215 ms for 1500 divisions at
-1 mV/div; §7.7).  The seven floors are the conservative profile as a whole (300/300), not seven independent
-boundaries: a mixed profile at or above every floor is accepted on the monotonicity assumption (a longer wait
-does not make a wedge more likely), which has not been measured combination by combination.
+1 mV/div; §7.7).  The floors other than `quiet` are the conservative profile as a whole (300/300), not
+independent boundaries: a mixed profile at or above every floor is accepted on the monotonicity assumption (a
+longer wait does not make a wedge more likely), which has not been measured combination by combination.  `quiet`
+is the traced 100 ms: 2026-10-31 untriggered-stop measurements showed the scope drops register writes inside that
+window, and every 300/300 capture was forced or triggered, so a shortened quiet had no evidence for that case.
 
 The profile is refused before anything is sent: an unknown key, a value that is not a finite, non-negative number,
 a value above the traced one, or a value below its floor is `INVALID_ARG`. A profile is never applied partially.
@@ -257,6 +259,7 @@ does it reliably is `final`, the 1 ms between `W CTRL=0` and the stop write `W A
   `DEVICE_ERROR: EP 0x84 handshake: expected 02, got timeout`; afterwards the scope does not answer register reads
   and needs a replug (measured 2026-11-16, same driver, same unit).
 * `final=1 ms` with everything else zeroed: 30 of 30 captures on Windows, and 100 of 100 with `quiet=5 ms` on top.
+  That quiet value is historical: the current floor is the traced 100 ms (2026-10-31 untriggered-stop evidence).
 * The same profile the earlier soak used - five keys zeroed, `final` left at its 1 ms default, which the bench tool
   did without the record saying so - ran 12000 captures on Linux without a failure. That is the profile the original
   claim was about; it is not all-zero.
@@ -269,8 +272,9 @@ margin above zero: it is the only set that has never failed on any of the three 
 trigger mode there (2026-11-13), 12000 on Linux, 100-130 on Windows (2026-11-16). `final` is the stop handshake
 itself and is not shortened at all.
 
-`openm454 info`, every capture's metadata (`acq.timing`) and the last line of a `log` name the active profile, so a
-measurement taken with a shortened profile is never mistaken for a baseline one.
+`openm454 info`, every capture's metadata (`acq.timing`), the MCP summary's `acq.timing` and the log's final
+result name the active profile, so a measurement taken with a shortened profile is never mistaken for a baseline
+one.  A shortened `wake`/`overdrive` is named in the capture's `warnings`.
 
 ## 8. Data stream
 

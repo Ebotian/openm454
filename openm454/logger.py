@@ -186,6 +186,7 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     fold = r > MAX_RATE
     hal, scale, fe_warnings = loop_hal(st, r, fold, divider)
     warnings += fe_warnings
+    warnings += timing.warnings()
     prog, geom = mso_adapter.compile(hal, zero_info if zero_info is not None else _cached_zero())
     blk = geom['blk_bytes']
     small = bool(geom['small_pkt'])
@@ -963,6 +964,8 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
            'unread_at_stop_mb': round(s['backlog'] / 1e6, 1),
            'head_word': '%08X' % int.from_bytes(raw.head[8:12], 'little'), 'stop': raw.stop,
            **queue_depth(raw), 'elapsed_s': round(time.time() - t0_wall, 3)}
+    if timing.active():
+        acq['timing'] = timing.active()
     res = {'ok': True, 'cmd': 'log', 'plan': public(pl), 'acq': acq}
     res.update(w.summary())
     if hook is not None:

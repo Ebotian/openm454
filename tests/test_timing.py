@@ -3,6 +3,7 @@
 The values are only worth shortening if the signal still matches: a profile is refused before anything reaches the
 device, so a typo cannot turn into a silent zero (or into a NaN sleep) halfway through a capture.
 """
+import json
 import types
 
 import pytest
@@ -34,12 +35,12 @@ def test_profile_parses_keys_not_module_names():
 
 
 def test_activate_shortens_the_constants_and_reports_them(monkeypatch):
-    monkeypatch.setenv(timing.ENV, 'gap=0.005,quiet=0.006,read=0.003')
-    assert timing.activate() == {'gap': 0.005, 'quiet': 0.006, 'read': 0.003}
+    monkeypatch.setenv(timing.ENV, 'gap=0.005,quiet=0.1,read=0.003')
+    assert timing.activate() == {'gap': 0.005, 'quiet': 0.1, 'read': 0.003}
     assert acquire.GAP_BETWEEN_RUNS == 0.005
-    assert acquire.QUIET_AFTER_STOP == 0.006
+    assert acquire.QUIET_AFTER_STOP == 0.1
     assert transport.READ_DELAY == 0.003
-    assert timing.active() == {'gap': 0.005, 'quiet': 0.006, 'read': 0.003}
+    assert timing.active() == {'gap': 0.005, 'quiet': 0.1, 'read': 0.003}
 
 
 def test_the_quiet_time_is_its_own_key(monkeypatch):
@@ -68,14 +69,18 @@ def test_fidelity_only_keys_may_be_zeroed_but_are_flagged(monkeypatch):
     assert set(timing.MIN) | set(timing.FIDELITY_ONLY) == set(timing.KEYS)
     monkeypatch.setenv(timing.ENV, 'wake=0,overdrive=0')
     assert timing.activate() == {'wake': 0.0, 'overdrive': 0.0}
+    w = timing.warnings()
+    assert len(w) == 2 and all('fidelity-only' in x for x in w)
+    p = scope.Scope().plan(scope.Settings(analog=['A0'], duration=0.01, samples=1000))
+    assert any('fidelity-only' in x for x in p['warnings'])
 
 
 def test_the_floors_are_one_conservative_profile_not_per_key_evidence():
     """The 300/300 evidence is for the all-MIN profile; mixed profiles rest on the monotonicity assumption."""
     assert timing.MIN == {'gap': 0.005, 'submit': 0.005, 'setup': 0.002, 'start': 0.002,
-                          'read': 0.002, 'quiet': 0.005, 'final': 0.001}
-    timing.activate('quiet=0.005,gap=0.1')       # mixed, at/above every floor; not separately measured
-    assert acquire.QUIET_AFTER_STOP == 0.005 and acquire.GAP_BETWEEN_RUNS == 0.1
+                          'read': 0.002, 'quiet': 0.1, 'final': 0.001}
+    timing.activate('quiet=0.1,gap=0.1')       # mixed, at/above every floor; not separately measured
+    assert acquire.QUIET_AFTER_STOP == 0.1 and acquire.GAP_BETWEEN_RUNS == 0.1
 
 
 @pytest.mark.parametrize('spec', [
@@ -115,6 +120,14 @@ def test_scope_refuses_a_bad_profile_before_opening_anything(monkeypatch):
     with pytest.raises(DscopeError) as e:
         scope.Scope()
     assert e.value.code == 'INVALID_ARG'
+
+
+def test_cli_reports_a_bad_profile_as_json(monkeypatch, capsys):
+    monkeypatch.setenv(timing.ENV, 'gap=oops')
+    from openm454 import cli
+    assert cli.main(['info']) == 2
+    err = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert err['ok'] is False and err['error']['code'] == 'INVALID_ARG'
 
 
 def test_info_names_the_active_profile(monkeypatch):

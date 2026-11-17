@@ -211,6 +211,7 @@ def dfold_for(n):
 def hal_config(st):
     """User Settings -> SCPI-level HAL parameters (+ per-channel scaling) -> dict."""
     warnings, hints = [], []
+    warnings.extend(timing.warnings())
     for c in st.analog + st.digital:
         pass
     if not st.analog and not st.digital:

@@ -966,3 +966,13 @@ def test_stream_live_flag_reaches_the_register_program(monkeypatch, capsys):
         cli.cmd_stream(cli.build_parser().parse_args(argv), fs)
         assert fs.live is live
     capsys.readouterr()
+
+
+def test_log_result_names_the_active_timing_profile(tmp_path, monkeypatch):
+    from openm454 import timing
+    monkeypatch.setenv(timing.ENV, 'gap=0.005')
+    timing.activate()
+    pl = make_plan(['A2'], ['D0', 'D1'], 100e3, 0.1, tmp_path)
+    layout, an, dg, stream = fake_signal(pl, 1.0)
+    res = logger.run(FakeScope(stream, pl['packet_bytes']), settings(['A2'], ['D0', 'D1']), pl, str(tmp_path / 't'))
+    assert res['acq']['timing'] == {'gap': 0.005}

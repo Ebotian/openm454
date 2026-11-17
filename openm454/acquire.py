@@ -60,8 +60,8 @@ LIVE_READ = 2 * MIB               # larger reads only come from a live stream ab
 HEAD_MAGIC = b'\x55\x55\x55\x55'
 EP_DATA = 0x86
 GAP_BETWEEN_RUNS = 0.100       # FUN_14033f270: 100 ms before every run
-QUIET_AFTER_STOP = 0.100       # ... and no register access for 100 ms after a stop (see Transport.hold); a profile
-                               # may shorten it down to timing.MIN['quiet'] and never below
+QUIET_AFTER_STOP = 0.100       # ... and no register access for 100 ms after a stop (see Transport.hold); this
+                               # traced value is also the floor: writes can be dropped inside a shortened window
 SETUP_SETTLE = 0.015           # SetupAcquire: "1 ms" after W CTRL=0 (recorded 14-31 ms)
 SUBMIT_TO_START = 0.050        # TransferThread: 50 ms between submitting and the start writes
 START_SETTLE = 0.015           # StartAcquire: "1 ms" after W CTRL=1 (first EP 0x84 read >= 14.7 ms later)

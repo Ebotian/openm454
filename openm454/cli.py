@@ -1134,6 +1134,7 @@ def main(argv=None):
             given = si(args.max_wall, 's', '--max-wall')
             max_wall = max(max_wall, given)
             per_iter = max(per_iter, given) if per_iter else None
+        scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
     except DscopeError as e:
         _emit({'ok': False, 'cmd': args.cmd, 'error': e.to_dict()})
         return e.exit_code
@@ -1141,7 +1142,6 @@ def main(argv=None):
         _emit({'ok': False, 'cmd': args.cmd, 'error': {'code': 'INTERNAL', 'message': repr(e),
                                                          'trace': traceback.format_exc().splitlines()[-6:]}})
         return 1
-    scope = Scope(log=(lambda s: sys.stderr.write(s + '\n')) if args.verbose else None)
     done = threading.Event()
     deadline = [time.time() + max_wall]
     if per_iter:

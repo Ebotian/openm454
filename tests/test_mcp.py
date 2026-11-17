@@ -407,3 +407,8 @@ def test_values_starting_with_a_dash_reach_the_cli():
     assert ns.window == '-2ms:0'
     ns = build_parser().parse_args(M.record_args({'mode': 'log', 'rate': '1M', 'offset': '-0.5V'}, plan=True))
     assert ns.offset == '-0.5V'
+
+
+def test_summary_keeps_the_active_timing_profile():
+    out = M.summarize({'ok': True, 'cmd': 'capture', 'acq': {'timing': {'gap': 0.005}, 'triggered': True}})
+    assert out['acq']['timing'] == {'gap': 0.005}
