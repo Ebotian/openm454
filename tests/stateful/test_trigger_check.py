@@ -8,8 +8,8 @@ import pytest
 
 from openm454 import scope as scopemod
 from openm454 import trigcheck
-from openm454.acquire import RawCapture
 from openm454.errors import DscopeError
+from tests.support.fakes import HEAD, FakeDevice, ScriptEngine
 
 
 # ------------------------------------------------------------------------------------------------ signals
@@ -131,33 +131,6 @@ def test_any_edge_and_pulse_triggers_are_unchecked():
 
 
 # ------------------------------------------------------------------------------------------------ re-arm loop
-HEAD = bytes(b'\x55\x55\x55\x55' + bytes(4092))       # triggered head
-
-
-class FakeDev:
-    def __init__(self):
-        self.zero_info = scopemod._cached_zero()
-        self.info = {'usb_speed': 'super'}
-        self.t = types.SimpleNamespace(running=False, stale=False)
-
-
-class ScriptEngine:
-    """Each run takes the next (frame, trigger wait s) of the script; frame None = no trigger ('abort': aborted)."""
-    def __init__(self, script, record_s):
-        self.script, self.record_s, self.calls = list(script), record_s, []
-
-    def run(self, prog, **kw):
-        self.calls.append(kw)
-        fr, waited = self.script.pop(0)
-        raw = RawCapture()
-        raw.t_start = 1000.0
-        if fr is None or fr == 'abort':
-            raw.aborted = fr == 'abort'
-            return raw
-        raw.head, raw.data = HEAD, bytearray(kw['need_bytes'])
-        raw.t_head = raw.t_start + self.record_s + waited
-        raw.frame = fr
-        return raw
 
 
 @pytest.fixture
@@ -194,7 +167,7 @@ def run(st, kinds, waits=None):
         return {'analog': {}, 'digital': {st.trig_source: b}, 't0_analog': 0.0, 't0_digital': -idx / rate}
     frames = [frame(k) for k in kinds]
     s = scopemod.Scope()
-    s.dev = FakeDev()
+    s.dev = FakeDevice()
     s.engine = ScriptEngine(list(zip(frames, waits or [0.001] * len(kinds))), geom['record_s'])
     return s, frames, geom
 

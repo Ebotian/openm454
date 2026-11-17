@@ -1,4 +1,5 @@
 """Shared loop-mode test fakes/builders, moved out of test_logger in Phase 2."""
+import types
 import numpy as np
 
 from openm454 import logger, packet
@@ -95,3 +96,12 @@ def fake_signal(pl, seconds):
     return layout, an, dg, encode(layout, an, dg)
 
 
+class ProbeScope(FakeScope):
+    dev = types.SimpleNamespace(zero_info=None)
+    awg = None
+
+    def _check_link(self):
+        pass
+
+    def awg_from_spec(self, spec):
+        self.awg = spec

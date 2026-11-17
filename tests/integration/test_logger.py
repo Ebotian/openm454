@@ -14,7 +14,8 @@ from openm454.capture import load_capture
 from openm454.errors import DscopeError
 from openm454.units import si
 
-from tests.support.logging import (A2D8, A4D8, FakeScope, encode, fake_signal, make_plan, settings, square)
+from tests.support.logging import (A2D8, A4D8, FakeScope, ProbeScope, encode, fake_signal, make_plan, settings,
+                                   square)
 
 
 @pytest.fixture(autouse=True)
@@ -682,17 +683,6 @@ def test_forced_ram_log_never_exceeds_the_budget(tmp_path, monkeypatch):
     clock = readout_clock(monkeypatch, pl['packet_bytes'], 300e6)
     res = logger.run(FakeScope(stream, pl['packet_bytes'], clock=clock), settings(*A2D8), pl, str(tmp_path / 'r'))
     assert res['ok'] and res['acq']['stop_reason'] == 'ram_budget' and 60 <= res['acq']['data_mb'] < 62
-
-
-class ProbeScope(FakeScope):
-    dev = types.SimpleNamespace(zero_info=None)
-    awg = None
-
-    def _check_link(self):
-        pass
-
-    def awg_from_spec(self, spec):
-        self.awg = spec
 
 
 def test_cli_log_measures_an_unknown_readout_first(monkeypatch, capsys):

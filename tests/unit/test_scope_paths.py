@@ -6,27 +6,13 @@ import pytest
 from openm454 import scope as scopemod
 from openm454.acquire import RawCapture
 from openm454.errors import DscopeError
-
-
-class FakeDev:
-    def __init__(self, speed='super'):
-        self.zero_info = scopemod._cached_zero()
-        self.info = {'usb_speed': speed}
-        self.t = types.SimpleNamespace(running=False, stale=False)
-
-
-class OneShotEngine:
-    def __init__(self, raw):
-        self.raw, self.calls = raw, []
-
-    def run(self, prog, **kw):
-        self.calls.append(kw)
-        return self.raw
+from tests.support.fakes import FakeDevice, OneShotEngine
+from tests.support.sim import FakeDevice as SimDevice, Sim
 
 
 def scope_with(raw, speed='super'):
     s = scopemod.Scope()
-    s.dev = FakeDev(speed)
+    s.dev = FakeDevice(speed)
     s.engine = OneShotEngine(raw)
     return s
 
@@ -336,16 +322,15 @@ def test_geometry_to_engine_queue_depth(monkeypatch, limit):
     queues what the usbfs budget allows; without usbfs (Windows, macOS) it keeps the geometry's 16."""
     from openm454 import acquire as acq
     from openm454 import cli
-    from test_acquire_sim import FakeDevice, Sim
     monkeypatch.setattr(acq, 'usbfs_memory_mb', lambda: limit)
     st = scopemod.settings_from_args(cli.build_parser().parse_args(
         ['capture', '-c', 'A0-A3,D0-D7', '--rate', '100M', '--duration', '5ms', '--trig-mode', 'force']))
     s = scopemod.Scope()
-    s.dev = FakeDev()
+    s.dev = FakeDevice()
     g = s.plan(st)['geometry']
     assert (g['pkt_bytes'], g['transfer_count']) == (1048320, 16)
     sim = Sim()
-    eng = acq.Engine(FakeDevice(sim))
+    eng = acq.Engine(SimDevice(sim))
     seen = []
     s.engine = types.SimpleNamespace(run=lambda prog, **kw: seen.append(kw) or eng.run(prog, **kw))
     cap = s.capture(st)

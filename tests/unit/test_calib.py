@@ -360,7 +360,7 @@ def test_mcp_mapping_and_summary():
 def test_log_cal_refuses_another_unit_before_anything_runs(capsys, tmp_path, monkeypatch):
     import types
     from openm454 import host
-    import test_logger as tl
+    from tests.support import logging as tl
     monkeypatch.setattr(host, 'HOST_FILE', str(tmp_path / 'host.json'))
     monkeypatch.setattr(cli, 'STOP_REQUEST', str(tmp_path / 'stop.request'))
     monkeypatch.setattr(calib, 'unit_id', lambda zi: 'f' * 16)    # this "scope" is unit ffff..., independent of state/

@@ -6,9 +6,10 @@ nightly fuzz job (`.github/workflows/fuzz.yml`).
     python tests/fuzz/fuzz_packet.py -max_total_time=300 tests/fuzz/corpus/fuzz_packet
     python tests/fuzz/fuzz_adapter.py -max_total_time=300 tests/fuzz/corpus/fuzz_adapter
 
-Needs the fuzz extra (`pip install -e ".[fuzz]"`) and `OPENM454_NO_USB=1`. Python coverage comes from
-`atheris.instrument_imports()`, so the target imports the driver inside that block; without it the corpus stays
-flat (only the native interpreter paths are instrumented).
+Needs the fuzz extra (`pip install -e ".[fuzz]"`) and `OPENM454_NO_USB=1`. The targets import the driver inside
+`atheris.instrument_imports()`, but that does not make libFuzzer's counters grow in this environment: the five
+minute runs report `cov: 72 ft: 72 corp: 1/1b` for the whole run. Treat these as crash-robustness checks over a
+seeded corpus with defined-error assertions, not as coverage-guided exploration.
 
 - `fuzz_packet.py`: arbitrary bytes through `packet.split_frames` and `packet.decode` (frame layout from a
   2 analog / 2 digital / repeat capture).

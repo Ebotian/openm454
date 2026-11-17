@@ -221,7 +221,7 @@ def test_the_stream_seam_estimate_follows_the_profile():
 
 
 def test_the_log_plan_compares_with_stream_at_the_active_spacing():
-    import test_logger as L
+    from tests.support import logging as L
     st = L.settings(['A2', 'A3'], ['D%d' % i for i in range(8)])
     alt = lambda: logger.stream_alternative(st, 50e6, 150e6, 1e12, 3600.0)     # no drain: the seam alone
     traced = alt()
@@ -273,7 +273,7 @@ def test_info_names_the_active_profile(monkeypatch):
 
 def _sim_capture():
     """A forced A1 capture through Scope.capture and the real engine on the simulated device."""
-    from test_acquire_sim import FakeDevice, Sim
+    from tests.support.sim import Sim, FakeDevice
     st = scope.settings_from_args(cli.build_parser().parse_args(
         ['capture', '-c', 'A1', '--duration', '1ms', '--trig-mode', 'force']))
     s = scope.Scope()
@@ -291,7 +291,7 @@ def test_every_capture_names_the_profile_it_was_taken_with(monkeypatch):
 
 
 def _log(tmp_path, **kw):
-    import test_logger as L
+    from tests.support import logging as L
     pl = L.make_plan(['A2'], ['D0', 'D1'], 100e3, 1.0, tmp_path, **kw)
     layout, an, dg, stream = L.fake_signal(pl, 1.5)
     return L, pl, stream
@@ -343,7 +343,7 @@ def test_the_last_line_of_cli_log_names_the_profile(tmp_path, monkeypatch, capsy
 
 
 def test_watch_names_the_profile_in_its_first_line_and_summary(monkeypatch, capsys):
-    import test_cli_watch_measure as W
+    from tests.support import cli as W
     clock = W.Clock()
     monkeypatch.setattr(cli, 'time', clock)
     timing.activate(FLOOR)
@@ -357,10 +357,10 @@ def test_watch_names_the_profile_in_its_first_line_and_summary(monkeypatch, caps
 
 
 def test_the_selftest_result_names_the_profile():
-    import test_selftest as T
-    assert 'timing' not in selftest.run(T.FakeScope(), quick=True, awg=True, fx=UNKNOWN)
+    from tests.support.fakes import SelftestScope as T
+    assert 'timing' not in selftest.run(T(), quick=True, awg=True, fx=UNKNOWN)
     timing.activate(FLOOR)
-    res = selftest.run(T.FakeScope(), quick=True, awg=True, fx=UNKNOWN)
+    res = selftest.run(T(), quick=True, awg=True, fx=UNKNOWN)
     assert res['timing'] == FLOOR_PROFILE
     assert M.summarize_selftest(res)['timing'] == FLOOR_PROFILE           # ... and so does its MCP summary
 
