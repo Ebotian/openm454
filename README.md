@@ -123,6 +123,11 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   after the setup; 10 us / 4096 samples: 2000 frames in 478 ms. For comparison, repeated single captures cost ~180 ms
   of protocol spacing each (5.26/s). Windows has not been timed.
 
+- Memory: the cap is 1 GiB of **raw** frame bytes (`N x pkt_bytes`), not process RSS. Measured on Linux/USB 3
+  (2026-11-17): 200 frames x 100 ms at 10 MSa/s with 4 analog + 8 digital = **954.7 MiB raw**, 26.2 s, peak RSS
+  **3,514,800 KiB = 3.35 GiB** (~3.6x). Reserve about 4x the raw budget; lower `--repeat` or shorten the window on
+  smaller hosts. The guard reports both numbers.
+
 ### Above the readout limit: how `log` decides
 
 D = the data rate; R = how fast this PC reads the scope while it acquires. R depends on the channel set (measured

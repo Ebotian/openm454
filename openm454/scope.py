@@ -223,7 +223,8 @@ def repeat_plan(st):
     return n
 
 
-REPEAT_MAX_BYTES = 1 << 30       # host memory a repeat run may hold: N frames of pkt_bytes each
+REPEAT_MAX_BYTES = 1 << 30       # raw frame bytes a repeat run may read (N x pkt_bytes), not process RSS
+REPEAT_PEAK_FACTOR = 4          # measured 2026-11-17: 954.7 MiB raw -> 3.35 GiB peak RSS (~3.6x); round up
 
 
 def repeat_window_guard(st, geom, n):
@@ -243,13 +244,16 @@ def repeat_window_guard(st, geom, n):
 
 
 def repeat_memory_guard(n, geom):
-    """Refuse a frame count whose frames cannot be held in memory (one pkt_bytes per frame, tail included)."""
+    """Refuse a frame count whose *raw* frames exceed the budget; the process peak is about 4x that (measured)."""
     pkt = int(geom.get('pkt_bytes') or 0)
     need = n * pkt
     if n and need > REPEAT_MAX_BYTES:
-        raise DscopeError('INVALID_ARG', 'repeat mode would hold %d frames x %d B = %.1f MiB (limit %d MiB)'
-                          % (n, pkt, need / 2 ** 20, REPEAT_MAX_BYTES // 2 ** 20),
-                          'lower --repeat or shorten the window')
+        raise DscopeError('INVALID_ARG',
+                          'repeat mode would read %d frames x %d B = %.1f MiB raw (about %.1f GiB peak RSS at the '
+                          'measured %dx); the raw limit is %d MiB'
+                          % (n, pkt, need / 2 ** 20, need * REPEAT_PEAK_FACTOR / 2 ** 30,
+                             REPEAT_PEAK_FACTOR, REPEAT_MAX_BYTES // 2 ** 20),
+                          'lower --repeat or shorten the window; the cap is raw bytes, not process memory')
     return n
 
 

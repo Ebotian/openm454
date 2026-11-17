@@ -272,3 +272,13 @@ def test_the_repeat_collect_timeout_covers_every_frame():
     triggered = scope.repeat_collect_seconds(geom, n, 2.0, True)
     assert triggered >= 1.5 * n * (2.0 + 0.1) + 2.0
     assert triggered > untriggered
+
+def test_the_repeat_memory_guard_is_a_raw_budget_with_a_measured_peak_factor():
+    """2026-11-17: 200 x 100 ms, 4A+8D, 954.7 MiB raw -> 3.35 GiB peak RSS (~3.6x); the guard stays raw."""
+    geom = {'pkt_bytes': 5_005_312}
+    assert scope.REPEAT_PEAK_FACTOR == 4
+    assert scope.repeat_memory_guard(200, geom) == 200
+    with pytest.raises(DscopeError) as e:
+        scope.repeat_memory_guard(215, geom)
+    assert 'raw' in e.value.message and 'peak RSS' in e.value.message
+    assert 200 * 5_005_312 <= scope.REPEAT_MAX_BYTES < 215 * 5_005_312
