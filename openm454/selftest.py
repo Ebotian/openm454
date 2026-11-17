@@ -18,7 +18,7 @@ every later check is reported as skipped instead of talking to a device that is 
 """
 import time
 
-from . import fixture
+from . import fixture, timing
 from .errors import DscopeError
 from .scope import Settings
 
@@ -274,6 +274,8 @@ def run(scope, quick=False, awg=True, fx=None):
     res = {'ok': all(i['pass'] for i in items if i['gating']), 'cmd': 'selftest', 'passed': passed,
            'failed': len(items) - passed - skipped, 'skipped': skipped, 'fixture': fx,
            'seconds': round(time.time() - t_all, 1), 'items': items}
+    if timing.active():                  # checks taken with a shortened capture spacing say so
+        res['timing'] = timing.active()
     missing = [k for k in ('analog', 'digital') if fx.get(k) != 'standard']
     if missing and not fatal:
         res['note'] = ('the signal checks for the %s leads were skipped: they need the standard fixture (the scope '

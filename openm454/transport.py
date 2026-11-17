@@ -209,12 +209,17 @@ class Transport:
     def hold(self, seconds):
         """Keep the register interface quiet for `seconds` (DSWave sleeps 100 ms after every stop before anything
         else, FUN_14033f270). Measured 2026-10-31: writes sent within ~10 ms of the stop that ends a run without a
-        trigger are acknowledged on USB but silently dropped by the device."""
+        trigger are acknowledged on USB but silently dropped by the device, so the engine always holds the traced
+        100 ms after such a stop (acquire.QUIET_AFTER_UNTRIGGERED_STOP)."""
         self.quiet_until = max(self.quiet_until, time.time() + seconds)
 
     def _wait_quiet(self):
-        wait = self.quiet_until - time.time()
-        if wait > 0 and not self._in_hs:
+        if self._in_hs:
+            return
+        while True:                      # a sleep that wakes a little early must not let a write through
+            wait = self.quiet_until - time.time()
+            if wait <= 0:
+                return
             time.sleep(wait)
 
     def write(self, addr, value):

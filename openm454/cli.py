@@ -646,6 +646,7 @@ def cmd_watch(args, scope):
     """Captures start --every apart, start to start, and each line's t_s is its capture's start (not its end: the
     first capture of a session is slower, it writes the setup tables and waits for the analog front end). After a
     capture longer than --every the next starts at once and the schedule continues from there (no catch-up burst)."""
+    from . import timing
     from .scope import settings_from_args
     from .units import si, window
     st = settings_from_args(args)
@@ -664,6 +665,8 @@ def cmd_watch(args, scope):
         flat = {'%s.%s' % (ch, k): v for ch, m in chans.items() for k, v in m.items()}
         keys = fields or [k for k in flat if k.split('.')[1] in ('vpp_v', 'freq_hz', 'duty_pct', 'state', 'vmean_v')]
         line = {'i': i, 't_s': round(start - t0, 3), 'triggered': cap.meta['acq'].get('triggered')}
+        if i == 0 and timing.active():          # a shortened capture spacing is named once, up front
+            line['timing'] = timing.active()
         if i == 0 and awg_st and awg_st.get('cal'):
             line['awg'] = awg_st
         if cap.meta['acq'].get('trigger_check') not in (None, 'unchecked', 'ok'):
@@ -704,6 +707,8 @@ def cmd_watch(args, scope):
     summ = {k: {'min': min(v), 'max': max(v), 'mean': stx.fmean(v), 'std': stx.pstdev(v) if len(v) > 1 else 0.0}
             for k, v in hist.items()}
     out = {'summary': True, 'n': i, 'stopped_by': stopped_by, 'elapsed_s': round(time.time() - t0, 2), 'fields': summ}
+    if timing.active():
+        out['timing'] = timing.active()
     if args.save_last and last is not None:
         from .capture import new_path
         stem = new_path(args.out, 'watch_last')
@@ -886,8 +891,11 @@ def cmd_log(args, scope):
         res = logger.run(scope, st, pl, stem, emit=_emit, stop_flag=_throttled(stop_requested),
                          heartbeat=_HEARTBEAT[0], on_final=_idle, hook=_log_hook(args))
     except (DscopeError, KeyboardInterrupt) as e:    # the data kept so far was written: say where
+        from . import timing
         files = {k: _fwd(v) for k, v in (getattr(e, 'log_files', None) or {}).items()}
         extra = {'hook': e.hook_report} if getattr(e, 'hook_report', None) else {}
+        if timing.active():                          # the spacing those files were taken with
+            extra['acq'] = {'timing': timing.active()}
         if isinstance(e, KeyboardInterrupt):
             _emit({'ok': False, 'cmd': 'log', 'error': {'code': 'INTERRUPTED', 'message': 'interrupted (the scope was '
                                                         'stopped first)'}, 'files': files, **extra})
@@ -1212,6 +1220,8 @@ def main(argv=None):
     from .units import si
     from .scope import Scope
     try:                                     # everything here is offline: nothing has been sent to the scope yet
+        from . import timing
+        timing.activate()                    # a bad OPENM454_TIMING is one INVALID_ARG document, for every command
         if args.cmd == 'bench' and args.no_device:
             cmd_bench(args, None)
             return 0

@@ -60,8 +60,13 @@ LIVE_READ = 2 * MIB               # larger reads only come from a live stream ab
 HEAD_MAGIC = b'\x55\x55\x55\x55'
 EP_DATA = 0x86
 GAP_BETWEEN_RUNS = 0.100       # FUN_14033f270: 100 ms before every run
-QUIET_AFTER_STOP = 0.100       # ... and no register access for 100 ms after a stop (see Transport.hold); a profile
-                               # may shorten it down to timing.MIN['quiet'] and never below
+QUIET_AFTER_STOP = 0.100       # ... and no register access for 100 ms after a stop (Transport.hold). This one is
+                               # held after a run that had a head (forced or triggered); OPENM454_TIMING `quiet` may
+                               # shorten it down to timing.MIN['quiet']
+QUIET_AFTER_UNTRIGGERED_STOP = 0.100   # ... after a run that may have ended with the device still waiting for a
+                               # trigger (no head, or a repeat run short of its frames): always the traced 100 ms,
+                               # never part of a profile. Writes sent within ~10 ms of such a stop were dropped on
+                               # hardware (docs/PROTOCOL.md section 7, item 7)
 SETUP_SETTLE = 0.015           # SetupAcquire: "1 ms" after W CTRL=0 (recorded 14-31 ms)
 SUBMIT_TO_START = 0.050        # TransferThread: 50 ms between submitting and the start writes
 START_SETTLE = 0.015           # StartAcquire: "1 ms" after W CTRL=1 (first EP 0x84 read >= 14.7 ms later)
@@ -163,6 +168,7 @@ class Engine:
         self.sync = 0
         self.active = False
         self._t_end = time.time()
+        self._repeat_frames = 0
         self._abort = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
@@ -328,6 +334,7 @@ class Engine:
         self._events = collections.deque()
         self._stopping = False
         self._full = False
+        self._repeat_frames = repeat_frames  # repeat mode: frames asked for (decides the hold after the stop)
         self._late_error = None
         self._no_mem = None                 # message of a resubmit that failed with libusb NO_MEM
         self._user_exc = None               # exception from on_chunk / stop_flag (caller code)
@@ -504,6 +511,12 @@ class Engine:
         return cap.head is not None and need_bytes is not None and cap.n_data >= need_bytes
 
     # ------------------------------------------------------------------ stop
+    def _untriggered_stop(self, cap):
+        """True when the stop may have found the device still waiting for a trigger: no head arrived (a timeout, or a
+        stop before the trigger), or a repeat run ended before its last frame. Only stops of runs that had a head
+        (forced or triggered) were ever measured with a shortened quiet time."""
+        return cap.head is None or bool(self._repeat_frames) and len(cap.frames) < self._repeat_frames
+
     def _stop_normal(self, cap):
         """DSWave StopAcquire + Drain + ForceAcquire. Returns None, or the reason the run ended in the error state."""
         t = self.t
@@ -535,7 +548,8 @@ class Engine:
             t.write(regs.CTRL, 0x0000)
             time.sleep(FINAL_GAP)
             t.write(regs.ACTION, 0x0004)
-            t.hold(QUIET_AFTER_STOP)            # writes right after this can be dropped (run without trigger)
+            # writes right after the stop of a run without a trigger can be dropped: that hold is never shortened
+            t.hold(QUIET_AFTER_UNTRIGGERED_STOP if self._untriggered_stop(cap) else QUIET_AFTER_STOP)
         except DscopeError as e:
             why = 'final stop write failed: %s' % e.message
             t.fail(why)

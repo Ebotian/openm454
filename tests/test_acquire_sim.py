@@ -659,15 +659,90 @@ def test_register_access_after_a_stop_waits_like_dswave():
 
 def test_shortening_the_gap_does_not_shorten_the_quiet_time(monkeypatch):
     """The quiet time after a stop is its own constant (timing key `quiet`), not the spacing before the next run:
-    a profile that sets gap=0 still holds the register interface for the quiet time."""
+    with gap=0 a run that had a head still holds the register interface for the quiet time."""
     monkeypatch.setattr(acq, 'GAP_BETWEEN_RUNS', 0.0)
     monkeypatch.setattr(acq, 'QUIET_AFTER_STOP', 0.02)
-    sim, eng = engine(trigger=False)
-    eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=0.2)
+    sim, eng = engine()
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=1.0)
+    assert cap.head is not None
     t_stop = time.time()
     eng.t.write(0x08, 3)
     waited = time.time() - t_stop
     assert 0.01 <= waited < 0.08, waited
+
+
+# The floor profile (docs/PROTOCOL.md 7.1): every key at its floor.
+FLOOR = 'gap=0.005,submit=0.005,setup=0.002,start=0.002,read=0.002,quiet=0.005'
+
+
+@pytest.fixture
+def floor_profile():
+    from openm454 import timing
+    timing.activate(FLOOR)
+    assert acq.QUIET_AFTER_STOP == 0.005 and acq.GAP_BETWEEN_RUNS == 0.005
+    yield
+    timing.reset()
+
+
+@pytest.fixture
+def stamps(monkeypatch):
+    """time.time() of every register access the simulated device sees: (t, 'W'|'R', addr, value)."""
+    seen = []
+    real = Sim.ctrl
+
+    def ctrl(self, kind, addr, val=None):
+        seen.append((time.time(), kind, addr, val))
+        return real(self, kind, addr, val)
+    monkeypatch.setattr(Sim, 'ctrl', ctrl)
+    return seen
+
+
+def _since_stop(stamps, n):
+    """Seconds from the last W ACTION=4 among the first n accesses to access n."""
+    t_stop = [s[0] for s in stamps[:n] if s[1:] == ('W', regs.ACTION, 4)][-1]
+    return stamps[n][0] - t_stop
+
+
+@pytest.mark.parametrize('then', ['write', 'run'])
+def test_an_untriggered_stop_holds_the_traced_100ms_whatever_the_profile(floor_profile, stamps, then):
+    """Writes sent within ~10 ms of the stop that ends a run without a trigger were dropped on hardware (PROTOCOL 7,
+    item 7), and no floor measurement ever stopped such a run: after it the traced 100 ms hold applies even under the
+    floor profile, both for a direct write (an AWG program after a normal-mode timeout) and for the next run (the
+    forced fallback of auto mode)."""
+    sim, eng = engine(trigger=False)
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=0.2)
+    assert cap.head is None and cap.timed_out and cap.stop == 'normal'
+    n = len(stamps)
+    if then == 'write':
+        eng.t.write(0x08, 3)
+    else:
+        sim.trigger = True
+        eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=1.0)
+        assert stamps[n][1:3] == ('W', regs.CTRL)          # the next access is the next run's first setup write
+    assert acq.QUIET_AFTER_UNTRIGGERED_STOP == 0.100
+    assert _since_stop(stamps, n) >= 0.100
+    assert sim.violations == []
+
+
+def test_a_stop_after_a_head_holds_only_the_profile_quiet_time(floor_profile, stamps):
+    """Forced or triggered runs (a head arrived) are what the floor evidence covers: there `quiet` applies."""
+    sim, eng = engine()
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=PKT, n_transfers=2, trigger_timeout=1.0)
+    assert cap.head is not None and cap.stop == 'normal'
+    n = len(stamps)
+    eng.t.write(0x08, 3)
+    assert 0.005 <= _since_stop(stamps, n) < 0.05
+
+
+def test_a_repeat_run_short_of_its_frames_holds_the_traced_100ms(floor_profile, stamps):
+    """A repeat run stopped before its last frame may have left the device waiting for the next trigger."""
+    sim, eng = engine()
+    cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=None, n_transfers=2, trigger_timeout=1.0, collect_timeout=0.05,
+                  repeat_frames=100_000)
+    assert cap.head is not None and 0 < len(cap.frames) < 100_000 and cap.stop == 'normal'
+    n = len(stamps)
+    eng.t.write(0x08, 3)
+    assert _since_stop(stamps, n) >= 0.100
 
 
 def _open_with(monkeypatch, done, **kw):

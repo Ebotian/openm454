@@ -355,7 +355,8 @@ D_KEYS = ('state', 'freq_hz', 'duty_pct', 'edges', 'high_frac')
 ACQ_KEYS = ('triggered', 'trigger_check', 'trigger_check_reason', 'trigger_misfires', 'mode', 'analog_rate_hz',
             'digital_rate_hz', 'rate_hz', 'samples', 'duration_s', 'complete', 'stop_reason', 'transfers',
             'transfers_wanted', 'host_mb_s', 'backlog_max_mb', 'unread_at_stop_mb',
-            'repeat_frames', 'frames')          # a repeat-mode file (capture --repeat N): frames asked for / held
+            'repeat_frames', 'frames',          # a repeat-mode file (capture --repeat N): frames asked for / held
+            'timing')                           # only while OPENM454_TIMING shortens the capture spacing
 ACQ_SKIP = {'trigger_check': ('unchecked',), 'trigger_misfires': (0,)}       # left out of summaries when uneventful
 LONG_TEXT = 400
 PLAN_KEYS = ('rate_hz', 'channels', 'data_mb_s', 'verdict', 'readout_mb_s', 'gapfree_max_s', 'recommendation',
@@ -412,8 +413,8 @@ def summarize_selftest(doc):
             by_reason.setdefault(reason, []).append(i['id'])
     out = {'ok': bool(doc.get('ok')), 'cmd': 'selftest', 'passed': len(passed), 'failed': len(failed),
            'skipped': sum(len(v) for v in by_reason.values())}
-    for k in ('seconds', 'note', 'stopped_at'):
-        if doc.get(k) not in (None, ''):
+    for k in ('seconds', 'note', 'stopped_at', 'timing'):
+        if doc.get(k) not in (None, '', {}):
             out[k] = doc[k]
     fx = doc.get('fixture') or {}
     out['fixture'] = {k: fx.get(k) if fx.get(k) in ('standard', 'unknown') else 'other' for k in ('analog', 'digital')}
@@ -737,8 +738,11 @@ class Server:
                 self._not_recording()
                 doc = self.cli.run(['info'], 60.0)
             if doc.get('ok'):
-                doc = {'ok': True, 'cmd': 'info', 'connected': True, 'device': doc.get('device'),
-                       'awg_last': doc.get('awg_last')}
+                short = {'ok': True, 'cmd': 'info', 'connected': True, 'device': doc.get('device'),
+                         'awg_last': doc.get('awg_last')}
+                if doc.get('timing'):            # a shortened capture spacing (OPENM454_TIMING) applies to every call
+                    short['timing'] = doc['timing']
+                doc = short
             return doc
         if name == 'capture':
             args = capture_args(a)

@@ -30,7 +30,8 @@ RATES = [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000,
 EDGES = {'rise': 0, 'rising': 0, 'fall': 1, 'falling': 1, 'any': 2, 'both': 2,
          'pulse>': 3, 'pulse<': 4, 'npulse>': 5, 'npulse<': 6}
 #: after a run without analog channels (or at the start of a session) the analog inputs start 8-14 codes high and
-#: settle within ~80 ms (measured 2026-10-31), so the first analog run waits this long after its setup writes
+#: settle within ~80 ms (measured 2026-10-31), so the first analog run waits this long after its setup writes.
+#: Both front-end waits are device physics, not spacing: OPENM454_TIMING cannot shorten them (timing.FIXED).
 ANALOG_WAKE_SETTLE = 0.15
 OVERDRIVE_SETTLE = 0.3           # measured: 1500 div of overdrive at 1 mV/div needs ~215 ms to settle within 0.5 LSB
 MAX_SAMPLES = 400_000_000     # per channel; the 4 Gbit sample memory is the real bound (checked by mso)
@@ -475,7 +476,8 @@ def cal_record(hal, scale, analog):
 # ------------------------------------------------------------------------------------------------ Scope
 class Scope:
     def __init__(self, log=None):
-        timing.activate()            # a bad OPENM454_TIMING is refused here, before the device is opened
+        timing.activate()            # OPENM454_TIMING, read again by every Scope(): a bad one is refused here, before
+                                     # the device is opened
         self.log = log
         self.dev = None
         self.engine = None

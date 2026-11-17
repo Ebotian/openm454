@@ -78,6 +78,7 @@ RAM_BUDGET_MAX = 4 * 2 ** 30         # default RAM budget: min(this, a quarter o
 DISK_WEAR_BYTES = 100e9              # warn when a disk log writes more than this (or this per day when unbounded)
 STORAGES = ('ram', 'disk', 'none')
 RESTART_S = 0.18                     # measured: stop handshake, 100 ms quiet, setup, 50 ms before the next start
+                                     # (the traced spacing; restart_s() follows an OPENM454_TIMING profile)
 RECORD_SAMPLES = 400_000_000         # a stream record: at most 400M samples per channel and 512 MiB
 PROBE_S = 2.0                        # readout probe before a log above SUSTAINED_BPS whose channel set was not measured
 PROBE_BACKLOG = 256 * 2 ** 20        # ... ends early once the scope is this far ahead (its data are dropped anyway)
@@ -363,8 +364,9 @@ def stream_alternative(st, rate, data_bps, readout, duration):
     """What `stream` gives instead of a log above the readout, from stream's own planning (scope.stream_record_plan):
     the lead domain runs at fold x the smallest 1-2-5 table rate that is >= `rate`, the other domain follows, and a
     record holds <= 400M samples per channel and <= 512 MiB. Each record is sent while acquired and ends with a drain
-    of record x (D_stream - R) / R plus the ~0.18 s restart (R: this log's readout; stream's interleave can make it
-    lower). same_rates: every channel at >= `rate` (otherwise stream is no substitute)."""
+    of record x (D_stream - R) / R plus the restart (restart_s(): ~0.18 s at the traced spacing, less under an
+    OPENM454_TIMING profile; R: this log's readout; stream's interleave can make it lower). same_rates: every channel
+    at >= `rate` (otherwise stream is no substitute)."""
     import copy
     from . import mso
     from .scope import Scope, stream_record_plan, vertical_flags, afold_for, dfold_for
@@ -397,7 +399,7 @@ def stream_alternative(st, rate, data_bps, readout, duration):
         out.update(record_s=round(rec_s, 3), gap_s=0.0, coverage_pct=100.0, records=1,
                    summary='one record holds all %g s gap-free' % duration)
     else:
-        gap = rec_s * max(0.0, d_stream - readout) / readout + RESTART_S
+        gap = rec_s * max(0.0, d_stream - readout) / readout + restart_s()
         cov = 100 * rec_s / (rec_s + gap)
         out.update(record_s=round(rec_s, 3), gap_s=round(gap, 3), coverage_pct=round(cov, 1),
                    records=None if duration is None else int(math.ceil(duration / (rec_s + gap))),
@@ -450,6 +452,22 @@ def measure_readout(scope, pl, seconds=PROBE_S):
 
 def public(pl):
     return {k: v for k, v in pl.items() if not k.startswith('_')}
+
+
+def _timing():
+    """{'timing': profile} for an acq block while OPENM454_TIMING shortens the spacing, else {}."""
+    return {'timing': timing.active()} if timing.active() else {}
+
+
+def restart_s():
+    """The seam between two refreshing stream records: RESTART_S with the traced spacing, less what the active
+    OPENM454_TIMING profile takes off the waits it is made of (the post-stop quiet time or the gap before the next run,
+    whichever is longer, the setup settle, submit-to-start and the start settle). Stream records always have a head,
+    so the profile's `quiet` applies there."""
+    base, now = timing.baseline(), timing.current()
+    saved = max(base['gap'], base['quiet']) - max(now['gap'], now['quiet'])
+    saved += sum(base[k] - now[k] for k in ('setup', 'submit', 'start'))
+    return max(0.0, RESTART_S - saved)
 
 
 def write_npz(path, meta, members):
@@ -824,8 +842,8 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
                  'acq': {'mode': 'loop', 'analog_rate_hz': rate if st.analog else None,
                          'digital_rate_hz': rate if st.digital else None, 'triggered': False},
                  'trigger': {'source': None, 'mode': 'force'}, 'warnings': list(pl['warnings'])}
-    if timing.active():
-        meta_base['timing'] = timing.active()
+    if timing.active():                  # every saved file names the spacing it was taken with, like a capture
+        meta_base['acq']['timing'] = timing.active()
     if applied.get('cal'):
         meta_base['cal'] = applied['cal']
     w = _Writer(layout, rate, pl['_scale'], storage, pl['_chunk_blocks'], stem, meta_base, emit, heartbeat,
@@ -951,7 +969,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
         raise err
     if (raw is None or raw.head is None) and s['reason'] == 'stop_request':
         return {'ok': True, 'cmd': 'log', 'plan': public(pl), 'files': _files(storage, w, stem, rate),
-                'acq': {'mode': 'loop', 'samples': 0, 'stop_reason': 'stop_request'},
+                'acq': {'mode': 'loop', 'samples': 0, 'stop_reason': 'stop_request', **_timing()},
                 'note': 'stopped on request before any data arrived'}
     if raw is None or raw.head is None:
         raise DscopeError('PROTOCOL_ERROR', 'no data from the scope (no head within 3 s)',
@@ -964,7 +982,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
            'backlog_max_mb': round(s['backlog_max'] / 1e6, 2), 'stop_reason': s['reason'],
            'unread_at_stop_mb': round(s['backlog'] / 1e6, 1),
            'head_word': '%08X' % int.from_bytes(raw.head[8:12], 'little'), 'stop': raw.stop,
-           **queue_depth(raw), 'elapsed_s': round(time.time() - t0_wall, 3)}
+           **queue_depth(raw), 'elapsed_s': round(time.time() - t0_wall, 3), **_timing()}
     res = {'ok': True, 'cmd': 'log', 'plan': public(pl), 'acq': acq}
     res.update(w.summary())
     if hook is not None:
