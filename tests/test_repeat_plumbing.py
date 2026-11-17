@@ -282,3 +282,115 @@ def test_the_repeat_memory_guard_is_a_raw_budget_with_a_measured_peak_factor():
         scope.repeat_memory_guard(215, geom)
     assert 'raw' in e.value.message and 'peak RSS' in e.value.message
     assert 200 * 5_005_312 <= scope.REPEAT_MAX_BYTES < 215 * 5_005_312
+
+def test_a_repeat_misfire_retry_rearms_the_whole_repeat_and_keeps_the_accepted_frames(monkeypatch):
+    """The retry must pass repeat_frames again and replace the frame list: a single-frame retry used to leave
+    cap.frames pointing at the rejected run while cap.analog came from the retry (audit 2026-11-17)."""
+    import numpy as np
+    from openm454 import trigcheck
+
+    st = scope.Settings(analog=[], digital=['D0'], duration=20e-6, samples=8000, repeat=3,
+                        trig_source='D0', trig_edge='rise', trig_mode='normal', trig_retries=2)
+    geom = scope.Scope().plan(st)['geometry']
+    rate, n = geom['digital_rate'], geom['digital_depth']
+    idx = n // 2
+
+    def clean(edge):
+        b = np.zeros(n, np.uint8)
+        if edge == 'rise':
+            b[idx:] = 1
+        else:
+            b[:idx] = 1
+        return b
+
+    # the measured chatter pattern (test_trigger_check): a slow falling edge, which a rise trigger fires inside
+    pattern = [(-1, 1), (0, 0), (3, 1), (4, 0), (7, 1), (9, 0), (11, 1), (13, 0), (15, 1), (17, 0), (19, 1)]
+    def chatter():
+        b = np.zeros(n, np.uint8)
+        for k, (off, lvl) in enumerate(pattern):
+            end = idx + pattern[k + 1][0] if k + 1 < len(pattern) else n
+            b[idx + off:end] = lvl
+        return 1 - b
+
+    def frame(bits):
+        return {'analog': {}, 'digital': {'D0': bits}, 't0_analog': 0.0, 't0_digital': -idx / rate}
+
+    misfire = frame(chatter())
+    ok = frame(clean('rise'))
+
+    class Raw:
+        def __init__(self, fs):
+            self.head = object(); self.aborted = False; self.frames = fs; self.data = b''; self.stop = 'normal'
+            self.triggered = True; self.handshakes = []; self.transfers = 2; self.transfers_wanted = 2
+            self.t_start = 1000.0; self.t_head = 1000.0 + geom['record_s'] + 0.001
+
+    calls = []
+    raws = [Raw([misfire] * 3), Raw([ok] * 3)]
+    s = scope.Scope()
+    s._check_link = lambda: None
+    s._run = lambda prog, geom, tt, ct, **kw: (calls.append(kw), raws.pop(0))[1]
+    s._check_complete = lambda raw, geom: True
+    monkeypatch.setattr(scope, '_decode_frames', lambda raw, geom, hal: raw.frames)
+
+    cap = s.capture(st)
+    acq = cap.meta['acq']
+    assert len(calls) == 2 and calls[0].get('repeat_frames') == 3 and calls[1].get('repeat_frames') == 3
+    assert acq['trigger_check'] == 'misfire_retried' and acq['trigger_misfires'] == 1
+    assert acq['attempts'] == ['misfire', 'triggered']
+    assert len(cap.frames) == 3 and cap.frames[0] is ok
+    assert cap.digital['D0'] is ok['digital']['D0']
+
+
+def test_a_triggered_repeat_that_never_fires_reports_no_trigger_not_a_replug():
+    class Raw:
+        head = None; aborted = False; frames = []; data = b''; stop = None
+
+    s = scope.Scope()
+    s._check_link = lambda: None
+    s._run = lambda prog, geom, tt, ct, **kw: Raw()
+    st = scope.Settings(analog=['A0'], digital=['D0'], duration=0.01, samples=1000, repeat=3,
+                        trig_source='D0', trig_edge='rise', trig_mode='normal', timeout=0.2)
+    with pytest.raises(DscopeError) as e:
+        s.capture(st)
+    assert e.value.code == 'TIMEOUT_NO_TRIGGER'
+    assert 'replug' not in (e.value.hint or '').lower()
+
+
+def test_auto_triggered_repeat_over_200ms_without_a_trigger_reports_no_trigger():
+    """Auto allows the triggered 250 ms form, but there is no untriggered repeat fallback above 200 ms: the
+    failure must name the trigger, not a device that did not start."""
+    class Raw:
+        head = None; aborted = False; frames = []; data = b''; stop = None
+
+    s = scope.Scope()
+    s._check_link = lambda: None
+    s._run = lambda prog, geom, tt, ct, **kw: Raw()
+    st = scope.Settings(analog=['A0'], digital=[], duration=0.25, samples=250_000, repeat=3,
+                        trig_source='A0', trig_mode='auto', trig_level=1.4, auto_after=0.3)
+    with pytest.raises(DscopeError) as e:
+        s.capture(st)
+    assert e.value.code == 'TIMEOUT_NO_TRIGGER'
+    assert 'trigger' in e.value.message.lower() and 'replug' not in (e.value.hint or '').lower()
+
+def test_the_auto_repeat_window_guard_names_the_auto_fallback():
+    st = scope.Settings(duration=0.25, samples=250_000, trig_source='A0', trig_mode='auto', trig_level=1.4)
+    with pytest.raises(DscopeError) as e:
+        scope.repeat_window_guard(st, {'roll': True}, 3)
+    assert 'auto trigger' in e.value.message.lower()
+    assert '--trig-mode normal' in (e.value.hint or '')
+
+
+
+@pytest.mark.parametrize('method', ['stream', 'record'])
+def test_repeat_is_refused_in_stream_and_log(method):
+    s = scope.Scope()
+    s._check_link = lambda: None
+    st = scope.Settings(analog=['A0'], duration=0.01, samples=1000, repeat=2)
+    with pytest.raises(DscopeError) as e:
+        if method == 'stream':
+            s.stream(st)
+        else:
+            s.record(st, 1000)
+    assert e.value.code == 'INVALID_ARG'
+    assert 'capture' in e.value.message
+

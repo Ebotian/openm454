@@ -235,6 +235,13 @@ def repeat_window_guard(st, geom, n):
     counter (112, 880, ...) instead of the record length, so the frames come out mis-framed (docs/PROTOCOL.md 8.2).
     """
     if n and geom.get('roll'):
+        if getattr(st, 'trig_mode', None) == 'auto' and getattr(st, 'trig_source', None):
+            raise DscopeError('INVALID_ARG', 'auto trigger with a %.3g s window switches the device to '
+                              'HW_BASE_MODE 3 (repeat + stream): an auto trigger falls back to the untriggered '
+                              'form' % st.duration,
+                              'use --trig-mode normal to keep the trigger at this window, or keep the window at or '
+                              'below 0.2 s (--duration); in MODE 3 the frames would be chunks of one stream, not '
+                              'separate runs (docs/PROTOCOL.md 8.2)')
         raise DscopeError('INVALID_ARG', 'repeat mode with a %.3g s window switches the device to HW_BASE_MODE 3 '
                           '(repeat + stream)' % st.duration,
                           'keep the window at or below 0.2 s (--duration), or use `openm454 stream` for a '
@@ -698,7 +705,12 @@ class Scope:
             self._overdriven = True             # no data to check: an input may have been saturated while waiting
             if raw.aborted:
                 raise DscopeError('TIMEOUT_WATCHDOG', 'capture aborted before the trigger')
-            if repeat:                      # nothing to fall back to: the trigger is already off in this mode
+            if repeat and triggered_wanted:
+                raise DscopeError('TIMEOUT_NO_TRIGGER', 'no trigger within %.3g s for the repeat start on %s'
+                                  % (self._head_wait(geom, wait), st.trig_source),
+                                  'check the trigger level/edge; for an untriggered repeat use --trig-mode force '
+                                  'with a window at or below 0.2 s')
+            if repeat:                      # untriggered: no data means the device did not start
                 raise DscopeError('PROTOCOL_ERROR', 'repeat mode: no head arrived (the device did not start)',
                                   'run "openm454 release"; if it persists replug the scope')
             if mode == 'normal':
@@ -729,8 +741,8 @@ class Scope:
         self._overdriven = _saturated(frame)
         check, misfires = 'unchecked', 0
         if attempts[-1] == 'triggered' and trigcheck.checked_edge(st.trig_edge) and st.trig_source.startswith('D'):
-            raw, frame, check, misfires = self._edge_retries(st, hal, prog, geom, collect, wait, raw, frame,
-                                                             attempts, warnings, hints)
+            raw, frame, frames, check, misfires = self._edge_retries(st, hal, prog, geom, collect, wait, raw,
+                                                                     frame, frames, repeat, attempts, warnings, hints)
         meta = self._meta(st, hal, scale, geom, frame, raw, warnings, hints, attempts, t_begin)
         meta['acq']['trigger_check'] = check
         meta['acq']['trigger_misfires'] = misfires
@@ -742,7 +754,8 @@ class Scope:
         cap.meta['hints'] = _hints(cap) + hints
         return cap
 
-    def _edge_retries(self, st, hal, prog, geom, collect, wait, raw, frame, attempts, warnings, hints):
+    def _edge_retries(self, st, hal, prog, geom, collect, wait, raw, frame, frames, repeat, attempts, warnings,
+                      hints):
         """Digital rise/fall trigger (see openm454.trigcheck): a capture whose settled levels around t = 0 show the
         opposite edge is a misfire on comparator chatter; it is discarded and the trigger re-armed, at most
         st.trig_retries times and only while the trigger wait of the request (`wait`, counted over all runs) lasts
@@ -768,7 +781,8 @@ class Scope:
             if why:
                 break
             tries += 1
-            nxt = self._run(prog, geom, self._head_wait(geom, budget), collect)
+            nxt = self._run(prog, geom, self._head_wait(geom, budget), collect,
+                            **({'repeat_frames': repeat} if repeat else {}))
             if nxt.head is None:
                 self._overdriven = True
                 if nxt.aborted:
@@ -782,7 +796,17 @@ class Scope:
                     len(nxt.data), geom['need_bytes'], 'aborted' if nxt.aborted else 'data stopped arriving'),
                     'retry once; if it repeats, check the USB 3 connection')
             budget -= _trigger_wait(nxt, geom)
-            raw, frame, misfires = nxt, _decode(nxt, geom, hal), misfires + 1
+            if repeat:
+                nxt_frames = _decode_frames(nxt, geom, hal)
+                if len(nxt_frames) < repeat:
+                    raise DscopeError('TIMEOUT_DATA', 'repeat mode collected %d of %d frames during a misfire '
+                                      're-arm' % (len(nxt_frames), repeat),
+                                      'retry once; if it repeats, check the USB 3 connection')
+                nxt_frame = nxt_frames[0]
+            else:
+                nxt_frames, nxt_frame = None, _decode(nxt, geom, hal)
+            raw, frame, frames = nxt, nxt_frame, nxt_frames
+            misfires += 1
             self._overdriven = _saturated(frame)
             check = verdict(raw, frame)
         edge, other = ('falling', 'rising') if trigcheck.checked_edge(st.trig_edge) == 'fall' else ('rising', 'falling')
@@ -797,7 +821,7 @@ class Scope:
                          'hysteresis); the other edge or an analog trigger avoids them' % (name, misfires, other))
             if check == 'ok':
                 check = 'misfire_retried'
-        return raw, frame, check, misfires
+        return raw, frame, frames, check, misfires
 
     def _run(self, prog, geom, trigger_timeout, collect_timeout, **kw):
         """Engine run with CROSS-table caching: the 4 x 257 CROSS writes are skipped when identical to the
@@ -845,6 +869,9 @@ class Scope:
         live=True: the record is sent while it is acquired at any data rate (MODE 2; DSWave does that only below
         102.4 MB/s and records first above it, which live=False keeps); the scope's memory buffers what the USB link
         cannot take, so the next record starts after a short drain instead of a full read-out."""
+        if getattr(st, 'repeat', 0):
+            raise DscopeError('INVALID_ARG', 'repeat is a capture-only mode',
+                              'omit repeat: stream records continuously and would send an unrecorded device mode')
         from . import packet
         self._check_link()
         self._cal_check(st)
@@ -963,6 +990,9 @@ class Scope:
         probe: None measures the readout of this channel set first when it is unknown and the rate is above the
         sustained one; True always; False never (plans with the cached readout or the 190 MB/s ceiling).
         Raises STREAM_BETTER / NEEDS_FORCE (with .plan) for a log longer than its gap-free limit."""
+        if getattr(st, 'repeat', 0):
+            raise DscopeError('INVALID_ARG', 'repeat is a capture-only mode',
+                              'omit repeat: log records continuously in loop mode and would send an unrecorded device mode')
         from . import logger
         self._check_link()
         self._cal_check(st)
