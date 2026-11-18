@@ -27,6 +27,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   save/load, cross-table caches or the 100 ms hold itself; the `spec` marks are only on the rows it encodes.
 - **timing:** the profile floors are covered by unit, property and stateful tests; the model only knows that a stop
   returns to quiet.
+- **groups:** the `traces` marker (registered in `pyproject.toml`) isolates every test that compares against the
+  git-ignored DSWave recording, so they can be run or left out as a block: `-m traces` is the recorded-material
+  group, `-m "not hw and not slow and not traces"` the software suite with no skips.
 - **repeat:** repeat mode is one start; this baseline neither checks the frames for misfires nor re-arms them
   (`trigger_check_reason` says so), so there is no retry frame to keep. The misfire retry row is the normal
   (non-repeat) path.

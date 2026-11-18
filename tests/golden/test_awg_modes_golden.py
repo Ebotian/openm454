@@ -189,7 +189,14 @@ def test_hal_replay_matches_dswave(name):
     assert not bad, 'final registers:\n' + '\n'.join(bad)
 
 
-@pytest.mark.parametrize('name', [s['name'] for s in CORPUS if s.get('expect_log')])
+# swp_lin_eq_5k_1s: every "Checking time_step" line of that scenario depends on the state before it, so its
+# recorded log cannot be compared on its own. Marked traces (it is a skip in any checkout), which keeps the clean
+# software suite (-m "not traces") free of skips; the other scenarios compare line by line and stay unmarked.
+UNCOMPARABLE_LOG = ('swp_lin_eq_5k_1s',)
+
+
+@pytest.mark.parametrize('name', [pytest.param(s['name'], marks=pytest.mark.traces) if s['name'] in UNCOMPARABLE_LOG
+                                 else s['name'] for s in CORPUS if s.get('expect_log')])
 def test_sweep_time_step_log(name):
     """The HAL's own 'Checking time_step' debug lines (log level 5) against the replay, where state-independent."""
     rec = _require(name)

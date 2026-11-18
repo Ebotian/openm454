@@ -9,6 +9,8 @@ files, 8396 test LOC.
 | suite | command | result | wall time |
 | --- | --- | --- | ---: |
 | fast (PR) | `python -m pytest tests` | 832 passed, 554 skipped | **14.5 s** |
+| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 832 passed | **14.3 s** |
+| recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 1.9 s |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
 | hardware | `python -m pytest tests -m hw` | needs the M454, never in CI | — |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
@@ -16,8 +18,12 @@ files, 8396 test LOC.
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
 
 The fast suite is the default marker set (`not hw and not slow`) under `pytest-xdist -n auto --dist loadscope`;
-the full suite adds the `slow` test. The 554 skips are the recorded-trace and firmware tests that skip when the
-git-ignored fixtures are absent.
+the full suite adds the `slow` test. Every one of the 554 skips is a `traces` test: it compares against the DSWave
+recording in `re/traces/S01_warm`, which .gitignore keeps out of the repository (the recorded runs contain the
+device's security key). No firmware test skips. `-m "not traces"` therefore runs the software suite with no skips
+at all (832 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
+sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `time_step` line depends on the state
+before it); it carries the marker so the software suite has no skips at all.
 
 ## Baseline vs. now
 
@@ -136,6 +142,8 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
 
     python -m pytest tests                     # fast, 14.5 s, xdist
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
+    python -m pytest tests -m "not hw and not slow and not traces"   # software only, 0 skips
+    python -m pytest tests -m traces           # the recorded-material group (needs re/traces/S01_warm)
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
     quint verify specs/quint/capture.qnt --main=capture --init=init --step=step --max-steps=12 \

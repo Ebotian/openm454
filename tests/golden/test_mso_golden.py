@@ -44,7 +44,8 @@ def _order():
 
 ORDER = _order()
 HAVE_DATA = SCEN_DIR.is_dir() and ZERO_BIN.exists() and bool(ORDER)
-pytestmark = pytest.mark.skipif(not HAVE_DATA, reason='recorded DSWave runs / zero info not available')
+pytestmark = [pytest.mark.traces,                       # the recording is git-ignored: see the module docstring
+              pytest.mark.skipif(not HAVE_DATA, reason='recorded DSWave runs / zero info not available')]
 
 
 @lru_cache(maxsize=None)
