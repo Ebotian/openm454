@@ -28,6 +28,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   save/load, cross-table caches or the 100 ms hold itself; the `spec` marks are only on the rows it encodes.
 - **timing:** the profile floors are covered by unit, property and stateful tests; the model only knows that a stop
   returns to quiet.
+- **groups:** the `traces` marker (registered in `pyproject.toml`) isolates every test that compares against the
+  git-ignored DSWave recording, so they can be run or left out as a block: `-m traces` is the recorded-material
+  group, `-m "not hw and not slow and not traces"` the software suite with no skips.
 - **host arrival:** `host_s` is stamped in the libusb completion callback (seconds since the start command, so the
   start settle is included) and `queue_us` is the event loop's delay after that; both measure the host side only, and
   neither is the device's sample or trigger time — the frame's own `trig_index` and content stay the authority. The

@@ -20,7 +20,7 @@ SESS = os.path.join(ROOT, 're', 'traces', 'S01_warm')
 SCEN = os.path.join(SESS, 'scen', 'repeat_mode.json')
 ZERO = os.path.join(ROOT, 'state', 'cache', 'zero_info_from_trace.bin')
 HAVE = all(os.path.exists(p) for p in (SCEN, os.path.join(SESS, 'bulk_in.bin'), ZERO))
-pytestmark = pytest.mark.skipif(not HAVE, reason='recorded traces not present')
+pytestmark = [pytest.mark.traces, pytest.mark.skipif(not HAVE, reason='recorded traces not present')]
 
 N = 8                                    # frames replayed (the recording holds ~1000)
 LEVEL_CODE = 169                         # the recorded :ANALOG:CHANNEL:TRIGGERlevel
