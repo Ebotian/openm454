@@ -21,6 +21,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
 | interfaces: CLI, MCP, API, save/load, info/watch/log | ✅ | ✅ |  |  | ✅ |  |  |  |
 | bench wiring: the declaration itself (complete, physically consistent, only declared links used) | ✅ |  |  |  |  |  |  |  |
 | bench wiring: the connected scope is the declared model; the declared link shows the declared signal |  |  |  |  |  |  |  | ✅ |
+| hw functional: capture modes, rates, trigger paths, and the real faults (BUSY, overdrive, no trigger, stop while streaming) all recover to a usable scope |  |  |  |  |  |  |  | ✅ |
+| hw soak: long runs keep counting, stamping and releasing, without drift or growth (tiers 5/10/60 min, `--soak-seconds`) |  |  |  |  |  |  |  | ✅ |
+| hw manual (TODO): unplug/replug, suspend/resume, usbfs exhaustion, power cycle — listed in `bench.json`, not implemented |  |  |  |  |  |  |  |  |
 | hardware: real M454 golden traces (recorded bench runs, not a CI layer) |  |  |  |  |  |  |  |  |
 
 ## Notes on the marks
@@ -41,12 +44,15 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   (non-repeat) path.
 - **channel counts and fuzz:** both fuzz targets use one fixed 2 analog / 2 digital layout, so they say nothing about
   other channel counts; the fuzz mark on the packet row is about the byte surface, not the layout.
-- **hw:** `tests/hardware` runs against the real M454 (`-m hw`; the default marker set excludes it, so CI never
-  opens a scope, and `OPENM454_NO_USB` turns it into a skip with the reason). The suite does not carry its wiring in
-  constants: `tests/hardware/bench.json` declares every link (source, sink, probe, volts/div, offset, signal,
-  tolerance), `tests/unit/test_bench_declaration.py` checks that declaration offline — complete, physically
-  consistent, and no test using an undeclared link — and the hw tests take both the capture configuration and the
-  expected measurement from it, so a differently wired bench fails with the file named.
+- **hw:** `tests/hardware` runs against the real M454 and is split in two groups by marker: `hw and not hwsoak`
+  is the functional group (39 tests, 16.6 s) and `hwsoak` the long-run group (4 runs, tiers 5/10/60 min, overridable
+  with `--soak-seconds`). One device, one process: both need `-n 0` (the conftest fails loudly under xdist). The
+  default marker set and CI never select them; `OPENM454_NO_USB` turns them into skips with the reason. The suite
+  does not carry its wiring in constants: `tests/hardware/bench.json` declares every link (source, sink, probe,
+  volts/div, offset, signal, tolerance) plus the soak budgets and the manual cases,
+  `tests/unit/test_bench_declaration.py` checks the declaration offline — complete, physically consistent, no test
+  using an undeclared link — and the hw tests take both the capture configuration and the expected measurement from
+  it, so a differently wired bench fails with the file named.
 - **old hardware row:** `test_selftest` is an offline fake-scope test and lives in `tests/unit/`; the last row
   stays documentation of recorded bench runs, not a CI layer.
 - **selftest** appears in the interfaces row because it is a CLI/MCP-facing command with an offline oracle.

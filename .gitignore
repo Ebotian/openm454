@@ -5,6 +5,9 @@ firmware/
 *.npz
 *.bin
 
+# long-run artifacts of the hardware suite (tests/hardware/soak: .meta/.jsonl/.exit/.err/.summary.json)
+re/soaks/
+
 # Python
 __pycache__/
 *.pyc

@@ -10,7 +10,8 @@ files, 8396 test LOC.
 | --- | --- | --- | ---: |
 | fast (PR) | `python -m pytest tests` | 832 passed, 554 skipped | **14.5 s** |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
-| hardware | `python -m pytest tests -m hw` | 4 passed on the AWG->A0 bench, never in CI | **2.8 s** |
+| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 39 passed on the AWG->A0 bench, never in CI | **16.6 s** |
+| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -19,10 +20,10 @@ The fast suite is the default marker set (`not hw and not slow`) under `pytest-x
 the full suite adds the `slow` test. The 554 skips are the recorded-trace and firmware tests that skip when the
 git-ignored fixtures are absent.
 
-Re-measured 2026-11-18 on `feat/frame-arrival-time` (host arrival stamps; the `traces` group; the hardware suite
-and its declaration): fast **842 passed, 554 skipped, 14.6 s**, clean software group **842 passed, 0 skipped**,
-full offline **843 passed, 554 skipped, 65.1 s**, hardware **4 passed, 2.8 s**, test LOC 8843 → 9236. The tables
-above stay the PR #8 measurement.
+Re-measured 2026-11-18 on this branch (the hardware suite split into a functional and a long-run group, wiring
+declared in `tests/hardware/bench.json`; the branch builds on the host-arrival-stamps change): fast **842 passed,
+554 skipped, 14.7 s**, full offline **843 passed, 554 skipped, 65.1 s**, hardware functional **39 passed, 16.6 s**,
+hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8843 → 10053. The tables above stay the PR #8 measurement.
 
 ## Baseline vs. now
 
@@ -78,11 +79,51 @@ declared is never guessed — the test skips and lists what is declared.
 physically consistent (the declared signal fits the declared screen and the generator's 0..3 V), and no hw test
 asking for an undeclared link.
 
-Measured 2026-11-18 on the bench (M454, AWG into A0, direct coax): 4 passed, 2.8 s — the connected scope is the
-declared model; the declared 1 kHz / 3 V square arrives at 1 kHz and 3.1 Vpp (declared tolerance 0.3 V, which still
-rejects the factor-of-10 error a wrong probe or divider makes); 64 repeat frames each carry an arrival stamp
-(monotone, inside the run, the .npz keeps them, and every frame swings within 20 % of the run's median, so a stale
-copy would fail).
+Both groups need `-n 0`: one device, one process (the conftest fails loudly instead of letting the other xdist
+workers skip).
+
+### Functional group (`hw and not hwsoak`)
+
+39 tests, **16.6 s** on the bench. What it proves, all through the declared link:
+
+- the connected scope is the declared model, and the declared 1 kHz / 3 V square arrives at 1 kHz and 3.1 Vpp
+  (declared tolerance 0.3 V, still tight enough to reject the factor-of-10 error of a wrong probe or divider);
+- every generator feature — sine, triangle, square duty 10/50/90 %, burst edge count, sweep period shortening, AM
+  envelope, DC, off — measured by the capture, not asserted from the command;
+- the rate ceilings (400/200/100 MSa/s for 1/2/3 channels), the 1024-sample floor, and the clamp of a rate above the
+  ceiling, with the applied rate taken from the capture;
+- the capture modes: forced and triggered single, repeat forced (16 frames) and repeat triggered (8 frames, distinct
+  trigger indices), back-to-back captures that leave the device idle (the loop `watch` runs), a stream stopped on
+  request, and `log` to RAM and to disk;
+- trigger paths: rise and fall level triggers, the holdoff being waited out, and a level the signal never reaches
+  reporting `TIMEOUT_NO_TRIGGER` (not a device error) with the scope usable afterwards;
+- the real faults: a second run reports `BUSY` while the first completes, an overdriven input is reported and the
+  declared signal comes back clean, a repeat run with no trigger says so and recovers, a stream stop leaves no
+  submitted transfer;
+- state: a capture adds no file under `state/`, the AWG record matches what was programmed, the engine is idle after
+  every run;
+- a link that is not declared skips with the declared names in the reason.
+
+### Long-run group (`hwsoak`, 60 s tier for the acceptance run)
+
+4 runs, **245.6 s**, one artifact set per run in `re/soaks/` (`.meta`, `.jsonl`, `.exit`, `.err`,
+`.summary.json`), every check's measured value in the summary:
+
+| run | what it did | measured |
+| --- | --- | --- |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 3.03 ms, interval drift 0.002 %, RSS steady 0.0 MiB |
+| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS steady 3.4 MiB |
+| log | 12 records x 5 s, to disk | 60 000 000 samples, 60.0 MB written, RSS steady 0.25 MiB |
+| lifecycle | open -> capture -> close, 63 cycles | open median 769.5 ms, open-time drift 0.11 %, RSS steady 6.2 MiB |
+
+Every run also asserts: no error row, frames/records counted, file descriptors and threads unchanged, the device
+released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run. The RSS
+check that matters is the steady-state one inside the last quarter: 21 open/close cycles grow RSS by 26 MiB over the
+first ~15 and then stay flat (measured), so the whole-run total is reported but only the steady growth fails a run.
+
+Seed defects, injected and reverted: dropping every frame's `host_s` fails the repeat run and the functional
+arrival-time test; a stop path that forgets to release the device fails `test_the_engine_is_idle_after_a_capture`,
+the back-to-back captures test and the repeat soak.
 
 ## Formal model (Quint + Apalache)
 
@@ -160,7 +201,8 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
 
     python -m pytest tests                     # fast, 14.5 s, xdist
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
-    python -m pytest tests -m hw -n 0          # hardware (needs the M454; wiring in tests/hardware/bench.json)
+    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (16.6 s)
+    python -m pytest tests -m hwsoak -n 0 --soak-seconds 60       # hardware, long runs (tiers in bench.json)
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
     quint verify specs/quint/capture.qnt --main=capture --init=init --step=step --max-steps=12 \

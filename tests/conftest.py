@@ -4,6 +4,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 
+def pytest_addoption(parser):
+    """The soak duration is a run parameter, not a code change: tiers live in tests/hardware/bench.json, and this
+    overrides the chosen tier for one run (used by the acceptance run: a 60 s soak instead of 10 min)."""
+    parser.addoption('--soak-seconds', type=int, default=None, metavar='N',
+                     help='override the soak tier of tests/hardware/bench.json with N seconds')
+
+
 @pytest.fixture(autouse=True)
 def _no_timing_profile(monkeypatch):
     """Offline tests see the traced spacing unless they ask for a profile: a developer shell with

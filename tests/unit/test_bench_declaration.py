@@ -55,6 +55,7 @@ def test_the_hw_suite_only_uses_declared_links():
     """A test that asks for a link the file does not declare skips; this keeps the names in step."""
     import re
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / 'hardware' / 'test_awg_loopback.py').read_text()
+    root = Path(__file__).resolve().parents[1] / 'hardware'
+    src = '\n'.join(p.read_text(encoding='utf-8') for p in sorted(root.rglob('*.py')))
     used = set(re.findall(r"bench\.link\('([^']+)'\)", src))
     assert used <= set(links()), 'undeclared link(s) used by the hw tests: %s' % sorted(used - set(links()))

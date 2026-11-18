@@ -17,6 +17,8 @@ def scope():
     """The real M454, left as it was found: the AWG setting in force when the suite started is put back afterwards
     (the generator is write-only, so state/awg.json is the only record of what was running)."""
     from openm454 import scope as scopemod
+    if os.environ.get('PYTEST_XDIST_WORKER'):
+        pytest.fail('the hardware suite drives one device: run it with -n 0, not under xdist')
     if os.environ.get('OPENM454_NO_USB'):
         pytest.skip('OPENM454_NO_USB is set: the hardware suite needs a real scope')
     s = scopemod.Scope()
