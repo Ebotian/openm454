@@ -142,11 +142,13 @@ def test_every_repeat_transfer_is_stamped_when_it_arrives():
     """A stale-looking frame is not the same as a frame the host read late: each transfer is stamped on arrival,
     against the start write, on a monotonic clock (the sim delivers up to four transfers per event pass)."""
     sim, eng = engine()
+    t0 = time.time()
     cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=None, n_transfers=4, trigger_timeout=1.0, repeat_frames=6)
+    span = time.time() - t0
     assert len(cap.frame_times) == len(cap.frames) == 6
     assert cap.p_start is not None
     assert cap.frame_times == sorted(cap.frame_times)
-    assert 0.0 <= cap.frame_times[0] <= cap.frame_times[-1] < 5.0
+    assert 0.0 <= cap.frame_times[0] <= cap.frame_times[-1] <= span   # inside the run, not placeholder values
 
 
 def test_runs_are_spaced_100ms():

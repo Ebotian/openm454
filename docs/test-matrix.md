@@ -12,6 +12,7 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
 | trigger: a misfire is re-armed and the retry is returned; a triggered run without a head is `TIMEOUT_NO_TRIGGER` |  |  | ✅ |  | ✅ |  | ✅ |
 | repeat: 0/1/N frames, forced vs triggered, plan limits, mode-3 refusal | ✅ |  | ✅ | ✅ |  |  |  |
 | repeat: one start, the frames are neither checked nor re-armed |  |  | ✅ |  |  |  |  |
+| repeat: every frame keeps its host arrival time (npz meta `frame_host_s`, restored by `load_capture`, `frames_summary.host_s`; absent on a replay) |  | ✅ | ✅ |  |  |  |  |
 | stream/log: repeat is refused | ✅ |  | ✅ |  | ✅ |  | ✅ |
 | stream/log: live vs record-first, chunk sizes, save/load | ✅ |  |  |  | ✅ |  |  |
 | packet: head/tail, first vs later frame, block sizes, endianness/permutation, malformed input | ✅ | ✅ |  | ✅ |  | ✅ |  |
@@ -27,6 +28,11 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   save/load, cross-table caches or the 100 ms hold itself; the `spec` marks are only on the rows it encodes.
 - **timing:** the profile floors are covered by unit, property and stateful tests; the model only knows that a stop
   returns to quiet.
+- **host arrival:** `host_s` is stamped when a transfer completes, on the monotonic clock, so it measures the
+  host side only; the frame's own `trig_index` and content stay the authority for what the device acquired. The
+  property layer covers the save/load law and the no-stamp replay case, the stateful layer the engine loop that
+  stamps (inside the run's wall clock) and the capture path that summarises it; there is no golden fixture with
+  arrival times, because a replay has none.
 - **repeat:** repeat mode is one start; this baseline neither checks the frames for misfires nor re-arms them
   (`trigger_check_reason` says so), so there is no retry frame to keep. The misfire retry row is the normal
   (non-repeat) path.
