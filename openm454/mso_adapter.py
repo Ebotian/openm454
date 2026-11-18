@@ -113,7 +113,8 @@ def decode_frames(raw, geom, hal):
     """
     from . import packet
     layout = _layout(geom)
-    times = getattr(raw, 'frame_times', None) or []      # host arrival of each transfer (acquire.RawCapture)
+    times = getattr(raw, 'frame_times', None) or []      # completion-callback time of each transfer
+    queues = getattr(raw, 'frame_queue', None) or []     # ... minus when the event loop picked it up
     out = []
     for i, frame in enumerate(getattr(raw, 'frames', []) or []):
         # one decode per frame; only the first frame follows a previous acquisition, so only it has stale levels
@@ -124,6 +125,8 @@ def decode_frames(raw, geom, hal):
         item['trig_index'] = trig
         if i < len(times):              # absent for a replay/golden fixture: the frames have no arrival time
             item['host_s'] = times[i]
+        if i < len(queues):
+            item['queue_us'] = round(queues[i] * 1e6, 3)
         out.append(item)
     return out
 

@@ -16,6 +16,7 @@ def _cap(stamps):
     for i, s in enumerate(stamps):
         if s is not None:
             frames[i]['host_s'] = s
+            frames[i]['queue_us'] = round(1000.0 * (i + 1) / max(n, 1), 3)
     meta = {'channels': {'A0': {'zero_code': 128, 'volts_per_code': 0.034, 'probe': 1.0}},
             'analog_rate_hz': 1e6, 'digital_rate_hz': 1e6, 't0_analog_s': 0.0, 't0_digital_s': 0.0,
             'acq': {'repeat_frames': n, 'frames': n}, 'frames': n}
@@ -42,6 +43,10 @@ def test_every_stamp_comes_back_on_its_own_frame(stamps):
     back = _roundtrip(_cap(stamps))
     assert back.meta['frame_host_s'] == pytest.approx(stamps, rel=1e-8, abs=0)
     assert [f['host_s'] for f in back.frames] == pytest.approx(stamps, rel=1e-8, abs=0)
+    # the queue delay rides along: same frame, same order, rounded to microseconds
+    want = [round(1000.0 * (i + 1) / len(stamps), 3) for i in range(len(stamps))]
+    assert back.meta['frame_queue_us'] == pytest.approx(want, rel=1e-8, abs=0)
+    assert [f['queue_us'] for f in back.frames] == pytest.approx(want, rel=1e-8, abs=0)
 
 
 @given(n=st.integers(min_value=2, max_value=8))
@@ -49,5 +54,5 @@ def test_every_stamp_comes_back_on_its_own_frame(stamps):
 def test_a_replay_writes_no_stamp_key(n):
     """A replayed/golden run has no arrival time; the key must be absent, not a list of nulls."""
     back = _roundtrip(_cap([None] * n))
-    assert 'frame_host_s' not in back.meta
-    assert all('host_s' not in f for f in back.frames)
+    assert 'frame_host_s' not in back.meta and 'frame_queue_us' not in back.meta
+    assert all('host_s' not in f and 'queue_us' not in f for f in back.frames)

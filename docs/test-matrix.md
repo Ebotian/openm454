@@ -28,8 +28,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   save/load, cross-table caches or the 100 ms hold itself; the `spec` marks are only on the rows it encodes.
 - **timing:** the profile floors are covered by unit, property and stateful tests; the model only knows that a stop
   returns to quiet.
-- **host arrival:** `host_s` is stamped when a transfer completes, on the monotonic clock, so it measures the
-  host side only; the frame's own `trig_index` and content stay the authority for what the device acquired. The
+- **host arrival:** `host_s` is stamped in the libusb completion callback (seconds since the start command, so the
+  start settle is included) and `queue_us` is the event loop's delay after that; both measure the host side only, and
+  neither is the device's sample or trigger time — the frame's own `trig_index` and content stay the authority. The
   property layer covers the save/load law and the no-stamp replay case, the stateful layer the engine loop that
   stamps (inside the run's wall clock) and the capture path that summarises it; there is no golden fixture with
   arrival times, because a replay has none.

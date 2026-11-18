@@ -145,10 +145,12 @@ def test_every_repeat_transfer_is_stamped_when_it_arrives():
     t0 = time.time()
     cap = eng.run(SETUP, pkt_bytes=PKT, need_bytes=None, n_transfers=4, trigger_timeout=1.0, repeat_frames=6)
     span = time.time() - t0
-    assert len(cap.frame_times) == len(cap.frames) == 6
+    assert len(cap.frame_times) == len(cap.frame_queue) == len(cap.frames) == 6
     assert cap.p_start is not None
     assert cap.frame_times == sorted(cap.frame_times)
     assert 0.0 <= cap.frame_times[0] <= cap.frame_times[-1] <= span   # inside the run, not placeholder values
+    # the stamp is the completion callback, the queue is what the loop added: never negative, and bounded by the run
+    assert all(q >= 0.0 for q in cap.frame_queue) and all(q <= span for q in cap.frame_queue)
 
 
 def test_runs_are_spaced_100ms():

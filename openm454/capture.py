@@ -149,14 +149,18 @@ class Capture:
 
         The frames of one run can differ by a few samples (each is cut by its own tail), so they are trimmed to the
         shortest and that length is recorded per channel in `frames_samples`; frame 0 stays the 1-D `analog_A1`,
-        unchanged. `frame_trig_index` lists every frame's trigger index (None: the frame's tail gave none), and
-        `frame_host_s` the host arrival time of every frame (seconds since the start write, monotonic clock: the
-        transfer completion, so USB transport and host scheduling are included)."""
+        unchanged. `frame_trig_index` lists every frame's trigger index (None: the frame's tail gave none),
+        `frame_host_s` the completion time of every frame's transfer (monotonic clock, seconds since the start
+        command: the transfer ended in the libusb callback, so USB transport is included and the start settle is too),
+        and `frame_queue_us` how much later the event loop picked that transfer up (the host-side queue delay)."""
         self.meta['frames_samples'] = {}
         self.meta['frame_trig_index'] = [f.get('trig_index') for f in self.frames]
         host = [f.get('host_s') for f in self.frames]
         if any(h is not None for h in host):        # a replayed/golden fixture has no arrival time
             self.meta['frame_host_s'] = [None if h is None else float('%.9g' % h) for h in host]
+        queue = [f.get('queue_us') for f in self.frames]
+        if any(q is not None for q in queue):
+            self.meta['frame_queue_us'] = [None if q is None else float('%.6g' % q) for q in queue]
         for ch in self.analog:
             arr = [f['analog'][ch] for f in self.frames if ch in f['analog']]
             if not arr:
@@ -195,12 +199,15 @@ def load_capture(path):
         n = meta.get('frames', 0) or next(len(a) for a in list(frames_analog.values()) + list(frames_digital.values()))
         trig = meta.get('frame_trig_index') or [None] * n
         host = meta.get('frame_host_s') or []
+        queue = meta.get('frame_queue_us') or []
         lengths = meta.get('frames_samples') or {}
         cap.frames = []
         for i in range(n):
             item = {'analog': {}, 'digital': {}, 'trig_index': trig[i] if i < len(trig) else None}
             if i < len(host) and host[i] is not None:
                 item['host_s'] = host[i]
+            if i < len(queue) and queue[i] is not None:
+                item['queue_us'] = queue[i]
             for ch, a in frames_analog.items():
                 item['analog'][ch] = a[i]
             for ch, a in frames_digital.items():       # packed 8 samples per byte: cut the padding of the last byte

@@ -137,8 +137,9 @@ class RawCapture:
         self.data = bytearray()
         self.n_data = 0           # data bytes received (also counted when keep_data=False leaves data empty)
         self.frames = []          # repeat mode: one entry per data transfer (frame data + 4 KiB tail)
-        self.frame_times = []     # repeat mode: host arrival of each transfer, seconds since p_start (monotonic)
-        self.p_start = None       # perf_counter of the start write: the clock base of frame_times
+        self.frame_times = []     # repeat mode: completion-callback time of each transfer, s since p_start
+        self.frame_queue = []     # repeat mode: how long each transfer waited for the event loop, s
+        self.p_start = None       # perf_counter taken right after the start write: the clock base
         self.t_start = None
         self.t_head = None
         self.t_done = None
@@ -215,31 +216,33 @@ class Engine:
             n = tr.getActualLength()
             if tr is self._head_tr:
                 if st != usb1.TRANSFER_COMPLETED:
-                    self._events.append(('error', 'head transfer ended with status %s' % _STATUS.get(st, st)))
+                    self._events.append(('error', 'head transfer ended with status %s' % _STATUS.get(st, st), None))
                     return
                 buf = bytes(memoryview(tr.getBuffer())[:n])
                 if len(buf) != HEAD_BYTES or buf[:4] != HEAD_MAGIC:
-                    self._events.append(('error', 'bad head packet (%d bytes, check id %s)' % (len(buf), buf[:4].hex())))
+                    self._events.append(('error', 'bad head packet (%d bytes, check id %s)' % (len(buf), buf[:4].hex()), None))
                 else:
-                    self._events.append(('head', buf))
+                    self._events.append(('head', buf, None))
                 return
             if st != usb1.TRANSFER_COMPLETED:
-                self._events.append(('error', 'data transfer ended with status %s' % _STATUS.get(st, st)))
+                self._events.append(('error', 'data transfer ended with status %s' % _STATUS.get(st, st), None))
                 return
             if n == 0:
-                self._events.append(('error', 'zero-length data transfer'))
+                self._events.append(('error', 'zero-length data transfer', None))
                 return
             if not self._full:
-                self._events.append(('data', bytes(memoryview(tr.getBuffer())[:n])))
+                # stamped here, in the completion callback: this is when the host saw the transfer end, not when the
+                # event loop got round to it (the difference is frame_queue, reported as queue_us)
+                self._events.append(('data', bytes(memoryview(tr.getBuffer())[:n]), time.perf_counter()))
             try:
                 tr.submit()
             except usb1.USBError as e:
                 why = 'data transfer resubmit failed: %s' % e
                 if getattr(e, 'value', None) == usb1.ERROR_NO_MEM:
                     self._no_mem = why          # the host's usbfs buffer, not the device: see _device_error
-                self._events.append(('error', why))
+                self._events.append(('error', why, None))
         except BaseException as e:      # noqa: BLE001 - see docstring
-            self._events.append(('error', 'exception in the transfer callback: %r' % (e,)))
+            self._events.append(('error', 'exception in the transfer callback: %r' % (e,), None))
 
     def _cancel_and_wait(self):
         for tr in self._trs:
@@ -391,9 +394,11 @@ class Engine:
                     t.write(regs.SYNC, self.sync)
                     t.write(regs.ACTION, 0x0000)
                     t.write(regs.CTRL, 0x0001)      # Transport.running is set as this is sent
+                    # The start command is the clock base of host_s: the settle below and the transfer latency are
+                    # part of the first frame's arrival time, so a timing profile cannot silently move the zero.
+                    cap.p_start = time.perf_counter()
                 time.sleep(START_SETTLE)
                 cap.t_start = time.time()
-                cap.p_start = time.perf_counter()
                 error = self._collect(cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk,
                                       stop_flag, poll, keep_data)
             except DscopeError as e:            # failed start write or progress-poll handshake
@@ -446,24 +451,26 @@ class Engine:
             budget = MAX_EVENTS_PER_PASS        # bounded, so stop requests and deadlines are always checked
             while self._events and budget > 0:
                 budget -= 1
-                kind, buf = self._events.popleft()
+                kind, buf, t_cb = self._events.popleft()
                 if kind == 'error':
                     if self._full or self._abort.is_set():
                         # TransferThread checks 'frame over' / abort before error: stop normally first
                         self._late_error = self._late_error or buf
                         continue
                     return buf
-                if kind == 'head':
+                if kind == 'head':          # the head's own callback time is not kept: t_head is a deadline base
                     cap.head = buf
                     cap.t_head = time.time()
                     deadline = cap.t_head + collect_timeout if collect_timeout is not None else None
                 elif self._full:
                     continue                # zero padding after the record: discarded
                 elif repeat_frames:
+                    now = time.perf_counter()
                     if cap.p_start is None:         # a caller driving _collect without the start write
-                        cap.p_start = time.perf_counter()
+                        cap.p_start = t_cb
                     cap.frames.append(buf)
-                    cap.frame_times.append(time.perf_counter() - cap.p_start)
+                    cap.frame_times.append(t_cb - cap.p_start)   # when the transfer completed (libusb callback)
+                    cap.frame_queue.append(now - t_cb)            # ... and how long the loop took to see it
                 else:
                     cap.n_data += len(buf)
                     if keep_data:
@@ -539,7 +546,7 @@ class Engine:
         cap.ep84 += rec
         cap.handshakes.append((t_rel, 'stop', rec))
         if self._late_error is None:            # data-path errors that arrived during the handshake
-            self._late_error = next((b for k, b in self._events if k == 'error'), None)
+            self._late_error = next((b for k, b, _t in self._events if k == 'error'), None)
         self._stopping = True
         t.running = False
         if not self._cancel_and_wait():

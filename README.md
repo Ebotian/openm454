@@ -149,18 +149,20 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   `{min, median, max}`) and `frames`, the first 100 frames only, each with `index`, `trig_index`, `host_s` and
   `analog` basics. `analyze` of a repeat `.npz` reports the same. `Capture.frames` holds one dict per frame
   (analog, digital, `trig_index`, `host_s`).
-- `host_s` is when the frame arrived at the host: seconds since the start write, on the monotonic clock, stamped as
-  the transfer completes, so USB transport and host scheduling are included. `frames_summary.host_s` carries
-  `first`, `last` and `interval_ms` (`min` / `median` / `max` between consecutive arrivals). It separates the two
-  ways a frame can look odd: the device sampled a stale value (the frame content is wrong, the arrival is on time)
-  and the host read it late (a long or bunched interval, with several transfers delivered in one event-loop pass).
-  It is a host measurement, not a device one: the frame's own `trig_index` and content stay the authority for what
-  the device acquired.
+- `host_s` is when the frame's transfer completed on the host: seconds since the start command (the `CTRL` write,
+  so the start settle is included), monotonic clock, stamped in the libusb completion callback — USB transport is
+  included, and the event loop is not. `queue_us` is the other half: how much later the loop picked that transfer up,
+  i.e. the host-side queue delay. `frames_summary.host_s` carries `first`, `last`, `interval_ms` (`min` / `median` /
+  `max` between consecutive completions) and `queue_us` (`min` / `median` / `max`). Together they separate the two
+  ways a frame can look odd: the device sampled a stale value (content wrong, completion on time) and the host was
+  late (a long completion interval, or a large queue delay with several transfers drained in one event-loop pass).
+  Both are host measurements, not device ones: the frame's own `trig_index` and content stay the authority for what
+  the device acquired, and neither stamp is the device's sample or trigger time.
 - The `.npz` keeps every frame (with more than one; `--repeat 1` saves a plain single capture): `analog_A1` / `digital_D0` hold frame 0 as for a single capture, `frames_analog_A1`
   is (frames, samples) uint8 codes, `frames_digital_D0` is (frames, ceil(samples/8)) uint8, each row packed with
   `np.packbits(bitorder='little')` (not frames x samples), plus meta `frames_samples`, `frame_trig_index` and
-  `frame_host_s` (one arrival time per frame, absent when the frames were replayed from a fixture); `load_capture`
-  unpacks them and restores `host_s` on every frame. `--measure`, `--edges`, `--dump`, `--decode`, the JSON analog/digital blocks and the
+  `frame_host_s` and `frame_queue_us` (one entry per frame, absent when the frames were replayed from a fixture);
+  `load_capture` unpacks them and restores `host_s` / `queue_us` on every frame. `--measure`, `--edges`, `--dump`, `--decode`, the JSON analog/digital blocks and the
   PNG describe frame 0 only. Bytes a frame carries beyond its record are device buffer content, not signal, and are
   cut by the frame's tail.
 - Measured on one Linux unit over USB 3 (2026-11-16, 1 analog channel, default queue depth): 5 us window at
