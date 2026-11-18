@@ -1,6 +1,5 @@
 """Fixtures of the long-run group: the duration tier, the artifact writer, and the precondition checks."""
 import os
-import shutil
 import subprocess
 
 import pytest
@@ -29,6 +28,9 @@ def _free_ram_mib():
     return None
 
 
+free_disk_mib = soakmod.free_disk_mib
+
+
 @pytest.fixture(scope='session')
 def soak_cfg(bench):
     cfg = bench.d.get('soak') or {}
@@ -54,13 +56,30 @@ def soak(request, soak_cfg, duration):
     ram = _free_ram_mib()
     if ram is not None and ram < float(need.get('free_ram_mib', 512)):
         pytest.skip('not enough free RAM for a soak run: %.0f MiB < %s MiB' % (ram, need['free_ram_mib']))
-    disk = shutil.disk_usage(REPO).free / (1024.0 * 1024.0)
-    if disk < float(need.get('free_disk_mib', 1024)):
-        pytest.skip('not enough free disk for a soak run: %.0f MiB < %s MiB' % (disk, need['free_disk_mib']))
     root = os.path.join(REPO, soak_cfg.get('artifact_dir', 're/soaks'))
+    disk = free_disk_mib(root)
+    if disk < float(need.get('free_disk_mib', 1024)):
+        pytest.skip('not enough free disk for the artifacts in %s: %.0f MiB < %s MiB' % (
+            root, disk, need['free_disk_mib']))
     meta = {'git': _git('rev-parse', 'HEAD'), 'branch': _git('rev-parse', '--abbrev-ref', 'HEAD'),
             'duration_s': duration, 'test': request.node.nodeid,
             'cmd': 'pytest %s' % request.node.nodeid}
     writer = soakmod.Soak(request.node.name.split('[')[0], root, meta)
     yield writer
     writer.abandon('the run ended without finish(): see the test failure above')
+
+
+@pytest.fixture
+def disk_guard(soak_cfg):
+    """Check the filesystem the data will land on against the worst case of the whole run, with a margin.
+
+    A one-hour log at 1 MSa/s is 3.6 GB; a fixed 1 GiB floor would start a run that cannot finish, and the number
+    has to come from the path the data is written to, not from the checkout.
+    """
+    def guard(path, need_bytes, what):
+        budget = soakmod.disk_budget(path, need_bytes, float(soak_cfg.get('disk_margin', 1.25)))
+        if not budget['ok']:
+            pytest.skip('%s: %s' % (what, budget['reason']))
+        return budget
+
+    return guard

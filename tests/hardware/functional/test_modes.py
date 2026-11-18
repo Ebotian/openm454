@@ -1,6 +1,7 @@
 """The capture modes on the bench: single, triggered, repeat, stream, log (`hw`)."""
 import time
 
+import numpy as np
 import pytest
 
 pytestmark = pytest.mark.hw
@@ -44,14 +45,25 @@ def test_repeat_forced_collects_every_frame(bench, scope):
 
 
 def test_repeat_triggered_collects_every_frame(bench, scope):
-    """Every frame is its own acquisition with its own trigger: the indices must differ."""
+    """Every frame is its own acquisition: each one has a trigger index, the declared rise sits at t = 0 in every
+    frame, and the frames are not copies of one another. (Two frames may legitimately share a trigger index, so
+    distinctness is not asserted.)"""
     link = bench.link('awg_to_a0')
     link.program(scope)
     st = _triggered(link.settings(WINDOW, RATE))
     st.repeat = 8
     cap = scope.capture(st)
     assert len(cap.frames) == 8 and all(f['trig_index'] is not None for f in cap.frames)
-    assert len({f['trig_index'] for f in cap.frames}) > 1
+    sc, rate, level = cap.scale(link.channel), cap.meta['analog_rate_hz'], 1.5
+    contents = set()
+    for i, f in enumerate(cap.frames):
+        codes = np.asarray(f['analog'][link.channel])
+        v = (codes.astype(np.float32) - sc['zero_code']) * sc['volts_per_code']
+        k = int(round(-f['t0_analog'] * rate))
+        before, after = float(v[k - 200:k - 50].mean()), float(v[k + 50:k + 200].mean())
+        assert before < level < after, 'frame %d: the declared rise is not at t = 0' % i
+        contents.add(codes.tobytes())
+    assert len(contents) > 1, 'eight frames must be eight acquisitions, not one copy'
 
 
 def test_back_to_back_captures_leave_the_device_idle(bench, scope):

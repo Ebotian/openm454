@@ -8,12 +8,16 @@ from tests.support import soak as soakmod
 pytestmark = [pytest.mark.hw, pytest.mark.hwsoak]
 
 
-def test_log_soak(bench, scope, soak, duration, soak_cfg, tmp_path):
+def test_log_soak(bench, scope, soak, duration, soak_cfg, tmp_path, disk_guard):
     link = bench.link('awg_to_a0')
     link.program(scope)
     rate = float(soak_cfg.get('log_rate_hz', 1e6))
     record_s = float(soak_cfg.get('log_record_s', 5))
     st = link.settings(1e-3, rate)
+    # the whole run lands in tmp_path: check that filesystem for the worst case (one byte per analog sample),
+    # not the checkout and not a fixed floor - a one-hour run at 1 MSa/s is 3.6 GB
+    records_planned = max(1, int(-(-duration // record_s)))
+    disk = disk_guard(tmp_path, records_planned * record_s * rate, 'the log soak')
     before = soak.snapshot()
     runs, samples, rss = 0, 0, []
     t_end = time.time() + duration
@@ -45,5 +49,5 @@ def test_log_soak(bench, scope, soak, duration, soak_cfg, tmp_path):
         'device_released': {'value': scope.dev.t.running,
                             'ok': scope.dev.t.running is False and not scope.dev.t.failed},
     }
-    soak.finish(checks, notes={'record_s': record_s, 'rate_hz': rate})
+    soak.finish(checks, notes={'record_s': record_s, 'rate_hz': rate, 'disk': disk})
     assert all(v.get('ok', True) for v in checks.values() if isinstance(v, dict)), checks

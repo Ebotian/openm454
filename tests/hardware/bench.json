@@ -1,5 +1,5 @@
 {
-  "_readme": "The bench the hw tests run on, as data: which output drives which input, with the probe/vdiv/offset the capture must be configured for and the signal it must then see. Rewiring the bench means editing this file, never a test. A link that is not declared here is not guessed: the test that needs it skips and names what is declared. Checked offline by tests/unit/test_bench_declaration.py; used by tests/hardware (marker: hw).",
+  "_readme": "The bench the hw tests run on, as data: which output drives which input, with the probe/vdiv/offset the capture must be configured for and the signal it must then see. Rewiring the bench means editing this file, never a test. A link that is not declared here is not guessed: the test that needs it skips and names what is declared. Scope today: the awg_to_a0 scenario (one generator into one analog channel); the other links are listed under undeclared until tests use them. Checked offline by tests/unit/test_bench_declaration.py; used by tests/hardware (markers: hw, hwsoak).",
   "scope": {
     "model": "DSCope M454"
   },
@@ -55,7 +55,8 @@
       "free_disk_mib": 1024
     },
     "rss_steady_mib": 8,
-    "rss_steady_min_samples": 40
+    "rss_steady_min_samples": 40,
+    "disk_margin": 1.25
   },
   "manual": [
     "unplug / replug the USB cable while a run is active, then `openm454 recover`",

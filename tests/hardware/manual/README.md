@@ -8,7 +8,7 @@ collected as tests, so the suite never reports them as skips.
 |---|---|---|
 | unplug / replug while a run is active | pull the USB cable during a stream, then plug it back | the run ends with a device error (not a hang), `openm454 recover` brings the scope back, the next capture is complete |
 | suspend / resume in the middle of a stream | `rtcwake -m mem -s 20` on the host while streaming | the stream reports the gap or stops cleanly; no half-written .npz; the next open works |
-| usbfs budget exhausted | `sysctl vm.usbfs_memory_mb=1` (root) and run a capture | `NO_MEM` with the usbfs hint, not a silent retry loop |
+| usbfs budget exhausted | `echo 2 > /sys/module/usbcore/parameters/usbfs_memory_mb` (root), run a capture, then restore the old value | `NO_MEM` with the usbfs hint, not a silent retry loop |
 | power cycle of the scope | unplug the barrel jack, plug it back | the next open reloads the FPGA (`fpga_configured_now` true); no stale lock |
 | generator reprogrammed while armed | `openm454 awg set ...` during a capture | refused by the stop handshake, the run is unaffected |
 

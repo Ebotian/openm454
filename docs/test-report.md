@@ -10,8 +10,8 @@ files, 8396 test LOC.
 | --- | --- | --- | ---: |
 | fast (PR) | `python -m pytest tests` | 832 passed, 554 skipped | **14.5 s** |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
-| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 39 passed on the AWG->A0 bench, never in CI | **16.6 s** |
-| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
+| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 40 passed on the AWG->A0 bench, never in CI | **17.0 s** |
+| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.9 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -22,8 +22,8 @@ git-ignored fixtures are absent.
 
 Re-measured 2026-11-18 on this branch (the hardware suite split into a functional and a long-run group, wiring
 declared in `tests/hardware/bench.json`; the branch builds on the host-arrival-stamps change): fast **842 passed,
-554 skipped, 14.7 s**, full offline **843 passed, 554 skipped, 65.1 s**, hardware functional **39 passed, 16.6 s**,
-hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8843 → 10053. The tables above stay the PR #8 measurement.
+554 skipped, 14.6 s**, full offline **846 passed, 554 skipped, 65.1 s**, hardware functional **40 passed, 17.0 s**,
+hardware soak (60 s tier) **4 passed, 245.9 s**, test LOC 8843 → 10203. The tables above stay the PR #8 measurement.
 
 ## Baseline vs. now
 
@@ -84,7 +84,7 @@ workers skip).
 
 ### Functional group (`hw and not hwsoak`)
 
-39 tests, **16.6 s** on the bench. What it proves, all through the declared link:
+40 tests, **17.0 s** on the bench. What it proves, all through the declared link:
 
 - the connected scope is the declared model, and the declared 1 kHz / 3 V square arrives at 1 kHz and 3.1 Vpp
   (declared tolerance 0.3 V, still tight enough to reject the factor-of-10 error of a wrong probe or divider);
@@ -106,13 +106,13 @@ workers skip).
 
 ### Long-run group (`hwsoak`, 60 s tier for the acceptance run)
 
-4 runs, **245.6 s**, one artifact set per run in `re/soaks/` (`.meta`, `.jsonl`, `.exit`, `.err`,
+4 runs, **245.9 s**, one artifact set per run in `re/soaks/` (`.meta`, `.jsonl`, `.exit`, `.err`,
 `.summary.json`), every check's measured value in the summary:
 
 | run | what it did | measured |
 | --- | --- | --- |
-| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 3.03 ms, interval drift 0.002 %, RSS steady 0.0 MiB |
-| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS steady 3.4 MiB |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.16 ms, interval drift 0.007 %, RSS steady 0.0 MiB |
+| stream | 163 records of 200 ms, 815 statistics rows | signal clock monotone, RSS steady 1.2 MiB |
 | log | 12 records x 5 s, to disk | 60 000 000 samples, 60.0 MB written, RSS steady 0.25 MiB |
 | lifecycle | open -> capture -> close, 63 cycles | open median 769.5 ms, open-time drift 0.11 %, RSS steady 6.2 MiB |
 
@@ -124,6 +124,18 @@ first ~15 and then stay flat (measured), so the whole-run total is reported but 
 Seed defects, injected and reverted: dropping every frame's `host_s` fails the repeat run and the functional
 arrival-time test; a stop path that forgets to release the device fails `test_the_engine_is_idle_after_a_capture`,
 the back-to-back captures test and the repeat soak.
+
+Bench-safety contracts, each verified on the device:
+
+- **the generator is handed back**: the session fixture restores the AWG by mode (`set` / `dc` / `burst` /
+  `sweep` / `modulation`) and parks it at 0 V when the state at start was off or unknown. A failed restore is an
+  error, not a `pass`. Verified both ways: a burst (2 cycles every 0.5 s) comes back identical after a run, and a
+  run that started with the output off leaves it off with `output_v = 0`.
+- **an explicit hardware run fails when the device is gone**: only `OPENM454_NO_USB` skips; a busy or missing scope
+  is an error with the reason. Verified by holding the device lock from another process.
+- **the disk budget is the run's own size, on the run's own filesystem**: `rate x duration` bytes with a 1.25 margin,
+  measured on the path the data lands on (a one-hour log at 1 MSa/s is 3.6 GB, so a 1 GiB floor would have started a
+  run that cannot finish). The rule is unit-tested offline in `tests/unit/test_soak_budget.py`.
 
 ## Formal model (Quint + Apalache)
 
@@ -201,7 +213,7 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
 
     python -m pytest tests                     # fast, 14.5 s, xdist
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
-    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (16.6 s)
+    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (17.0 s)
     python -m pytest tests -m hwsoak -n 0 --soak-seconds 60       # hardware, long runs (tiers in bench.json)
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:

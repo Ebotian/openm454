@@ -6,11 +6,37 @@ summary.json holding every check and its measured value, so a failed run can be 
 """
 import json
 import os
+import shutil
 import statistics
 import time
 
 STATE = 'state'
 MIB = 1024.0 * 1024.0
+
+
+def free_disk_mib(path):
+    """Free space on the filesystem that will hold the data: the nearest existing directory of path.
+
+    The checkout and tmp_path are not necessarily on the same filesystem, so a caller has to ask about the path it
+    actually writes to.
+    """
+    probe = os.path.abspath(path)
+    while probe and not os.path.exists(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            break
+        probe = parent
+    return shutil.disk_usage(probe).free / (1024.0 * 1024.0)
+
+
+def disk_budget(path, need_bytes, margin=1.25):
+    """Is there room for a run that will write need_bytes to path, with a margin? Returns the numbers it judged."""
+    need_mib = need_bytes / (1024.0 * 1024.0)
+    free_mib = free_disk_mib(path)
+    ok = free_mib >= need_mib * margin
+    return {'ok': ok, 'need_mib': round(need_mib, 1), 'free_mib': round(free_mib, 1), 'margin': margin,
+            'reason': None if ok else '%.1f MiB free on %s, %.1f MiB needed (x%.2f)' % (
+                free_mib, path, need_mib, margin)}
 
 
 def rss_mib():

@@ -45,9 +45,10 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
 - **channel counts and fuzz:** both fuzz targets use one fixed 2 analog / 2 digital layout, so they say nothing about
   other channel counts; the fuzz mark on the packet row is about the byte surface, not the layout.
 - **hw:** `tests/hardware` runs against the real M454 and is split in two groups by marker: `hw and not hwsoak`
-  is the functional group (39 tests, 16.6 s) and `hwsoak` the long-run group (4 runs, tiers 5/10/60 min, overridable
+  is the functional group (40 tests, 17.0 s) and `hwsoak` the long-run group (4 runs, tiers 5/10/60 min, overridable
   with `--soak-seconds`). One device, one process: both need `-n 0` (the conftest fails loudly under xdist). The
-  default marker set and CI never select them; `OPENM454_NO_USB` turns them into skips with the reason. The suite
+  default marker set and CI never select them; only `OPENM454_NO_USB` skips — a busy or missing scope is an error,
+  and the session fixture hands the generator back by mode or parks it. The suite
   does not carry its wiring in constants: `tests/hardware/bench.json` declares every link (source, sink, probe,
   volts/div, offset, signal, tolerance) plus the soak budgets and the manual cases,
   `tests/unit/test_bench_declaration.py` checks the declaration offline — complete, physically consistent, no test
