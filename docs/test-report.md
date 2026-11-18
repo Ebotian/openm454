@@ -9,10 +9,10 @@ base measurement is 823 passed, 554 skipped, 86.40 s, 26 test files, 8396 test L
 | suite | command | result | wall time |
 | --- | --- | --- | ---: |
 | fast (PR) | `python -m pytest tests` | 852 passed, 554 skipped | **14.6 s** |
-| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 852 passed | **14.6 s** |
-| recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 1.9 s |
-| full offline | `python -m pytest tests -m "not hw"` | 853 passed, 554 skipped | **65.1 s** |
-| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 40 passed on the AWG->A0 bench, never in CI | **17.0 s** |
+| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 858 passed | **14.7 s** |
+| recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 2.0 s |
+| full offline | `python -m pytest tests -m "not hw"` | 859 passed, 554 skipped | **65.2 s** |
+| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 53 passed on the AWG->A0 bench, never in CI | **24.8 s** |
 | hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
@@ -27,9 +27,10 @@ sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `ti
 before it); it carries the marker so the software suite has no skips at all.
 
 Measured 2026-11-18 on the merged tree (0.4.0: host arrival stamps, the `traces` group, the two-group hardware
-suite with its wiring declaration): fast **852 passed, 554 skipped, 14.6 s**, clean software group **852 passed,
-0 skipped**, full offline **853 passed, 554 skipped, 65.1 s**, hardware functional **40 passed, 17.0 s**, hardware
-soak (60 s tier) **4 passed, 245.6 s**, test LOC 8396 → 10316. The two tables below stay the PR #8 measurement.
+suite with its wiring declaration, plus the backlog and readout-planning fixes): fast **858 passed, 554 skipped,
+14.6 s**, clean software group **858 passed, 0 skipped**, full offline **859 passed, 554 skipped, 65.1 s**, hardware
+functional **53 passed, 24.8 s**, hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8396 → 10893. The two
+tables below stay the PR #8 measurement.
 
 ## Baseline vs. PR #8 (kept as that change's measurement)
 
@@ -90,7 +91,7 @@ workers skip).
 
 ### Functional group (`hw and not hwsoak`)
 
-40 tests, **17.0 s** on the bench. What it proves, all through the declared link:
+53 tests, **24.8 s** on the bench. What it proves, all through the declared link:
 
 - the connected scope is the declared model, and the declared 1 kHz / 3 V square arrives at 1 kHz and 3.1 Vpp
   (declared tolerance 0.3 V, still tight enough to reject the factor-of-10 error of a wrong probe or divider);
@@ -111,6 +112,19 @@ workers skip).
 - state: a capture adds no file under `state/`, the AWG record matches what was programmed, the engine is idle after
   every run;
 - a link that is not declared skips with the declared names in the reason.
+
+Six of these are the hardware counterpart of an offline test — the offline suite proves the logic, these prove the
+device does it:
+
+| offline test | hardware check on the bench |
+| --- | --- |
+| `tests/unit/test_selftest.py` (fake scope) | the driver's own self-test on the device: V01 and V12 (forced 5 ms capture of all 12 channels at 100 MSa/s) pass, and the standard-fixture checks skip **with the reason they need that fixture** — no silent pass, no false claim on this wiring |
+| `tests/unit/test_timing.py` (keys, floors, refusals) | the floor profile is applied to the device: 186 ms per 1 ms capture with the traced spacing, **32 ms** with `gap=5 ms, quiet=5 ms, submit=5 ms, setup=2 ms, final=1 ms`, and the capture is still correct; a fixed key (`start=`) is refused with the scope idle |
+| the plan's repeat hold invariant | after a repeat run the next capture still pays the traced **100 ms** hold even with `quiet=5 ms` (measured 127 ms vs 29 ms) — the profile cannot shorten an untriggered stop |
+| `tests/unit/test_calib.py` | a table bound to this unit is applied (`applied.cal` present, identity table leaves the reading alone); a table from another unit is refused with `CAL_MISMATCH` and the scope stays usable |
+| `tests/golden/test_packet_golden.py` (recordings) | a live frame has the planned depth and rate, and a triggered repeat frame's `trig_index` sits at the requested 50 % of the window (±2 %) |
+| `tests/integration/test_cli_watch_measure.py` (saved files) | save → `load_capture` → `analyze` → `plot` on a real capture: the arrays and the measured numbers match, and the PNG is a real picture |
+| `tests/unit/test_scope_paths.py` (refusals) | `stream`/`log` with repeat and a negative repeat are refused **with the device untouched** (`engine.active` false, no run), and a capture still succeeds afterwards |
 
 ### Long-run group (`hwsoak`, 60 s tier for the acceptance run)
 
@@ -229,7 +243,7 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
     python -m pytest tests -m "not hw and not slow and not traces"   # software only, 0 skips
     python -m pytest tests -m traces           # the recorded-material group (needs re/traces/S01_warm)
-    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (17.0 s)
+    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (24.8 s)
     python -m pytest tests -m hwsoak -n 0 --soak-seconds 60       # hardware, long runs (tiers in bench.json)
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
