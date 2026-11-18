@@ -10,7 +10,7 @@ files, 8396 test LOC.
 | --- | --- | --- | ---: |
 | fast (PR) | `python -m pytest tests` | 832 passed, 554 skipped | **14.5 s** |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
-| hardware | `python -m pytest tests -m hw` | needs the M454, never in CI | — |
+| hardware | `python -m pytest tests -m hw` | 4 passed on the AWG->A0 bench, never in CI | **2.8 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -19,9 +19,10 @@ The fast suite is the default marker set (`not hw and not slow`) under `pytest-x
 the full suite adds the `slow` test. The 554 skips are the recorded-trace and firmware tests that skip when the
 git-ignored fixtures are absent.
 
-Re-measured 2026-11-18 on `feat/frame-arrival-time` (host arrival stamps; `tests/property/test_frame_times.py`
-added, the engine stamp test and the matrix grew a row): fast **838 passed, 554 skipped, 14.6 s**, full offline
-**839 passed, 554 skipped, 65.1 s**, test LOC 8843 → 8914. The tables above stay the PR #8 measurement.
+Re-measured 2026-11-18 on `feat/frame-arrival-time` (host arrival stamps; the `traces` group; the hardware suite
+and its declaration): fast **842 passed, 554 skipped, 14.6 s**, clean software group **842 passed, 0 skipped**,
+full offline **843 passed, 554 skipped, 65.1 s**, hardware **4 passed, 2.8 s**, test LOC 8843 → 9236. The tables
+above stay the PR #8 measurement.
 
 ## Baseline vs. now
 
@@ -63,6 +64,25 @@ Per-directory times are the junit sum of test durations, so they exceed the wall
 | `tests/integration/test_mcp.py::test_log_plan_and_awg_arguments` | 60.02 s | `slow`, full suite only |
 | `tests/integration/test_logger.py::test_bench_without_device_records_the_allowance` | 2.18 s | stays in the fast suite |
 | `tests/integration/test_mcp.py::test_a_hung_command_never_hangs_the_call` | 1.83 s | stays in the fast suite |
+
+## Hardware suite
+
+`tests/hardware` runs against the real scope and is never part of CI: `hw` is outside the default marker set, and
+with no device (or `OPENM454_NO_USB`, which CI sets) every test skips with the reason. What the suite assumes about
+the bench is data, not prose: `tests/hardware/bench.json` declares each link — source, sink, probe attenuation,
+volts/div, offset, the signal to put on the wire, and the tolerance it must be seen within. The capture
+configuration *and* the expected measurement both come from that file, so a bench wired differently (a 10x probe in
+line, a divider, another channel) fails and names the file instead of reporting a strange number; a link that is not
+declared is never guessed — the test skips and lists what is declared.
+`tests/unit/test_bench_declaration.py` checks the declaration offline, in the fast suite: every link complete,
+physically consistent (the declared signal fits the declared screen and the generator's 0..3 V), and no hw test
+asking for an undeclared link.
+
+Measured 2026-11-18 on the bench (M454, AWG into A0, direct coax): 4 passed, 2.8 s — the connected scope is the
+declared model; the declared 1 kHz / 3 V square arrives at 1 kHz and 3.1 Vpp (declared tolerance 0.3 V, which still
+rejects the factor-of-10 error a wrong probe or divider makes); 64 repeat frames each carry an arrival stamp
+(monotone, inside the run, the .npz keeps them, and every frame swings within 20 % of the run's median, so a stale
+copy would fail).
 
 ## Formal model (Quint + Apalache)
 
@@ -140,6 +160,7 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
 
     python -m pytest tests                     # fast, 14.5 s, xdist
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
+    python -m pytest tests -m hw -n 0          # hardware (needs the M454; wiring in tests/hardware/bench.json)
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
     quint verify specs/quint/capture.qnt --main=capture --init=init --step=step --max-steps=12 \
