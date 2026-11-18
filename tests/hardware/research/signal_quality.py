@@ -89,9 +89,14 @@ def main(argv=None):
 
     scope = scopemod.Scope()
     scope.open()
+    before = scope.awg_status()                  # the generator is write-only: restore what we found
+    restored = True
     try:
         link = benchmod.Bench(benchmod.load()).link('awg_to_a0')
         scope.awg_set('square', 1e3, SWING_V, 0.0)
+        benchmod.write_manifest(args.out_dir, scope, __file__, args,
+                                {'configs': [c[0] for c in CONFIGS], 'swing_v': SWING_V,
+                                 'vdiv_v': 0.05, 'link': link.name})
         rows = []
         for r in range(args.rounds):
             order = CONFIGS[r % len(CONFIGS):] + CONFIGS[:r % len(CONFIGS)]
@@ -102,6 +107,7 @@ def main(argv=None):
             if (r + 1) % 10 == 0:
                 print('  %d/%d rounds' % (r + 1, args.rounds), file=sys.stderr, flush=True)
     finally:
+        restored = benchmod.restore_or_park(scope, before)
         scope.close()
 
     path = os.path.join(args.out_dir, 'signal-quality.csv')
@@ -132,7 +138,7 @@ def main(argv=None):
             deltas = [float(db[r][field]) - float(da[r][field]) for r in rounds if r in da and r in db]
             diffs[key][field] = median_ci(deltas)
     print(json.dumps({'configs': summary, 'paired': diffs}, indent=1))
-    return 0
+    return 0 if restored else 1
 
 
 if __name__ == '__main__':

@@ -6,8 +6,8 @@ scope directly.
 
 | script | what it measures | output |
 | --- | --- | --- |
-| `usb_ceiling.py` | readout ceiling per channel configuration: logical rate, wire bytes, host-sustained rate, ring fill at the stop, and every EP 0x86 completion (bytes, reads still queued) for one configuration | `usb-ceiling.csv`, `usb-transfers.csv` |
-| `signal_quality.py` | per-record sigma, amplitude, even/odd and mod-4 group means (interleave), rise and 50 % crossing, every configuration once per round in rotation (300 rounds shipped) | `signal-quality.csv` plus a JSON summary with medians, bootstrap intervals and paired differences |
+| `usb_ceiling.py` | readout ceiling per channel configuration: logical rate, wire bytes, host-sustained rate, ring fill at the stop, and every EP 0x86 completion (bytes, reads still queued) for one configuration | `usb-ceiling.csv`, `usb-transfers.csv`, `manifest-usb_ceiling.json` |
+| `signal_quality.py` | per-record sigma, amplitude, even/odd and mod-4 group means (interleave), rise and 50 % crossing, every configuration once per round in rotation (300 rounds shipped) | `signal-quality.csv`, `manifest-signal_quality.json`, plus a JSON summary with medians, bootstrap intervals and paired differences |
 
 Run them on the bench (the scope attached, the generator wired to the declared input):
 
@@ -23,10 +23,21 @@ not show.
 - `usb-ceiling.csv` — one row per configuration: `logical_mb_s` (rate × (analog + digital/8)), `wire_mb_s` (bytes
   received / signal time), `host_mb_s` (bytes received / wall time), `backlog_mb` (the loop ring's fill at the stop),
   the queue depth used and the wall time. The three rates differ on purpose; see the README section for why.
+  `wire_mb_s` counts bytes the **host received** against the signal duration — it is not a bus-analyzer measurement of
+  the link, so it checks the data geometry and the application-level rate, not USB bus utilisation.
 - `usb-transfers.csv` — the raw pacing evidence for one configuration: `t_s` since the first completion, `bytes`
   of that transfer, and how many reads were still queued when it completed.
 - `signal-quality.csv` — one row per capture: round, configuration, applied rate, sigma, amplitude, even/odd, mod-4,
   10–90 % rise, 50 % crossing position.
+
+## Each run writes a manifest
+
+`manifest-<script>.json` records the session id, the unit (model, firmware, panel, FPGA, link speed), the kernel and
+platform, the git commit, the SHA-256 prefixes of the script and of `bench.json`, and the arguments. Without it two
+CSV files cannot be told apart from two different units or script versions.
+
+The generator is handed back at the end of both scripts (`tests/support/bench.py:restore_or_park`): the state found
+at the start is restored, and if that fails the output is parked at 0 V and the script exits non-zero.
 
 ## Caveats
 

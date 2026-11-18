@@ -1,8 +1,10 @@
 # Signal quality vs. the channel configuration (measured 2026-11-18)
 
 The question: **at the same per-channel sample rate**, does enabling more channels change what the scope measures on
-one channel? Answer: no above two channels (differences at or below 0.15 LSB); the one-channel mode is a different
-acquisition path — 1.2 LSB higher gain, 0.5 LSB of interleave mismatch, 0.25 LSB lower noise.
+one channel? Answer: the differences are real but stay below a quarter of one code, and their size moves between
+sessions: two to four analog channels cost **+0.14 .. +0.21 mV of sigma** (0.08-0.12 LSB) and the eight digital
+channels cost **-0.03 .. -0.04 mV** (indistinguishable from zero). The one-channel mode is a different acquisition
+path — 1.28 LSB higher gain, 0.5 LSB of interleave mismatch.
 
 The control variable matters. This page varies the **channel count at a fixed rate** and compares only where the
 *applied* rates match (a request of 50 MSa/s lands on 40 and 100 on 80 for a single channel). The other axis — the
@@ -25,36 +27,41 @@ configuration costs.
 
 ## Results
 
-Absolute medians of the 300 records per configuration, with a bootstrap 95 % interval (mV):
+Absolute medians of the 300 records per configuration of the shipped run (session 20261118-172247), with a
+bootstrap 95 % interval (mV):
 
 | configuration | applied rate | sigma | amplitude | even/odd | mod-4 | rise (ns) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 analog | 400 MSa/s | 2.06 [2.03, 2.10] | 214.26 | 0.07 | **1.02** | 85 |
-| 1 analog | 200 MSa/s | 2.07 [2.04, 2.10] | 214.56 | **1.02** | 1.04 | 85 |
-| 2 analog | 200 MSa/s | 2.43 [2.41, 2.44] | 212.43 | 0.23 | 0.27 | 85 |
-| 2 analog | 100 MSa/s | 2.43 [2.41, 2.45] | 212.33 | 0.02 | 0.07 | 90 |
-| 4 analog | 100 MSa/s | 2.60 [2.59, 2.63] | 212.59 | 0.02 | 0.07 | 90 |
-| 4 analog + 8 digital | 100 MSa/s | 2.59 [2.57, 2.60] | 212.59 | 0.02 | 0.07 | 90 |
+| 1 analog | 400 MSa/s | 1.92 [1.87, 1.94] | 214.25 | 0.07 | **0.95** | 85 |
+| 1 analog | 200 MSa/s | 1.94 [1.90, 1.97] | 214.56 | **0.95** | 0.97 | 85 |
+| 2 analog | 200 MSa/s | 2.27 [2.25, 2.29] | 212.36 | 0.17 | 0.19 | 85 |
+| 2 analog | 100 MSa/s | 2.23 [2.21, 2.26] | 212.34 | 0.01 | 0.06 | 90 |
+| 4 analog | 100 MSa/s | 2.44 [2.41, 2.47] | 212.58 | 0.01 | 0.06 | 90 |
+| 4 analog + 8 digital | 100 MSa/s | 2.41 [2.38, 2.44] | 212.60 | 0.01 | 0.06 | 90 |
+
+The absolute level is session specific: four 300-round sessions gave 1.92-2.06 (1 analog), 2.23-2.43 (2 analog) and
+2.41-2.60 mV (4 analog) — up to 15 % apart. That is why the results below are paired differences, never absolute
+levels.
 
 Paired differences within a round (later minus earlier; an interval that excludes 0 is resolvable):
 
 | from | to | sigma | in LSB | amplitude | in LSB |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 1 analog @200 | 2 analog @200 | +0.35 [+0.32, +0.40] | 0.21 | -2.13 [-2.14, -2.12] | 1.25 |
-| 2 analog @100 | 4 analog @100 | +0.19 [+0.15, +0.22] | 0.11 | +0.26 [+0.25, +0.28] | 0.15 |
-| 4 analog @100 | 4 analog + 8 digital @100 | -0.04 [-0.06, -0.01] | 0.02 | +0.00 [-0.01, +0.01] | 0.00 |
-| 1 analog @200 | 1 analog @400 | -0.01 [-0.05, +0.02] | 0.01 | -0.31 [-0.32, -0.30] | 0.18 |
+| 1 analog @200 | 2 analog @200 | +0.25 [+0.19, +0.28] | 0.15 | -2.18 [-2.20, -2.17] | 1.28 |
+| 2 analog @100 | 4 analog @100 | +0.14 [+0.09, +0.19] | 0.08 | +0.24 [+0.23, +0.25] | 0.14 |
+| 4 analog @100 | 4 analog + 8 digital @100 | -0.03 [-0.05, -0.01] | 0.02 | +0.01 [-0.01, +0.02] | 0.01 |
+| 1 analog @200 | 1 analog @400 | +0.01 [-0.03, +0.05] | 0.01 | -0.32 [-0.33, -0.31] | 0.19 |
 
-With 1800 records the digital-bank difference (-0.04 mV) no longer straddles zero — that is the resolution of the
-measurement, not an effect: it is 0.02 LSB.
+These intervals are the within-session ones; the between-session spread is larger (next section), so a result is
+quoted as a range over sessions rather than as one interval.
 
 ## What it means
 
-1. **Adding the eight digital channels costs nothing** on the analog channel: sigma -0.04 mV (0.02 LSB),
-   amplitude +0.00 mV.
-2. **Two to four analog channels: resolvable but sub-code.** sigma +0.19 mV (0.11 LSB, interval excludes 0) and
-   amplitude +0.26 mV (0.15 LSB).
-3. **The one-channel mode is a different acquisition path.** Amplitude is **1.25 LSB (1.0 %) higher**, sigma 0.25 LSB
+1. **Adding the eight digital channels costs nothing measurable** on the analog channel: sigma -0.03 to -0.04 mV
+   across sessions (0.02 LSB), amplitude +0.00 to +0.01 mV.
+2. **Two to four analog channels: resolvable, sub-code, and always positive.** sigma +0.14 to +0.21 mV (0.08-0.12 LSB)
+   in every session measured, amplitude +0.24 to +0.26 mV (0.14-0.15 LSB).
+3. **The one-channel mode is a different acquisition path.** Amplitude is **1.28 LSB (1.0 %) higher**, sigma 0.22 LSB
    lower, and the interleave mismatch is **0.95 mV (0.56 LSB)** where the multi-channel records show 0.02–0.25 mV.
    At 200 MSa/s it sits in the even/odd (lag 2) means; at 400 MSa/s it moves to the mod-4 means (lag 2 is 0.06) —
    a 2-way and a 4-way interleaved converter respectively. That is an inference from the group means, not a
@@ -63,11 +70,19 @@ measurement, not an effect: it is 0.02 LSB.
 
 ## Repeatability, stated so the numbers are not over-read
 
-- Three sessions (60, 60 and 300 rounds) give the same paired differences: **+0.42 / +0.52 / +0.35 mV** for one to two
-  analog channels, **+0.21 / +0.27 / +0.19 mV** for two to four, and **0.00 / -0.02 / -0.04 mV** for the digital bank;
-  the amplitudes agree to 0.01 mV (-2.12 / -2.13 / -2.13).
-- The **absolute** medians move between sessions by up to 4 % (the 4-analog sigma was 2.71, 2.61 and 2.60 mV in the
-  three sessions), which is why only paired differences are quoted as results.
+Four sessions, each with every configuration once per round, give the paired differences below (median, mV):
+
+| session | rounds | 1 → 2 analog | 2 → 4 analog | 4 analog → + 8 digital | amplitude 1 → 2 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2026-11-18 a | 60 | +0.42 | +0.21 | +0.00 | -2.12 |
+| 2026-11-18 b | 300 | +0.35 | +0.19 | -0.04 | -2.13 |
+| 2026-11-18 c | 300 | +0.42 | +0.21 | +0.01 | -2.12 |
+| 2026-11-18 d (shipped) | 300 | +0.25 | +0.14 | -0.03 | -2.18 |
+
+The between-session spread of the effect (+0.25 to +0.42 mV for one to two channels) is larger than the
+within-session interval (+-0.05 mV), so the honest statement is the range, not one interval: the effect is always
+positive, its size depends on the session (front-end and generator conditions). Absolute sigma moves 15 % between
+sessions for the same reason.
 - The per-record sigma has a heavy tail: a robust scale flags ~10 % of the records well above the median (up to 9 mV
   during a transient disturbance). That is why the summary uses medians and bootstrap intervals.
 - Only the declared channel carries a signal. The open inputs see about 60 mVpp of the driven square (measured

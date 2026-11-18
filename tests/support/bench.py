@@ -124,3 +124,65 @@ def restore_awg(scope, before):
         scope.awg_set(before['wave'], before['freq_hz'], high, low,
                       before.get('duty_pct', 50.0), before.get('phase_deg', 0.0))
     return 'restored (%s)' % (mode or 'continuous')
+
+
+def restore_or_park(scope, before):
+    """Hand the generator back the way it was found; park it at 0 V when that fails.
+
+    The hardware tests do this in their session fixture; a research script that drives the generator has to do it too,
+    otherwise the bench is left with whatever level the experiment used. Returns True when the state came back.
+    """
+    try:
+        restore_awg(scope, before)
+        return True
+    except Exception as e:                                   # noqa: BLE001 - reported after parking the output
+        print('AWG restore failed (%r): parking the output at 0 V' % (e,), file=sys.stderr)
+        try:
+            scope.awg_off()
+        except Exception:                                    # noqa: BLE001
+            pass
+        return False
+
+
+def write_manifest(out_dir, scope, script, args, extra=None):
+    """Where and how the numbers were taken: device, host, script and bench declaration, plus a session id.
+
+    The CSVs of a research run are only comparable when the unit, the script and the declaration are named, so every
+    run writes one manifest.json next to them.
+    """
+    import hashlib
+    import json
+    import platform
+    import subprocess
+    import time
+
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # <repo>/tests/support
+
+    def sha(path):
+        try:
+            with open(path, 'rb') as f:
+                return hashlib.sha256(f.read()).hexdigest()[:16]
+        except OSError:
+            return None
+
+    try:
+        dev = scope.info()['device']
+    except Exception:                                        # noqa: BLE001 - a manifest never fails the run
+        dev = {}
+    try:
+        git = subprocess.run(['git', '-C', repo, 'rev-parse', 'HEAD'], capture_output=True,
+                            text=True).stdout.strip()
+    except Exception:                                        # noqa: BLE001
+        git = None
+    doc = {'session': time.strftime('%Y%m%d-%H%M%S'), 'date': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+           'script': os.path.basename(script), 'script_sha256': sha(script),
+           'bench_json_sha256': sha(DECLARATION), 'git': git or None,
+           'kernel': platform.release(), 'platform': platform.platform(), 'python': platform.python_version(),
+           'device': {k: dev.get(k) for k in ('model', 'fw_version', 'panel_version', 'fpga_bin_version',
+                                              'usb_speed')},
+           'args': {k: v for k, v in vars(args).items() if k != 'out_dir'}, 'extra': extra or {}}
+    os.makedirs(out_dir, exist_ok=True)
+    name = 'manifest-%s.json' % os.path.splitext(os.path.basename(script))[0]
+    with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f:
+        json.dump(doc, f, indent=1, sort_keys=True)
+    return doc

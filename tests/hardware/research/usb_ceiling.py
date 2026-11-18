@@ -107,9 +107,12 @@ def main(argv=None):
 
     scope = scopemod.Scope()
     scope.open()
+    before = scope.awg_status()                  # the generator is write-only: restore what we found
     try:
         link = benchmod.Bench(benchmod.load()).link('awg_to_a0')
         link.program(scope)
+        benchmod.write_manifest(args.out_dir, scope, __file__, args,
+                                {'configs': [c[0] for c in CONFIGS], 'seconds': args.seconds})
         print('matrix:', file=sys.stderr)
         rows = matrix(scope, args.seconds)
         write_csv(os.path.join(args.out_dir, 'usb-ceiling.csv'), rows)
@@ -128,8 +131,9 @@ def main(argv=None):
                 write_csv(os.path.join(args.out_dir, 'usb-transfers.csv'),
                           [{'t_s': round(t - t0, 6), 'bytes': n, 'inflight': i} for t, n, i in trace])
     finally:
+        restored = benchmod.restore_or_park(scope, before)
         scope.close()
-    return 0
+    return 0 if restored else 1
 
 
 if __name__ == '__main__':
