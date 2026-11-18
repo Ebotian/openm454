@@ -113,6 +113,7 @@ def decode_frames(raw, geom, hal):
     """
     from . import packet
     layout = _layout(geom)
+    times = getattr(raw, 'frame_times', None) or []      # host arrival of each transfer (acquire.RawCapture)
     out = []
     for i, frame in enumerate(getattr(raw, 'frames', []) or []):
         # one decode per frame; only the first frame follows a previous acquisition, so only it has stale levels
@@ -121,6 +122,8 @@ def decode_frames(raw, geom, hal):
         trig = packet.trigger_index(tail, layout) if (tail is not None and layout.pretrig is not None) else None
         item = _decode_bytes(bytes(frame), geom, hal, layout, trig, dec=dec)
         item['trig_index'] = trig
+        if i < len(times):              # absent for a replay/golden fixture: the frames have no arrival time
+            item['host_s'] = times[i]
         out.append(item)
     return out
 

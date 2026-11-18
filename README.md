@@ -145,13 +145,22 @@ Measured on the M454 over USB 3 with every input on a 1 kHz square, every period
   `acq.trigger_check` is `unchecked` with `acq.trigger_check_reason`.
 - Each frame is decoded on its own. The JSON has `acq.repeat_frames` (asked) and `acq.frames` (collected) and, with
   more than one frame, after `files`/`hints`/`warnings`, `frames_summary` over every frame (`count`, `listed`, `without_trig_index`,
-  `without_trig_index_first`, and `analog` per channel with `vpp_v` / `vmin_v` / `vmax_v` as `{min, median, max}`)
-  and `frames`, the first 100 frames only, each with `index`, `trig_index` and `analog` basics. `analyze` of a repeat
-  `.npz` reports the same. `Capture.frames` holds one dict per frame (analog, digital, `trig_index`).
+  `without_trig_index_first`, `host_s`, and `analog` per channel with `vpp_v` / `vmin_v` / `vmax_v` as
+  `{min, median, max}`) and `frames`, the first 100 frames only, each with `index`, `trig_index`, `host_s` and
+  `analog` basics. `analyze` of a repeat `.npz` reports the same. `Capture.frames` holds one dict per frame
+  (analog, digital, `trig_index`, `host_s`).
+- `host_s` is when the frame arrived at the host: seconds since the start write, on the monotonic clock, stamped as
+  the transfer completes, so USB transport and host scheduling are included. `frames_summary.host_s` carries
+  `first`, `last` and `interval_ms` (`min` / `median` / `max` between consecutive arrivals). It separates the two
+  ways a frame can look odd: the device sampled a stale value (the frame content is wrong, the arrival is on time)
+  and the host read it late (a long or bunched interval, with several transfers delivered in one event-loop pass).
+  It is a host measurement, not a device one: the frame's own `trig_index` and content stay the authority for what
+  the device acquired.
 - The `.npz` keeps every frame (with more than one; `--repeat 1` saves a plain single capture): `analog_A1` / `digital_D0` hold frame 0 as for a single capture, `frames_analog_A1`
   is (frames, samples) uint8 codes, `frames_digital_D0` is (frames, ceil(samples/8)) uint8, each row packed with
-  `np.packbits(bitorder='little')` (not frames x samples), plus meta `frames_samples` and `frame_trig_index`;
-  `load_capture` unpacks them. `--measure`, `--edges`, `--dump`, `--decode`, the JSON analog/digital blocks and the
+  `np.packbits(bitorder='little')` (not frames x samples), plus meta `frames_samples`, `frame_trig_index` and
+  `frame_host_s` (one arrival time per frame, absent when the frames were replayed from a fixture); `load_capture`
+  unpacks them and restores `host_s` on every frame. `--measure`, `--edges`, `--dump`, `--decode`, the JSON analog/digital blocks and the
   PNG describe frame 0 only. Bytes a frame carries beyond its record are device buffer content, not signal, and are
   cut by the frame's tail.
 - Measured on one Linux unit over USB 3 (2026-11-16, 1 analog channel, default queue depth): 5 us window at

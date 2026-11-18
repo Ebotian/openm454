@@ -435,18 +435,24 @@ def _frame_stats(cap, f):
 def _frame_summary(cap, listed=FRAMES_LISTED):
     """Repeat run -> (the first `listed` frames' basics, a summary over every frame). The JSON's own `analog` block,
     --measure and the PNG describe frame 0 only; the .npz keeps every frame. The summary: count, listed, per analog
-    channel the min/median/max over the frames of vpp_v/vmin_v/vmax_v, and the frames without a trigger index."""
+    channel the min/median/max over the frames of vpp_v/vmin_v/vmax_v, the frames without a trigger index, and the
+    host arrival time of the frames (s since the start write, monotonic; the interval_ms block is the spacing
+    between consecutive arrivals, which separates a late host read from a stale device sample)."""
     import numpy as np
     frames = cap.frames or []
-    items, cols = [], {}
+    items, cols, host = [], {}, []
     for i, f in enumerate(frames):
         stats = _frame_stats(cap, f)
         for ch, m in stats.items():
             c = cols.setdefault(ch, {'vpp_v': [], 'vmin_v': [], 'vmax_v': []})
             for k in c:
                 c[k].append(m[k])
+        if f.get('host_s') is not None:
+            host.append(f['host_s'])
         if i < listed:
             item = {'index': i, 'trig_index': f.get('trig_index')}
+            if f.get('host_s') is not None:
+                item['host_s'] = round(f['host_s'], 6)
             if stats:
                 item['analog'] = stats
             items.append(item)
@@ -454,6 +460,12 @@ def _frame_summary(cap, listed=FRAMES_LISTED):
     summary = {'count': len(frames), 'listed': len(items), 'without_trig_index': len(no_trig)}
     if no_trig:
         summary['without_trig_index_first'] = no_trig[:FRAMES_NO_TRIG_LISTED]
+    if len(host) == len(frames) and len(host) > 1:
+        d = np.diff(host)
+        summary['host_s'] = {'first': round(host[0], 6), 'last': round(host[-1], 6),
+                             'interval_ms': {'min': round(float(d.min()) * 1e3, 4),
+                                             'median': round(float(np.median(d)) * 1e3, 4),
+                                             'max': round(float(d.max()) * 1e3, 4)}}
     if cols:
         summary['analog'] = {ch: {k: {'min': round(float(np.min(v)), 4), 'median': round(float(np.median(v)), 4),
                                       'max': round(float(np.max(v)), 4)} for k, v in c.items()}

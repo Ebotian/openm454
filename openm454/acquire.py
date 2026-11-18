@@ -137,6 +137,8 @@ class RawCapture:
         self.data = bytearray()
         self.n_data = 0           # data bytes received (also counted when keep_data=False leaves data empty)
         self.frames = []          # repeat mode: one entry per data transfer (frame data + 4 KiB tail)
+        self.frame_times = []     # repeat mode: host arrival of each transfer, seconds since p_start (monotonic)
+        self.p_start = None       # perf_counter of the start write: the clock base of frame_times
         self.t_start = None
         self.t_head = None
         self.t_done = None
@@ -391,6 +393,7 @@ class Engine:
                     t.write(regs.CTRL, 0x0001)      # Transport.running is set as this is sent
                 time.sleep(START_SETTLE)
                 cap.t_start = time.time()
+                cap.p_start = time.perf_counter()
                 error = self._collect(cap, need_bytes, trigger_timeout, collect_timeout, repeat_frames, on_chunk,
                                       stop_flag, poll, keep_data)
             except DscopeError as e:            # failed start write or progress-poll handshake
@@ -457,7 +460,10 @@ class Engine:
                 elif self._full:
                     continue                # zero padding after the record: discarded
                 elif repeat_frames:
+                    if cap.p_start is None:         # a caller driving _collect without the start write
+                        cap.p_start = time.perf_counter()
                     cap.frames.append(buf)
+                    cap.frame_times.append(time.perf_counter() - cap.p_start)
                 else:
                     cap.n_data += len(buf)
                     if keep_data:
