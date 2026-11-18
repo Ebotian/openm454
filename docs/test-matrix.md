@@ -4,22 +4,27 @@ What the suite is supposed to cover, and which layer covers it. A critical row h
 layers: an example/golden oracle (left) and a generated one (right). Update this table when a behavior is added;
 `docs/test-report.md` records the measured numbers.
 
-| behavior | unit | property | stateful | golden | integration | fuzz | spec |
-| --- | :--: | :--: | :--: | :--: | :--: | :--: | :--: |
-| channel counts (1/2/4 analog, 1/2/4/8 digital, permutations) | ✅ | ✅ | ✅ | ✅ |  |  |  |
-| timing: default profile, floor profile, fixed keys refused, untriggered 100 ms stop | ✅ | ✅ | ✅ |  |  |  |  |
-| trigger: none, rise/fall, any, normal/auto/force, holdoff | ✅ |  | ✅ | ✅ |  |  |  |
-| trigger: a misfire is re-armed and the retry is returned; a triggered run without a head is `TIMEOUT_NO_TRIGGER` |  |  | ✅ |  | ✅ |  | ✅ |
-| repeat: 0/1/N frames, forced vs triggered, plan limits, mode-3 refusal | ✅ |  | ✅ | ✅ |  |  |  |
-| repeat: one start, the frames are neither checked nor re-armed |  |  | ✅ |  |  |  |  |
-| repeat: every frame keeps its host arrival time (npz meta `frame_host_s`, restored by `load_capture`, `frames_summary.host_s`; absent on a replay) |  | ✅ | ✅ |  |  |  |  |
-| stream/log: repeat is refused | ✅ |  | ✅ |  | ✅ |  | ✅ |
-| stream/log: live vs record-first, chunk sizes, save/load | ✅ |  |  |  | ✅ |  |  |
-| packet: head/tail, first vs later frame, block sizes, endianness/permutation, malformed input | ✅ | ✅ |  | ✅ |  | ✅ |  |
-| setup/stop: setup program, start, stop, cross-table caches, repeated runs |  |  | ✅ | ✅ |  |  |  |
-| stop: an untriggered stop leaves the run quiet (the 100 ms hold is in `acquire`) |  |  | ✅ |  |  |  | ✅ |
-| interfaces: CLI, MCP, API, save/load, info/watch/log | ✅ | ✅ |  |  | ✅ |  |  |
-| hardware: real M454 golden traces (`hw` marker; no pytest hardware test exists yet) |  |  |  |  |  |  |  |
+| behavior | unit | property | stateful | golden | integration | fuzz | spec | hw |
+| --- | :--: | :--: | :--: | :--: | :--: | :--: | :--: | :--: |
+| channel counts (1/2/4 analog, 1/2/4/8 digital, permutations) | ✅ | ✅ | ✅ | ✅ |  |  |  |  |
+| timing: default profile, floor profile, fixed keys refused, untriggered 100 ms stop | ✅ | ✅ | ✅ |  |  |  |  |  |
+| trigger: none, rise/fall, any, normal/auto/force, holdoff | ✅ |  | ✅ | ✅ |  |  |  |  |
+| trigger: a misfire is re-armed and the retry is returned; a triggered run without a head is `TIMEOUT_NO_TRIGGER` |  |  | ✅ |  | ✅ |  | ✅ |  |
+| repeat: 0/1/N frames, forced vs triggered, plan limits, mode-3 refusal | ✅ |  | ✅ | ✅ |  |  |  |  |
+| repeat: one start, the frames are neither checked nor re-armed |  |  | ✅ |  |  |  |  |  |
+| repeat: every frame keeps its host arrival time (npz meta `frame_host_s`, restored by `load_capture`, `frames_summary.host_s`; absent on a replay) |  | ✅ | ✅ |  |  |  |  | ✅ |
+| stream/log: repeat is refused | ✅ |  | ✅ |  | ✅ |  | ✅ |  |
+| stream/log: live vs record-first, chunk sizes, save/load | ✅ |  |  |  | ✅ |  |  |  |
+| packet: head/tail, first vs later frame, block sizes, endianness/permutation, malformed input | ✅ | ✅ |  | ✅ |  | ✅ |  |  |
+| setup/stop: setup program, start, stop, cross-table caches, repeated runs |  |  | ✅ | ✅ |  |  |  |  |
+| stop: an untriggered stop leaves the run quiet (the 100 ms hold is in `acquire`) |  |  | ✅ |  |  |  | ✅ |  |
+| interfaces: CLI, MCP, API, save/load, info/watch/log | ✅ | ✅ |  |  | ✅ |  |  |  |
+| bench wiring: the declaration itself (complete, physically consistent, only declared links used) | ✅ |  |  |  |  |  |  |  |
+| bench wiring: the connected scope is the declared model; the declared link shows the declared signal |  |  |  |  |  |  |  | ✅ |
+| hw functional: capture modes, rates, trigger paths, and the real faults (BUSY, overdrive, no trigger, stop while streaming) all recover to a usable scope |  |  |  |  |  |  |  | ✅ |
+| hw soak: long runs keep counting, stamping and releasing, without drift or growth (tiers 5/10/60 min, `--soak-seconds`) |  |  |  |  |  |  |  | ✅ |
+| hw manual (TODO): unplug/replug, suspend/resume, usbfs exhaustion, power cycle — listed in `bench.json`, not implemented |  |  |  |  |  |  |  |  |
+| hardware: real M454 golden traces (recorded bench runs, not a CI layer) |  |  |  |  |  |  |  |  |
 
 ## Notes on the marks
 
@@ -42,6 +47,18 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   (non-repeat) path.
 - **channel counts and fuzz:** both fuzz targets use one fixed 2 analog / 2 digital layout, so they say nothing about
   other channel counts; the fuzz mark on the packet row is about the byte surface, not the layout.
-- **hardware:** `test_selftest` is an offline fake-scope test and lives in `tests/unit/`; there is no pytest test
-  that needs the scope today, so the hardware row is documentation of recorded bench runs, not a CI layer.
+- **hw:** `tests/hardware` runs against the real M454 and is split in two groups by marker: `hw and not hwsoak`
+  is the functional group (40 tests, 17.0 s) and `hwsoak` the long-run group (4 runs, tiers 5/10/60 min, overridable
+  with `--soak-seconds`). One device, one process: both need `-n 0` (the conftest fails loudly under xdist). The
+  default marker set and CI never select them; only `OPENM454_NO_USB` skips — a busy or missing scope is an error,
+  and the session fixture hands the generator back mode by mode (levels, duty and phase included) or parks it. The
+  long-run steady-RSS check is tri-state (`pass` / `fail` / `insufficient_data`): a short run says it cannot judge
+  instead of counting as verified. The suite
+  does not carry its wiring in constants: `tests/hardware/bench.json` declares every link (source, sink, probe,
+  volts/div, offset, signal, tolerance) plus the soak budgets and the manual cases,
+  `tests/unit/test_bench_declaration.py` checks the declaration offline — complete, physically consistent, no test
+  using an undeclared link — and the hw tests take both the capture configuration and the expected measurement from
+  it, so a differently wired bench fails with the file named.
+- **old hardware row:** `test_selftest` is an offline fake-scope test and lives in `tests/unit/`; the last row
+  stays documentation of recorded bench runs, not a CI layer.
 - **selftest** appears in the interfaces row because it is a CLI/MCP-facing command with an offline oracle.

@@ -1,0 +1,68 @@
+{
+  "_readme": "The bench the hw tests run on, as data: which output drives which input, with the probe/vdiv/offset the capture must be configured for and the signal it must then see. Rewiring the bench means editing this file, never a test. A link that is not declared here is not guessed: the test that needs it skips and names what is declared. Scope today: the awg_to_a0 scenario (one generator into one analog channel); the other links are listed under undeclared until tests use them. Checked offline by tests/unit/test_bench_declaration.py; used by tests/hardware (markers: hw, hwsoak).",
+  "scope": {
+    "model": "DSCope M454"
+  },
+  "links": {
+    "awg_to_a0": {
+      "summary": "M454 AWG (MCX output) straight into analog channel A0, direct coax, no probe, no divider",
+      "source": "awg",
+      "sink": "A0",
+      "probe": 1,
+      "vdiv_v": 1,
+      "offset_v": 1.5,
+      "signal": {
+        "wave": "square",
+        "freq_hz": 1000,
+        "high_v": 3,
+        "low_v": 0,
+        "duty_pct": 50
+      },
+      "_tolerance_note": "level_v is the absolute slack on the declared levels: it covers the generator's own accuracy and an uncalibrated 8-bit ADC (measured 3.13 Vpp for a 3 V program), while a wrong probe or a divider is a factor of 10 out (2.7 V) and still fails",
+      "tolerance": {
+        "freq_rel": 0.02,
+        "level_v": 0.3,
+        "duty_abs_pct": 2
+      }
+    }
+  },
+  "undeclared": [
+    "calibration output (1 kHz, front panel pin) -> any channel",
+    "AWG -> any digital input",
+    "external signal source -> any channel"
+  ],
+  "soak": {
+    "_readme": "Budgets and thresholds of the long-run group. Durations are tiers; --soak-seconds overrides the tier for one run. Every number here is a check the run asserts, not a comment. rss_growth_mib bounds the whole run (it includes the allocator warm-up: measured 26 MiB over the first 15 open/close cycles); rss_steady_mib is the leak check, taken inside the last quarter of the run.",
+    "tiers": {
+      "5min": 300,
+      "10min": 600,
+      "1h": 3600
+    },
+    "default": "10min",
+    "repeat_frames": 512,
+    "repeat_window_s": 0.002,
+    "stream_window_s": 0.2,
+    "stream_every_s": 0.05,
+    "log_rate_hz": 1000000,
+    "log_record_s": 5,
+    "max_gap_ms": 50,
+    "drift_tolerance": 0.01,
+    "rss_growth_mib": 64,
+    "open_time_drift": 0.2,
+    "artifact_dir": "re/soaks",
+    "require": {
+      "free_ram_mib": 512,
+      "free_disk_mib": 1024
+    },
+    "rss_steady_mib": 8,
+    "rss_steady_min_samples": 40,
+    "disk_margin": 1.25
+  },
+  "manual": [
+    "unplug / replug the USB cable while a run is active, then `openm454 recover`",
+    "suspend and resume the host in the middle of a stream",
+    "exhaust the Linux usbfs budget (usbfs_memory_mb) and check the NO_MEM hint path",
+    "power-cycle the scope and verify the next open reloads the FPGA",
+    "reprogram the generator while a run is armed (the stop handshake owns the link: refused by design)"
+  ]
+}
