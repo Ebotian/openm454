@@ -8,7 +8,7 @@ base measurement is 823 passed, 554 skipped, 86.40 s, 26 test files, 8396 test L
 
 | suite | command | result | wall time |
 | --- | --- | --- | ---: |
-| fast (PR) | `python -m pytest tests` | 852 passed, 554 skipped | **14.6 s** |
+| fast (PR) | `python -m pytest tests` | 858 passed, 554 skipped | **14.6 s** |
 | clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 858 passed | **14.7 s** |
 | recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 2.0 s |
 | full offline | `python -m pytest tests -m "not hw"` | 859 passed, 554 skipped | **65.2 s** |
@@ -22,7 +22,7 @@ The fast suite is the default marker set (`not hw and not slow`) under `pytest-x
 the full suite adds the `slow` test. Every one of the 554 skips is a `traces` test: it compares against the DSWave
 recording in `re/traces/S01_warm`, which .gitignore keeps out of the repository (the recorded runs contain the
 device's security key). No firmware test skips. `-m "not traces"` therefore runs the software suite with no skips
-at all (852 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
+at all (858 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
 sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `time_step` line depends on the state
 before it); it carries the marker so the software suite has no skips at all.
 

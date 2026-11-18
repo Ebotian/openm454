@@ -106,8 +106,9 @@ lowest such measurement is used (the readout follows the channel set far more th
 measurement at all falls back to the 190 MB/s planning ceiling. A run still probes the exact configuration before it
 starts; the plan says `provisional` while it does.
 
-What a channel configuration costs the signal itself is a separate question, measured the same way (60 records per
-configuration, rate-matched, 95 % intervals): see [docs/SIGNAL-QUALITY.md](docs/SIGNAL-QUALITY.md). Above two analog
+What a channel configuration costs the signal itself is a separate question, measured the same way (300 records per
+configuration in four sessions, rate-matched, paired differences with 95 % intervals): see
+[docs/SIGNAL-QUALITY.md](docs/SIGNAL-QUALITY.md). Above two analog
 channels the differences stay below one code (1 LSB = 1.7 mV at 0.05 V/div); enabling the eight digital channels
 changes nothing measurable; the one-channel mode is a different acquisition path (1.0 % higher gain, 0.5 LSB
 interleave mismatch, 0.5 LSB lower noise).
