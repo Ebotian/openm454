@@ -19,37 +19,40 @@ configuration costs.
 - 10 ms records, triggered on the rise at 0.10 V, so the edge sits at t = 0.
 - Per record: flat-region sigma (max of the two plateaus), the amplitude between plateaus, the even/odd and mod-4
   group means of the high plateau (interleave mismatch), 10–90 % rise, 50 % crossing position.
-- **60 rounds, every configuration once per round in rotation.** The rotation is the point: the absolute level drifts
+- **300 rounds, every configuration once per round in rotation.** The rotation is the point: the absolute level drifts
   between sessions (two runs of this same script moved the median sigma of the 4-analog set from 2.71 to 2.61 mV,
   ~4 %), so only differences taken **inside a round** are reproducible.
 
 ## Results
 
-Absolute medians of the 60 records per configuration, with a bootstrap 95 % interval (mV):
+Absolute medians of the 300 records per configuration, with a bootstrap 95 % interval (mV):
 
 | configuration | applied rate | sigma | amplitude | even/odd | mod-4 | rise (ns) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 analog | 400 MSa/s | 1.99 [1.96, 2.04] | 214.20 | 0.06 | **0.95** | 82.5 |
-| 1 analog | 200 MSa/s | 2.02 [1.97, 2.08] | 214.51 | **0.95** | 0.98 | 85 |
-| 2 analog | 200 MSa/s | 2.44 [2.40, 2.53] | 212.38 | 0.21 | 0.25 | 85 |
-| 2 analog | 100 MSa/s | 2.40 [2.36, 2.43] | 212.29 | 0.02 | 0.07 | 90 |
-| 4 analog | 100 MSa/s | 2.61 [2.57, 2.64] | 212.55 | 0.02 | 0.07 | 90 |
-| 4 analog + 8 digital | 100 MSa/s | 2.58 [2.56, 2.65] | 212.54 | 0.02 | 0.08 | 90 |
+| 1 analog | 400 MSa/s | 2.06 [2.03, 2.10] | 214.26 | 0.07 | **1.02** | 85 |
+| 1 analog | 200 MSa/s | 2.07 [2.04, 2.10] | 214.56 | **1.02** | 1.04 | 85 |
+| 2 analog | 200 MSa/s | 2.43 [2.41, 2.44] | 212.43 | 0.23 | 0.27 | 85 |
+| 2 analog | 100 MSa/s | 2.43 [2.41, 2.45] | 212.33 | 0.02 | 0.07 | 90 |
+| 4 analog | 100 MSa/s | 2.60 [2.59, 2.63] | 212.59 | 0.02 | 0.07 | 90 |
+| 4 analog + 8 digital | 100 MSa/s | 2.59 [2.57, 2.60] | 212.59 | 0.02 | 0.07 | 90 |
 
 Paired differences within a round (later minus earlier; an interval that excludes 0 is resolvable):
 
 | from | to | sigma | in LSB | amplitude | in LSB |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 1 analog @200 | 2 analog @200 | +0.42 [+0.33, +0.48] | 0.25 | -2.12 [-2.15, -2.10] | 1.25 |
-| 2 analog @100 | 4 analog @100 | +0.21 [+0.15, +0.26] | 0.12 | +0.26 [+0.24, +0.29] | 0.15 |
-| 4 analog @100 | 4 analog + 8 digital @100 | +0.00 [-0.04, +0.04] | 0.00 | -0.02 [-0.04, +0.01] | 0.01 |
-| 1 analog @200 | 1 analog @400 | -0.02 [-0.07, +0.05] | 0.01 | -0.30 [-0.32, -0.28] | 0.18 |
+| 1 analog @200 | 2 analog @200 | +0.35 [+0.32, +0.40] | 0.21 | -2.13 [-2.14, -2.12] | 1.25 |
+| 2 analog @100 | 4 analog @100 | +0.19 [+0.15, +0.22] | 0.11 | +0.26 [+0.25, +0.28] | 0.15 |
+| 4 analog @100 | 4 analog + 8 digital @100 | -0.04 [-0.06, -0.01] | 0.02 | +0.00 [-0.01, +0.01] | 0.00 |
+| 1 analog @200 | 1 analog @400 | -0.01 [-0.05, +0.02] | 0.01 | -0.31 [-0.32, -0.30] | 0.18 |
+
+With 1800 records the digital-bank difference (-0.04 mV) no longer straddles zero — that is the resolution of the
+measurement, not an effect: it is 0.02 LSB.
 
 ## What it means
 
-1. **Adding the eight digital channels costs nothing** on the analog channel: sigma +0.00 mV (interval straddles 0),
-   amplitude -0.02 mV.
-2. **Two to four analog channels: resolvable but sub-code.** sigma +0.21 mV (0.12 LSB, interval excludes 0) and
+1. **Adding the eight digital channels costs nothing** on the analog channel: sigma -0.04 mV (0.02 LSB),
+   amplitude +0.00 mV.
+2. **Two to four analog channels: resolvable but sub-code.** sigma +0.19 mV (0.11 LSB, interval excludes 0) and
    amplitude +0.26 mV (0.15 LSB).
 3. **The one-channel mode is a different acquisition path.** Amplitude is **1.25 LSB (1.0 %) higher**, sigma 0.25 LSB
    lower, and the interleave mismatch is **0.95 mV (0.56 LSB)** where the multi-channel records show 0.02–0.25 mV.
@@ -60,11 +63,13 @@ Paired differences within a round (later minus earlier; an interval that exclude
 
 ## Repeatability, stated so the numbers are not over-read
 
-- The **absolute** medians move between sessions: a previous 60-round run gave 2.00 / 2.52 / 2.45 / 2.73 / 2.71 mV
-  against 1.99 / 2.44 / 2.40 / 2.61 / 2.58 above. The **paired** differences reproduced to within 0.05 mV
-  (+0.42 → +0.52 for one to two channels, +0.21 → +0.27 for two to four, 0.00 → -0.02 for the digital bank).
-- The per-record sigma has a heavy tail: a robust scale flags ~10 of 60 records per configuration well above the
-  median (up to 9 mV during a transient disturbance). That is why the summary uses medians and bootstrap intervals.
+- Three sessions (60, 60 and 300 rounds) give the same paired differences: **+0.42 / +0.52 / +0.35 mV** for one to two
+  analog channels, **+0.21 / +0.27 / +0.19 mV** for two to four, and **0.00 / -0.02 / -0.04 mV** for the digital bank;
+  the amplitudes agree to 0.01 mV (-2.12 / -2.13 / -2.13).
+- The **absolute** medians move between sessions by up to 4 % (the 4-analog sigma was 2.71, 2.61 and 2.60 mV in the
+  three sessions), which is why only paired differences are quoted as results.
+- The per-record sigma has a heavy tail: a robust scale flags ~10 % of the records well above the median (up to 9 mV
+  during a transient disturbance). That is why the summary uses medians and bootstrap intervals.
 - Only the declared channel carries a signal. The open inputs see about 60 mVpp of the driven square (measured
   separately), independent of how many channels are enabled.
 - The 82–90 ns rise is the generator's edge, not the front end: nothing here measures the 50 MHz analog bandwidth.
@@ -72,11 +77,11 @@ Paired differences within a round (later minus earlier; an interval that exclude
 
 ## Reproduce
 
-`tests/hardware/research/signal_quality.py` runs the 60 rounds, writes `signal-quality.csv` (one row per capture:
+`tests/hardware/research/signal_quality.py` runs the rounds, writes `signal-quality.csv` (one row per capture:
 round, configuration, applied rate, sigma, amplitude, even/odd, mod-4, rise, edge position) and prints the per-config
 medians with bootstrap intervals plus the paired differences:
 
-    python tests/hardware/research/signal_quality.py --rounds 60
+    python tests/hardware/research/signal_quality.py --rounds 300      # ~7 min on one bench
 
 `tests/hardware/research/usb_ceiling.py` produces the readout-ceiling table and the transfer trace quoted in the
 README. Both are run by hand on a bench with the scope attached; neither is part of pytest.

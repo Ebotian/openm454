@@ -7,12 +7,12 @@ scope directly.
 | script | what it measures | output |
 | --- | --- | --- |
 | `usb_ceiling.py` | readout ceiling per channel configuration: logical rate, wire bytes, host-sustained rate, ring fill at the stop, and every EP 0x86 completion (bytes, reads still queued) for one configuration | `usb-ceiling.csv`, `usb-transfers.csv` |
-| `signal_quality.py` | per-record sigma, amplitude, even/odd and mod-4 group means (interleave), rise and 50 % crossing, 60 rounds with all configurations in rotation | `signal-quality.csv` plus a JSON summary with medians, bootstrap intervals and paired differences |
+| `signal_quality.py` | per-record sigma, amplitude, even/odd and mod-4 group means (interleave), rise and 50 % crossing, every configuration once per round in rotation (300 rounds shipped) | `signal-quality.csv` plus a JSON summary with medians, bootstrap intervals and paired differences |
 
 Run them on the bench (the scope attached, the generator wired to the declared input):
 
     python tests/hardware/research/usb_ceiling.py            # ~30 s
-    python tests/hardware/research/signal_quality.py --rounds 60   # ~80 s
+    python tests/hardware/research/signal_quality.py --rounds 300  # ~7 min, 1800 captures
 
 Both read the declared link from `tests/hardware/bench.json` (channel, probe) and set their own levels: the signal
 quality experiment deliberately uses 0.20 V at 0.05 V/div so that 1 LSB = 1.7 mV, which the 3 V declared signal could
