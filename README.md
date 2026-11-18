@@ -77,7 +77,7 @@ One Linux host: kernel 7.3.4, xHCI, usbfs 1000 MiB, the M454 on a 5 Gbps root-hu
 
 | what | measured |
 | --- | --- |
-| 1 analog at 400 MSa/s (400 MB/s produced) | **287 MB/s**, 194 MB of backlog in 1.2 s |
+| 1 analog at 400 MSa/s (400 MB/s produced) | **287 MB/s**; the planned 1.2 s window (480 MB) took 1.675 s of wall time to read and ended 194 MB behind |
 | 2 analog at 200 MSa/s (400 MB/s produced) | 287 MB/s |
 | 2 analog + 8 digital at 100 MSa/s (300 MB/s on the wire) | 287 MB/s |
 | 4 analog + 8 digital at 50 MSa/s (250.8 MB/s on the wire) | **207 MB/s**, 67 MB of backlog in 1.2 s |
@@ -85,12 +85,19 @@ One Linux host: kernel 7.3.4, xHCI, usbfs 1000 MiB, the M454 on a 5 Gbps root-hu
 | pacing at the ceiling | 1.05 MB every 3.68 ms (382 transfers in 1.396 s), 15 of the 16 queued reads always in flight |
 | unchanged by | kernel 7.2.15 -> 7.3.4, xHCI bus 004 -> 002, usbfs 16 -> 1000 MiB, read size 256 KiB .. 2 MiB, queue depth 4 .. 16 |
 
+A `log`/`record` duration is enforced on the **bytes read** (the planned window), not on the wall clock: when the
+produced rate is above the readout rate the run keeps going until the host has read that window, so the ring ends up
+holding `(D - R) x wall time` — 194 MB here, which is why the arithmetic `(400 - 287) x 1.2 s` does not reproduce it.
+
 Two different numbers, and the driver reports the second: the device's own wire rate is
 `rate x (analog channels + digital channels / 8)` bytes/s (measured against signal time: 200.1 MB/s for 4 analog at
 50 MSa/s, 250.8 MB/s for 4 analog + 8 digital at 50 MSa/s, 50.0 MB/s for 8 digital at 50 MSa/s — the model holds to
 0.5 %), while `host_mb_s` is what the host actually sustained. When a set produces more than the readout can move,
 the difference waits in the sample memory; when a set is *below* the ceiling but still falls behind (the 4 analog +
 8 digital row), the readout itself is configuration dependent — why twelve channels top out below ten is open.
+The host was never short of work (15 of the 16 queued reads in flight at every completion), so the host-side stack
+is the wrong place to look — that is not proof that the device is the limit, only that nothing above it is waiting.
+
 `bench`'s readout probe is a short sample of the same thing: it reported 206 MB/s for the set that sustains
 207 here (4 analog + 8 digital) and 267 MB/s for the one that sustains 287 (2 analog + 8 digital).
 

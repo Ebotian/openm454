@@ -1,0 +1,36 @@
+# Research harness (run by hand, not by pytest)
+
+Two experiments on a real M454, kept here so the numbers in the README and in `docs/SIGNAL-QUALITY.md` can be
+reproduced instead of taken on trust. Neither file is collected by pytest (no `test_` prefix), and both drive the
+scope directly.
+
+| script | what it measures | output |
+| --- | --- | --- |
+| `usb_ceiling.py` | readout ceiling per channel configuration: logical rate, wire bytes, host-sustained rate, ring fill at the stop, and every EP 0x86 completion (bytes, reads still queued) for one configuration | `usb-ceiling.csv`, `usb-transfers.csv` |
+| `signal_quality.py` | per-record sigma, amplitude, even/odd and mod-4 group means (interleave), rise and 50 % crossing, 60 rounds with all configurations in rotation | `signal-quality.csv` plus a JSON summary with medians, bootstrap intervals and paired differences |
+
+Run them on the bench (the scope attached, the generator wired to the declared input):
+
+    python tests/hardware/research/usb_ceiling.py            # ~30 s
+    python tests/hardware/research/signal_quality.py --rounds 60   # ~80 s
+
+Both read the declared link from `tests/hardware/bench.json` (channel, probe) and set their own levels: the signal
+quality experiment deliberately uses 0.20 V at 0.05 V/div so that 1 LSB = 1.7 mV, which the 3 V declared signal could
+not show.
+
+## What the CSV files are
+
+- `usb-ceiling.csv` — one row per configuration: `logical_mb_s` (rate × (analog + digital/8)), `wire_mb_s` (bytes
+  received / signal time), `host_mb_s` (bytes received / wall time), `backlog_mb` (the loop ring's fill at the stop),
+  the queue depth used and the wall time. The three rates differ on purpose; see the README section for why.
+- `usb-transfers.csv` — the raw pacing evidence for one configuration: `t_s` since the first completion, `bytes`
+  of that transfer, and how many reads were still queued when it completed.
+- `signal-quality.csv` — one row per capture: round, configuration, applied rate, sigma, amplitude, even/odd, mod-4,
+  10–90 % rise, 50 % crossing position.
+
+## Caveats
+
+- One bench, one unit, one generator. The generator and the scope may share a clock; nothing here is an absolute
+  time-base calibration.
+- The signal-quality numbers compare configurations **within** a run: the absolute level drifts a few percent between
+  sessions, the paired differences do not.
