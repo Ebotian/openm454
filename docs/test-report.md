@@ -1,17 +1,17 @@
 # Test suite report
 
-Measured 2026-11-17 on Linux, Python 3.14.6, `origin/main` `47fcb6c` + this branch.
-Baseline numbers are the pre-change measurement of the same commit: 823 passed, 554 skipped, 86.40 s, 26 test
-files, 8396 test LOC.
+Base measurement (the PR #8 test-architecture change, 2026-11-17, Linux, Python 3.14.6, `origin/main` `47fcb6c`);
+the current numbers of the merged tree are in the *Suite* table and in the paragraph below it. The baseline of that
+base measurement is 823 passed, 554 skipped, 86.40 s, 26 test files, 8396 test LOC.
 
 ## Suite
 
 | suite | command | result | wall time |
 | --- | --- | --- | ---: |
-| fast (PR) | `python -m pytest tests` | 832 passed, 554 skipped | **14.5 s** |
-| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 832 passed | **14.3 s** |
+| fast (PR) | `python -m pytest tests` | 852 passed, 554 skipped | **14.6 s** |
+| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 852 passed | **14.6 s** |
 | recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 1.9 s |
-| full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
+| full offline | `python -m pytest tests -m "not hw"` | 853 passed, 554 skipped | **65.1 s** |
 | hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 40 passed on the AWG->A0 bench, never in CI | **17.0 s** |
 | hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
@@ -22,18 +22,18 @@ The fast suite is the default marker set (`not hw and not slow`) under `pytest-x
 the full suite adds the `slow` test. Every one of the 554 skips is a `traces` test: it compares against the DSWave
 recording in `re/traces/S01_warm`, which .gitignore keeps out of the repository (the recorded runs contain the
 device's security key). No firmware test skips. `-m "not traces"` therefore runs the software suite with no skips
-at all (832 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
+at all (852 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
 sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `time_step` line depends on the state
 before it); it carries the marker so the software suite has no skips at all.
 
-Re-measured 2026-11-18 on this branch (the hardware suite split into a functional and a long-run group, wiring
-declared in `tests/hardware/bench.json`; the branch builds on the host-arrival-stamps change): fast **842 passed,
-554 skipped, 14.6 s**, full offline **847 passed, 554 skipped, 65.1 s**, hardware functional **40 passed, 17.0 s**,
-hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8843 → 10225. The tables above stay the PR #8 measurement.
+Measured 2026-11-18 on the merged tree (0.4.0: host arrival stamps, the `traces` group, the two-group hardware
+suite with its wiring declaration): fast **852 passed, 554 skipped, 14.6 s**, clean software group **852 passed,
+0 skipped**, full offline **853 passed, 554 skipped, 65.1 s**, hardware functional **40 passed, 17.0 s**, hardware
+soak (60 s tier) **4 passed, 245.6 s**, test LOC 8396 → 10316. The two tables below stay the PR #8 measurement.
 
-## Baseline vs. now
+## Baseline vs. PR #8 (kept as that change's measurement)
 
-| metric | baseline (`47fcb6c`) | now | note |
+| metric | baseline (`47fcb6c`) | PR #8 | note |
 | --- | ---: | ---: | --- |
 | collected | 1377 | 1386 | +9: properties and the capture machine |
 | passed (fast) | 823 | 832 | |
@@ -50,7 +50,7 @@ package now owns the fakes, the USB simulator, the CLI helpers and the logger fa
 inline in three test modules). The LOC target was "measure first, then decide": the consolidation removed the
 duplicated AWG golden file and merged the DSWave loop-mode block into the runner without losing assertions.
 
-## Per directory (fast / full)
+## Per directory (fast / full, PR #8 measurement)
 
 | directory | files | LOC | tests | skipped | fast | full |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -97,10 +97,12 @@ workers skip).
 - every generator feature — sine, triangle, square duty 10/50/90 %, burst edge count, sweep period shortening, AM
   envelope, DC, off — measured by the capture, not asserted from the command;
 - the rate ceilings (400/200/100 MSa/s for 1/2/3 channels), the 1024-sample floor, and the clamp of a rate above the
-  ceiling, with the applied rate taken from the capture;
-- the capture modes: forced and triggered single, repeat forced (16 frames) and repeat triggered (8 frames, distinct
-  trigger indices), back-to-back captures that leave the device idle (the loop `watch` runs), a stream stopped on
-  request, and `log` to RAM and to disk;
+  ceiling, with the applied rate taken from the capture — plus a time-base check that goes through the signal: the
+  same declared square measures the same frequency at 1 and 10 MSa/s (relative consistency only, since the generator
+  and the sampler may share a clock);
+- the capture modes: forced and triggered single, repeat forced (16 frames) and repeat triggered (8 frames, each
+  with a trigger index and the declared rise at t = 0, and not eight copies), back-to-back captures that leave the
+  device idle (the loop `watch` runs), a stream stopped on request, and `log` to RAM and to disk;
 - trigger paths: rise and fall level triggers, the holdoff being waited out, and a level the signal never reaches
   reporting `TIMEOUT_NO_TRIGGER` (not a device error) with the scope usable afterwards;
 - the real faults: a second run reports `BUSY` while the first completes, an overdriven input is reported and the
@@ -112,15 +114,15 @@ workers skip).
 
 ### Long-run group (`hwsoak`, 60 s tier for the acceptance run)
 
-4 runs, **245.9 s**, one artifact set per run in `re/soaks/` (`.meta`, `.jsonl`, `.exit`, `.err`,
+4 runs, **245.6 s**, one artifact set per run in `re/soaks/` (`.meta`, `.jsonl`, `.exit`, `.err`,
 `.summary.json`), every check's measured value in the summary:
 
 | run | what it did | measured |
 | --- | --- | --- |
-| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.16 ms, interval drift 0.007 %, RSS steady 0.0 MiB |
-| stream | 163 records of 200 ms, 815 statistics rows | signal clock monotone, RSS steady 1.2 MiB |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 3.00 ms, interval drift 0.002 %, RSS steady 0.0 MiB |
+| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS steady 1.4 MiB |
 | log | 12 records x 5 s, to disk | 60 000 000 samples, 60.0 MB written, RSS steady 0.25 MiB |
-| lifecycle | open -> capture -> close, 63 cycles | open median 769.5 ms, open-time drift 0.11 %, RSS steady 6.2 MiB |
+| lifecycle | open -> capture -> close, 63 cycles | open median 769.4 ms, RSS steady 0.0 MiB |
 
 Every run also asserts: no error row, frames/records counted, file descriptors and threads unchanged, the device
 released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run. The RSS

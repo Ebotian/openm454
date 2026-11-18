@@ -53,8 +53,8 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   default marker set and CI never select them; only `OPENM454_NO_USB` skips — a busy or missing scope is an error,
   and the session fixture hands the generator back mode by mode (levels, duty and phase included) or parks it. The
   long-run steady-RSS check is tri-state (`pass` / `fail` / `insufficient_data`): a short run says it cannot judge
-  instead of counting as verified. The suite
-  does not carry its wiring in constants: `tests/hardware/bench.json` declares every link (source, sink, probe,
+  instead of counting as verified. The suite does not carry its wiring in constants: `tests/hardware/bench.json`
+  declares every link (source, sink, probe,
   volts/div, offset, signal, tolerance) plus the soak budgets and the manual cases,
   `tests/unit/test_bench_declaration.py` checks the declaration offline — complete, physically consistent, no test
   using an undeclared link — and the hw tests take both the capture configuration and the expected measurement from
