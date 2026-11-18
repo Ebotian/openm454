@@ -50,4 +50,4 @@ def test_log_soak(bench, scope, soak, duration, soak_cfg, tmp_path, disk_guard):
                             'ok': scope.dev.t.running is False and not scope.dev.t.failed},
     }
     soak.finish(checks, notes={'record_s': record_s, 'rate_hz': rate, 'disk': disk})
-    assert all(v.get('ok', True) for v in checks.values() if isinstance(v, dict)), checks
+    assert not any(v.get('ok') is False for v in checks.values() if isinstance(v, dict)), checks

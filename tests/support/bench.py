@@ -90,3 +90,37 @@ class Bench:
         if name not in self.links:
             pytest.skip('bench.json declares no link %r (declared: %s)' % (name, ', '.join(self.declared) or 'none'))
         return self.links[name]
+
+
+def restore_awg(scope, before):
+    """Put the generator back the way the suite found it; unknown state means park it, never leave a signal on.
+
+    The generator is write-only, so state/awg.json is the only record of what was running, and it distinguishes the
+    five modes. A failure here is a bench-safety failure: the caller turns it into an error, not something to swallow.
+    """
+    if not before or not before.get('enabled'):
+        scope.awg_off()
+        return 'parked at 0 V'
+    # the device quantizes levels: program what was asked for, not the quantized reading, or every restore drifts
+    high = before.get('high_req_v', before.get('high_v'))
+    low = before.get('low_req_v', before.get('low_v'))
+    mode = before.get('mode')
+    if mode == 'burst':
+        scope.awg_burst(before['wave'], before['freq_hz'], high, low, before['cycles'],
+                        before['period_s'], duty=before.get('duty_pct', 50.0), phase=before.get('phase_deg', 0.0))
+    elif mode == 'sweep':
+        scope.awg_sweep(before['start_hz'], before['end_hz'], before['time_s'],
+                        sweep_type=before.get('sweep_type', 'linear'), wave=before['wave'],
+                        high=high, low=low, duty=before.get('duty_pct', 50.0))
+    elif mode == 'modulation':
+        # the state file is flat for the modulation kind: depth_pct / deviation_hz / hop_hz sit next to 'kind'
+        scope.awg_modulate(before['kind'], before['wave'], before['freq_hz'], high, low,
+                           mod_wave=before.get('mod_wave', 'sine'), mod_freq=before.get('mod_freq_hz', 100.0),
+                           depth=before.get('depth_pct', 50.0), deviation=before.get('deviation_hz'),
+                           hop=before.get('hop_hz'), duty=before.get('duty_pct', 50.0))
+    elif before.get('wave') == 'dc':
+        scope.awg_dc(before.get('level_req_v', before['level_v']))
+    else:
+        scope.awg_set(before['wave'], before['freq_hz'], high, low,
+                      before.get('duty_pct', 50.0), before.get('phase_deg', 0.0))
+    return 'restored (%s)' % (mode or 'continuous')

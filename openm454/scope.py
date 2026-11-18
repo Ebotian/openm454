@@ -652,10 +652,12 @@ class Scope:
     def awg_set(self, wave, freq, high, low, duty=50.0, phase=0.0, cal=False):
         from . import awg
         lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high_req, low_req = high, low
         high, low = lv['high'], lv['low']
         awg.apply(self.dev.t, awg.program(wave, freq, high, low, duty, phase))
         awg.apply(self.dev.t, awg.START)
-        st = self._awg_report(dict(awg.describe(wave, freq, high, low, duty, phase), enabled=True), rec)
+        st = self._awg_report(dict(awg.describe(wave, freq, high, low, duty, phase), enabled=True,
+                                   high_req_v=high_req, low_req_v=low_req), rec)
         self._save_awg(st)
         return st
 
@@ -672,7 +674,8 @@ class Scope:
         lv, rec = self._awg_levels(self._awg_cal(cal), level=level)
         level = lv['level']
         awg.apply(self.dev.t, awg.dc(level))
-        st = self._awg_report({'wave': 'dc', 'level_v': round(int(round(level * 156)) / 156, 4), 'enabled': True}, rec)
+        st = self._awg_report({'wave': 'dc', 'level_v': round(int(round(level * 156)) / 156, 4), 'enabled': True,
+                               'level_req_v': level}, rec)
         self._save_awg(st)
         return st
 
@@ -680,12 +683,14 @@ class Scope:
         """Frequency sweep from `start` to `end` Hz in `time` s (repeats); register program from DSWave's HAL."""
         from . import awg, awg_modes
         lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high_req, low_req = high, low
         high, low = lv['high'], lv['low']
         direction = 'up' if end > start else 'down'
         awg.apply(self.dev.t, awg_modes.program_sweep(start, end, time, sweep_type, direction, wave=wave, high=high,
                                                       low=low, duty=duty))
         awg.apply(self.dev.t, awg.START)
         st = {'mode': 'sweep', 'wave': wave, 'start_hz': start, 'end_hz': end, 'time_s': time, 'sweep_type': sweep_type,
+              'high_req_v': high_req, 'low_req_v': low_req, 'duty_pct': duty,
               'high_v': high, 'low_v': low, 'enabled': True}
         st = self._awg_report(st, rec)
         self._save_awg(st)
@@ -695,11 +700,13 @@ class Scope:
         """`cycles` periods of the carrier every `period` s (internal trigger)."""
         from . import awg, awg_modes
         lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high_req, low_req = high, low
         high, low = lv['high'], lv['low']
         awg.apply(self.dev.t, awg_modes.program_burst(wave, freq, high, low, duty, phase, cycles=cycles, period=period))
         awg.apply(self.dev.t, awg.START)
         st = {'mode': 'burst', 'wave': wave, 'freq_hz': freq, 'cycles': cycles, 'period_s': period, 'high_v': high,
-              'low_v': low, 'enabled': True}
+              'duty_pct': duty, 'phase_deg': phase,
+              'high_req_v': high_req, 'low_req_v': low_req, 'low_v': low, 'enabled': True}
         st = self._awg_report(st, rec)
         self._save_awg(st)
         return st
@@ -709,12 +716,14 @@ class Scope:
         """AM (depth %), FM (deviation Hz) or FSK (hop Hz) of a carrier, internal modulation source."""
         from . import awg, awg_modes
         lv, rec = self._awg_levels(self._awg_cal(cal), high=high, low=low)
+        high_req, low_req = high, low
         high, low = lv['high'], lv['low']
         awg.apply(self.dev.t, awg_modes.program_modulation(kind, wave, freq, high, low, duty, mod_wave=mod_wave,
                                                            mod_freq=mod_freq, depth=depth, deviation=deviation, hop=hop))
         awg.apply(self.dev.t, awg.START)
         st = {'mode': 'modulation', 'kind': kind, 'wave': wave, 'freq_hz': freq, 'mod_wave': mod_wave,
-              'mod_freq_hz': mod_freq, 'high_v': high, 'low_v': low, 'enabled': True}
+              'mod_freq_hz': mod_freq, 'high_v': high, 'low_v': low, 'duty_pct': duty, 'enabled': True,
+              'high_req_v': high_req, 'low_req_v': low_req}
         st.update({'am': {'depth_pct': depth}, 'fm': {'deviation_hz': deviation}, 'fsk': {'hop_hz': hop}}.get(kind, {}))
         st = self._awg_report(st, rec)
         self._save_awg(st)

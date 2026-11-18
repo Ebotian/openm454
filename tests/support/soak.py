@@ -76,18 +76,20 @@ def drift(values, tolerance):
 
 
 def steady_growth(values, tolerance, min_samples=40):
-    """Growth inside the last quarter of a series: a warm-up plateaus, a leak keeps climbing.
+    """Growth inside the last quarter of a series: pass, fail, or insufficient_data — never a silent pass.
 
     Measured on this bench: 21 open/close cycles grow RSS by 26 MiB over the first ~15 of them and then stay flat, so
-    the total growth is not a leak signal — the steady-state slope is.
+    the total growth is not a leak signal — the steady-state slope is. A series with too few points cannot judge it,
+    and says so instead of counting as verified.
     """
     values = [v for v in values if v is not None]
     if len(values) < min_samples:
-        return {'value': None, 'tolerance': tolerance, 'ok': True,
+        return {'value': None, 'tolerance': tolerance, 'ok': None, 'state': 'insufficient_data',
                 'note': 'too few samples (%d < %d) to judge steady growth' % (len(values), min_samples)}
     tail = values[3 * len(values) // 4:]
     grow = max(tail) - min(tail)
-    return {'value': round(grow, 3), 'tolerance': tolerance, 'ok': grow <= tolerance}
+    ok = grow <= tolerance
+    return {'value': round(grow, 3), 'tolerance': tolerance, 'ok': ok, 'state': 'pass' if ok else 'fail'}
 
 
 class Soak:
@@ -125,10 +127,12 @@ class Soak:
         summary = {'test': self.name, 'date': time.strftime('%Y-%m-%dT%H:%M:%S'), 'seconds': round(time.time() - self.t0, 1),
                    'checks': checks, 'notes': notes or {}}
         self.finished = True
-        self._write(exit_code=0 if all(self._ok(v) for v in checks.values()) else 1, summary=summary)
+        failed = any(self._ok(v) is False for v in checks.values())
+        self._write(exit_code=1 if failed else 0, summary=summary)
 
     @staticmethod
     def _ok(value):
+        """True: passed. False: failed. None (insufficient_data): not verified, not a failure."""
         return value.get('ok', True) if isinstance(value, dict) else True
 
     def abandon(self, reason):

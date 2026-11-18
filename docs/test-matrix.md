@@ -48,7 +48,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   is the functional group (40 tests, 17.0 s) and `hwsoak` the long-run group (4 runs, tiers 5/10/60 min, overridable
   with `--soak-seconds`). One device, one process: both need `-n 0` (the conftest fails loudly under xdist). The
   default marker set and CI never select them; only `OPENM454_NO_USB` skips — a busy or missing scope is an error,
-  and the session fixture hands the generator back by mode or parks it. The suite
+  and the session fixture hands the generator back mode by mode (levels, duty and phase included) or parks it. The
+  long-run steady-RSS check is tri-state (`pass` / `fail` / `insufficient_data`): a short run says it cannot judge
+  instead of counting as verified. The suite
   does not carry its wiring in constants: `tests/hardware/bench.json` declares every link (source, sink, probe,
   volts/div, offset, signal, tolerance) plus the soak budgets and the manual cases,
   `tests/unit/test_bench_declaration.py` checks the declaration offline — complete, physically consistent, no test

@@ -11,7 +11,7 @@ files, 8396 test LOC.
 | fast (PR) | `python -m pytest tests` | 832 passed, 554 skipped | **14.5 s** |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
 | hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 40 passed on the AWG->A0 bench, never in CI | **17.0 s** |
-| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.9 s** |
+| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -22,8 +22,8 @@ git-ignored fixtures are absent.
 
 Re-measured 2026-11-18 on this branch (the hardware suite split into a functional and a long-run group, wiring
 declared in `tests/hardware/bench.json`; the branch builds on the host-arrival-stamps change): fast **842 passed,
-554 skipped, 14.6 s**, full offline **846 passed, 554 skipped, 65.1 s**, hardware functional **40 passed, 17.0 s**,
-hardware soak (60 s tier) **4 passed, 245.9 s**, test LOC 8843 → 10203. The tables above stay the PR #8 measurement.
+554 skipped, 14.6 s**, full offline **847 passed, 554 skipped, 65.1 s**, hardware functional **40 passed, 17.0 s**,
+hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8843 → 10225. The tables above stay the PR #8 measurement.
 
 ## Baseline vs. now
 
@@ -120,6 +120,9 @@ Every run also asserts: no error row, frames/records counted, file descriptors a
 released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run. The RSS
 check that matters is the steady-state one inside the last quarter: 21 open/close cycles grow RSS by 26 MiB over the
 first ~15 and then stay flat (measured), so the whole-run total is reported but only the steady growth fails a run.
+That check is tri-state — `pass` / `fail` / `insufficient_data` — and needs at least 40 samples: at the 60 s tier the
+log run has 12 and reports `insufficient_data` rather than counting as verified, while the other three pass. The
+10 min and 1 h tiers have enough points for all four.
 
 Seed defects, injected and reverted: dropping every frame's `host_s` fails the repeat run and the functional
 arrival-time test; a stop path that forgets to release the device fails `test_the_engine_is_idle_after_a_capture`,
@@ -127,10 +130,13 @@ the back-to-back captures test and the repeat soak.
 
 Bench-safety contracts, each verified on the device:
 
-- **the generator is handed back**: the session fixture restores the AWG by mode (`set` / `dc` / `burst` /
-  `sweep` / `modulation`) and parks it at 0 V when the state at start was off or unknown. A failed restore is an
-  error, not a `pass`. Verified both ways: a burst (2 cycles every 0.5 s) comes back identical after a run, and a
-  run that started with the output off leaves it off with `output_v = 0`.
+- **the generator is handed back, parameter by parameter**: the state file now records what was *asked* for
+  (`high_req_v` / `low_req_v`, `level_req_v`) plus `duty_pct` / `phase_deg` for the burst, sweep and modulation modes,
+  so the session fixture can rebuild the configuration instead of re-quantizing the reported levels (which drifted one
+  6.4 mV step per restore). Verified by programming each of the seven modes (continuous, DC, burst, sweep, AM, FM,
+  FSK), running a hardware test, and comparing the state file byte for byte: all seven come back identical. When the
+  state at start was off or unknown the output is parked at 0 V (`output_v = 0`), and a failed restore parks as well
+  and then raises — it is never a `pass`.
 - **an explicit hardware run fails when the device is gone**: only `OPENM454_NO_USB` skips; a busy or missing scope
   is an error with the reason. Verified by holding the device lock from another process.
 - **the disk budget is the run's own size, on the run's own filesystem**: `rate x duration` bytes with a 1.25 margin,

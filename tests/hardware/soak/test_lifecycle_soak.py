@@ -41,4 +41,4 @@ def test_lifecycle_soak(bench, scope, soak, duration, soak_cfg):
                             'ok': scope.dev.t.running is False and not scope.dev.t.failed},
     }
     soak.finish(checks, notes={'cycles': captures})
-    assert all(v.get('ok', True) for v in checks.values() if isinstance(v, dict)), checks
+    assert not any(v.get('ok') is False for v in checks.values() if isinstance(v, dict)), checks

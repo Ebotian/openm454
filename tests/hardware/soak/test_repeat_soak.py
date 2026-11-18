@@ -54,4 +54,4 @@ def test_repeat_soak(bench, scope, soak, duration, soak_cfg):
                           'ok': bool(back.meta['acq']['complete'])},
     }
     soak.finish(checks, notes={'captures': len(medians), 'window_s': window})
-    assert all(v.get('ok', True) for v in checks.values() if isinstance(v, dict)), checks
+    assert not any(v.get('ok') is False for v in checks.values() if isinstance(v, dict)), checks
