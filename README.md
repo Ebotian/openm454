@@ -101,6 +101,11 @@ is the wrong place to look — that is not proof that the device is the limit, o
 `bench`'s readout probe is a short sample of the same thing: it reported 206 MB/s for the set that sustains
 207 here (4 analog + 8 digital) and 267 MB/s for the one that sustains 287 (2 analog + 8 digital).
 
+Planning does not need a static ceiling: when this channel set has been measured at **another sample rate** the
+lowest such measurement is used (the readout follows the channel set far more than the rate), and only a set with no
+measurement at all falls back to the 190 MB/s planning ceiling. A run still probes the exact configuration before it
+starts; the plan says `provisional` while it does.
+
 What a channel configuration costs the signal itself is a separate question, measured the same way (60 records per
 configuration, rate-matched, 95 % intervals): see [docs/SIGNAL-QUALITY.md](docs/SIGNAL-QUALITY.md). Above two analog
 channels the differences stay below one code (1 LSB = 1.7 mV at 0.05 V/div); enabling the eight digital channels
