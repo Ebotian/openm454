@@ -780,9 +780,19 @@ class BacklogMeter:
         self.base, self.t_base = 0.0, t_head          # at the head nothing is behind yet
         self.backlog = self.max = self.growth = 0.0
         self.hist = []
+        self.t_stop = None                            # set when the run is told to stop: production ends here
+
+    def stop(self, now):
+        """The device produces nothing after the stop request: whatever still arrives is the drain of data already in
+        the ring, so from here on the model must not keep adding D per second. (A run that ends on the byte target
+        reaches the stop only after the last read, so this clamp matters for the paths that stop while data is still
+        queued: a user stop, the backlog guard, a stalled link.)"""
+        if self.t_stop is None:
+            self.t_stop = now
 
     def update(self, now, received):
-        raw = self.D * (now - self.t0) - received
+        t = now if self.t_stop is None else min(now, self.t_stop)
+        raw = self.D * (t - self.t0) - received
         rise = CLOCK_TOL * self.D * max(0.0, now - self.t_base) if raw - self.base < DRIFT_BAND else 0.0
         self.base = min(raw, self.base + rise)
         self.t_base = now
@@ -906,7 +916,7 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
         if s['pend_n'] >= piece_bytes and (target is None or s['n_data'] < target):
             flush()                                  # the block that reaches the target is trimmed at the end
 
-    def stop():
+    def _stop():
         if w.error is not None:
             s['reason'] = 'hook_error' if type(w.error).__name__ == 'HookError' else 'writer_error'
             return True
@@ -943,6 +953,15 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
             s['queued_at_stop'] = w.queued
             return True
         return False
+
+    def stop():
+        """The engine's stop flag. Once it says yes the device is about to stop producing, so freeze the backlog
+        model first: what the host reads after that is the drain of data already produced, and counting it as new
+        production inflated the peak by (D - R) x drain (58 MB on a 1.2 s run at 400 MB/s read at 287)."""
+        yes = _stop()
+        if yes and s['meter'] is not None:
+            s['meter'].stop(time.perf_counter())
+        return yes
 
     raw = None
     err = None
