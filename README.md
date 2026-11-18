@@ -94,6 +94,12 @@ the difference waits in the sample memory; when a set is *below* the ceiling but
 `bench`'s readout probe is a short sample of the same thing: it reported 206 MB/s for the set that sustains
 207 here (4 analog + 8 digital) and 267 MB/s for the one that sustains 287 (2 analog + 8 digital).
 
+What a channel configuration costs the signal itself is a separate question, measured the same way (60 records per
+configuration, rate-matched, 95 % intervals): see [docs/SIGNAL-QUALITY.md](docs/SIGNAL-QUALITY.md). Above two analog
+channels the differences stay below one code (1 LSB = 1.7 mV at 0.05 V/div); enabling the eight digital channels
+changes nothing measurable; the one-channel mode is a different acquisition path (1.0 % higher gain, 0.5 LSB
+interleave mismatch, 0.5 LSB lower noise).
+
 Earlier measurements (2026-11-01/02), kept as recorded — every input on a 1 kHz square, every period checked for gaps:
 
 - The data rate is rate x (analog channels + digital channels / 8) bytes/s.
