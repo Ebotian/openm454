@@ -102,6 +102,41 @@ def test_measured_readout_replaces_the_assumed_one():
     assert make_plan(['A0', 'A1', 'A2'], ['D%d' % i for i in range(5)], 50e6, None)['verdict'] == 'sustained'
 
 
+def test_a_measurement_of_the_same_set_at_another_rate_is_used():
+    """The readout depends on the channel set far more than on the rate: 2 analog + 8 digital measured 287 MB/s at
+    200 MSa/s is the right planning value for 100 MSa/s, where the static 190 MB/s ceiling would refuse a run the
+    hardware sustains."""
+    host.readout_put(host.readout_key(2, 8, 200e6), 287.0, False, 400.0)
+    pl = make_plan(*A2D8, 100e6, 10)                        # 300 MB/s of data against 287 measured
+    assert pl['readout_mb_s'] == 287.0
+    assert 'another rate' in pl['readout_source'] and 'assumed' not in pl['readout_source']
+    assert pl['verdict'] == 'burst' and pl['recommendation'] == 'log'
+    assert pl['gapfree_max_s'] == pytest.approx(
+        math.floor(logger.BACKLOG_STOP * 287e6 / (300e6 * 13e6) * 100) / 100, abs=0.01)
+    deferred = make_plan(*A2D8, 100e6, 10, defer=True)
+    assert deferred['_needs_probe'] and deferred['provisional']   # good enough to plan, still measured at the start
+    # the slowest cached rate of the set wins: a slow measurement must not flatter a faster plan
+    host.readout_put(host.readout_key(2, 8, 50e6), 210.0, False, 150.0)
+    assert make_plan(*A2D8, 100e6, 2)['readout_mb_s'] == 210.0
+    assert make_plan(*A2D8, 100e6, 2)['gapfree_max_s'] == pytest.approx(
+        math.floor(logger.BACKLOG_STOP * 210e6 / (300e6 * 90e6) * 100) / 100, abs=0.01)
+
+
+def test_another_channel_set_does_not_supply_the_readout():
+    host.readout_put(host.readout_key(4, 8, 100e6), 200.0, False, 500.0)
+    pl = make_plan(*A2D8, 100e6, 10, force=True)            # 2 analog + 8 digital has no measurement at all
+    assert pl['readout_mb_s'] == logger.CEILING_BPS / 1e6 and 'assumed' in pl['readout_source']
+
+
+def test_the_other_rate_lookup_takes_the_lowest_and_ignores_other_sets():
+    host.readout_put(host.readout_key(2, 0, 400e6), 287.0, False, 400.0)
+    host.readout_put(host.readout_key(2, 0, 100e6), 260.0, False, 200.0)
+    host.readout_put(host.readout_key(4, 0, 100e6), 120.0, False, 400.0)
+    near = host.readout_get_any_rate(2, 0)
+    assert near['mb_s'] == 260.0 and near['key'] == host.readout_key(2, 0, 100e6)
+    assert host.readout_get_any_rate(3, 0) is None
+
+
 def test_unmeasured_readout_is_deferred_to_a_probe():
     pl = make_plan(*A2D8, 100e6, 10, defer=True)                           # no refusal yet: R is measured first
     assert pl['provisional'] and pl['_needs_probe'] and 'probe' in pl['readout_source']

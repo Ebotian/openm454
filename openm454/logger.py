@@ -202,16 +202,22 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     # readout while acquiring for this channel set: measured (probe / bench, cached) or the planning ceiling
     rkey = host.readout_key(na, nd, r)
     cached = None if remeasure else host.readout_get(rkey)
+    near = host.readout_get_any_rate(na, nd) if cached is None and not remeasure else None
+    bound = cached or near                       # a measurement of this channel set, at this rate or another
     if cached:
         R = cached['mb_s'] * 1e6
         rsrc = 'measured %s%s' % (cached['time'], ' (lower bound: the host kept up)' if cached['lower_bound'] else '')
+    elif near:
+        R = near['mb_s'] * 1e6
+        rsrc = 'measured %s at another rate of this channel set (%s)%s' % (
+            near['time'], near['key'].split('@', 1)[1], ' (lower bound: the host kept up)' if near['lower_bound'] else '')
     else:
         R, rsrc = CEILING_BPS, 'assumed (planning ceiling)'
-    needs_probe = not cached and data_bps > SUSTAINED_BPS
+    needs_probe = cached is None and data_bps > SUSTAINED_BPS     # another rate is good enough to plan, not to keep
     if needs_probe and defer:
         rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
-    kept_up = bool(cached and cached['lower_bound'] and data_bps <= R * (1 + 1e-3))    # stored rounded
-    if data_bps <= SUSTAINED_BPS or kept_up or (cached and data_bps <= 0.95 * R):
+    kept_up = bool(bound and bound['lower_bound'] and data_bps <= R * (1 + 1e-3))    # stored rounded
+    if data_bps <= SUSTAINED_BPS or kept_up or (bound and data_bps <= 0.95 * R):
         verdict = 'sustained'
     elif data_bps <= R:
         verdict = 'near_limit'
