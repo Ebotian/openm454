@@ -34,6 +34,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   property layer covers the save/load law and the no-stamp replay case, the stateful layer the engine loop that
   stamps (inside the run's wall clock) and the capture path that summarises it; there is no golden fixture with
   arrival times, because a replay has none.
+- **groups:** the `traces` marker (registered in `pyproject.toml`) isolates every test that compares against the
+  git-ignored DSWave recording, so they can be run or left out as a block: `-m traces` is the recorded-material
+  group, `-m "not hw and not slow and not traces"` the software suite with no skips.
 - **repeat:** repeat mode is one start; this baseline neither checks the frames for misfires nor re-arms them
   (`trigger_check_reason` says so), so there is no retry frame to keep. The misfire retry row is the normal
   (non-repeat) path.

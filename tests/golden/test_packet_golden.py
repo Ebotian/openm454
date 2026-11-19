@@ -27,7 +27,9 @@ try:
 except ImportError:  # pragma: no cover
     scen_load, HAVE_TRACES = None, False
 
-needs_traces = pytest.mark.skipif(not HAVE_TRACES, reason="recorded traces not present")
+def needs_traces(test):
+    """Tests that read the git-ignored recording: skipped without it, and out of the clean software suite."""
+    return pytest.mark.traces(pytest.mark.skipif(not HAVE_TRACES, reason="recorded traces not present")(test))
 
 CODES_PER_V = P.CODES_PER_DIV          # at 1 V/div
 SWING_1X = 84.0                        # A1/A3 square swing at 1 V/div (codes)

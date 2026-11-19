@@ -9,7 +9,8 @@ from openm454.acquire import RawCapture
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SESS = os.path.join(ROOT, 're', 'traces', 'S01_warm')
-pytestmark = pytest.mark.skipif(not os.path.exists(os.path.join(SESS, 'bulk_in.bin')), reason='recorded traces not present')
+pytestmark = [pytest.mark.traces,
+              pytest.mark.skipif(not os.path.exists(os.path.join(SESS, 'bulk_in.bin')), reason='recorded traces not present')]
 
 
 def recorded(name):

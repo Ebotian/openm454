@@ -45,5 +45,6 @@ version = {attr = "openm454.__version__"}
 
 [tool.pytest.ini_options]
 markers = ["hw: needs the DSCope M454 connected and DSWave closed",
-           "slow: integration/stateful paths above the 3 s threshold; excluded from the fast PR suite"]
+           "slow: integration/stateful paths above the 3 s threshold; excluded from the fast PR suite",
+           "traces: compares against recorded DSWave material that is not in the repository (re/traces/S01_warm, git-ignored); skipped without it, and out of the clean software suite (-m \"not traces\")"]
 addopts = "-m 'not hw and not slow' -n auto --dist loadscope"   # fast by default; full: -m "not hw"
