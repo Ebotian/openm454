@@ -24,7 +24,7 @@ recording in `re/traces/S01_warm`, which .gitignore keeps out of the repository 
 device's security key). No firmware test skips. `-m "not traces"` therefore runs the software suite with no skips
 at all (832 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
 sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `time_step` line depends on the state
-before it); it carries the marker so the software suite has no skips at all.
+before it); it carries the marker so the software suite has no skips at all. What the recorded material is and how it was made: `docs/TRACES.md`.
 
 Re-measured 2026-11-18 on this branch (the hardware suite split into a functional and a long-run group, wiring
 declared in `tests/hardware/bench.json`; the branch builds on the host-arrival-stamps change): fast **852 passed,
