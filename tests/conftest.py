@@ -9,6 +9,9 @@ def pytest_addoption(parser):
     overrides the chosen tier for one run (used by the acceptance run: a 60 s soak instead of 10 min)."""
     parser.addoption('--soak-seconds', type=int, default=None, metavar='N',
                      help='override the soak tier of tests/hardware/bench.json with N seconds')
+    parser.addoption('--bench-confirmed', action='store_true', default=False,
+                     help='the bench owner confirmed for this run that the bench is wired exactly as '
+                          'tests/hardware/bench.json declares (the hardware suite drives the generator into it)')
 
 
 @pytest.fixture(autouse=True)

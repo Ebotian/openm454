@@ -47,7 +47,7 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   (non-repeat) path.
 - **channel counts and fuzz:** both fuzz targets use one fixed 2 analog / 2 digital layout, so they say nothing about
   other channel counts; the fuzz mark on the packet row is about the byte surface, not the layout.
-- **hw:** `tests/hardware` runs against the real M454 and is split in two groups by marker: `hw and not hwsoak`
+- **hw:** `tests/hardware` runs against the real M454 (only with `--bench-confirmed`: the bench owner confirms for each run that the bench is wired as `tests/hardware/bench.json` declares; without it the run fails and lists the declared links) and is split in two groups by marker: `hw and not hwsoak`
   is the functional group (53 tests, 24.8 s) and `hwsoak` the long-run group (4 runs, tiers 5/10/60 min, overridable
   with `--soak-seconds`). One device, one process: both need `-n 0` (the conftest fails loudly under xdist). The
   default marker set and CI never select them; only `OPENM454_NO_USB` skips — a busy or missing scope is an error,

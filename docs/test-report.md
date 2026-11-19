@@ -12,8 +12,8 @@ files, 8396 test LOC.
 | clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 832 passed | **14.3 s** |
 | recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 1.9 s |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
-| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 53 passed on the AWG->A0 bench, never in CI | **24.8 s** |
-| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
+| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0 --bench-confirmed` | 53 passed on the AWG->A0 bench, never in CI | **24.8 s** |
+| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60 --bench-confirmed` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -240,8 +240,8 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
     python -m pytest tests -m "not hw and not slow and not traces"   # software only, 0 skips
     python -m pytest tests -m traces           # the recorded-material group (needs re/traces/S01_warm)
-    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (24.8 s)
-    python -m pytest tests -m hwsoak -n 0 --soak-seconds 60       # hardware, long runs (tiers in bench.json)
+    python -m pytest tests -m "hw and not hwsoak" -n 0 --bench-confirmed   # hardware, functional (24.8 s)
+    python -m pytest tests -m hwsoak -n 0 --soak-seconds 60 --bench-confirmed   # hardware, long runs
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
     quint verify specs/quint/capture.qnt --main=capture --init=init --step=step --max-steps=12 \

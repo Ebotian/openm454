@@ -42,8 +42,12 @@ A0-A3 up to 400 MSa/s, 8 digital D0-D7, signal generator 0-3 V). Start with `sta
 saved file; `analyze` / `plot` work on saved files. Long continuous recordings: `log_plan`, then `record_start`,
 `record_status`, `record_stop`. `selftest` checks the scope itself (its signal checks need the scope's own
 calibration and generator outputs cabled to its inputs: there is no internal loopback). Choose the lowest rate and fewest channels that answer the question.
-Ask the user before connecting probes or the generator output to their circuit. Errors have a code: NOT_FOUND = not
-connected, BUSY = another program holds the scope, TIMEOUT_NO_TRIGGER = no trigger within timeout_s."""
+Never assume the wiring or the bench setup: what each input and the generator output are connected to, probe
+attenuation, other instruments. Ask the user whenever it is not stated in this conversation, and again after anything
+may have changed (a new session, a pause, a rewiring); state/fixture.json, earlier sessions and test declarations can
+be stale. Ask before connecting probes or the generator output to their circuit, and before driving the generator into
+anything not confirmed. Errors have a code: NOT_FOUND = not connected, BUSY = another program holds the scope,
+TIMEOUT_NO_TRIGGER = no trigger within timeout_s."""
 
 VERTICAL = {
     'vdiv': {'type': 'string', 'description': "volts/div at the probe tip: '1V' or per channel 'A0=500mV,A2=2V'"},
@@ -115,7 +119,8 @@ TOOLS = [
     {'name': 'awg', 'title': 'Signal generator',
      'description': 'Drive the generator output (0..3 V, up to 1 MHz). action set: wave/freq/high/low (or vpp+dc), '
                     'duty, phase; dc: a steady level; off: park at 0 V; status: the last setting. The output keeps '
-                    'running after the call. Ask the user before connecting it to their circuit.',
+                    'running after the call. Ask the user what the output is connected to before driving it (never '
+                    'assume the wiring), and before connecting it to their circuit.',
      'inputSchema': _schema({'action': {'type': 'string', 'enum': ['set', 'dc', 'off', 'status']},
                              'wave': {'type': 'string', 'enum': ['sine', 'square', 'triangle', 'noise']},
                              'freq': {'type': 'string', 'description': "e.g. '10k'"},
