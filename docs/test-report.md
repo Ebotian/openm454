@@ -19,6 +19,10 @@ The fast suite is the default marker set (`not hw and not slow`) under `pytest-x
 the full suite adds the `slow` test. The 554 skips are the recorded-trace and firmware tests that skip when the
 git-ignored fixtures are absent.
 
+Re-measured 2026-11-18 on `feat/frame-arrival-time` (host arrival stamps; `tests/property/test_frame_times.py`
+added, the engine stamp test and the matrix grew a row): fast **838 passed, 554 skipped, 14.6 s**, full offline
+**839 passed, 554 skipped, 65.1 s**, test LOC 8843 → 8914. The tables above stay the PR #8 measurement.
+
 ## Baseline vs. now
 
 | metric | baseline (`47fcb6c`) | now | note |

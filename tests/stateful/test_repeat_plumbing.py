@@ -263,6 +263,64 @@ def test_a_repeat_capture_saves_every_frame(tmp_path):
     assert [f['trig_index'] for f in back.frames] == [200, 201, 202]
     assert back.meta['frames_samples'] == {'A0': 8, 'D0': 8}
 
+def test_decode_frames_keeps_the_host_arrival_time(monkeypatch):
+    """decode_frames is where a frame index exists: the arrival time recorded by acquire reaches the frame dict."""
+    import types
+    from openm454 import mso_adapter, packet
+
+    monkeypatch.setattr(packet, 'decode', lambda data, layout, nsamples=None, fill_stale=False: {'tail': None})
+    monkeypatch.setattr(mso_adapter, '_layout', lambda geom: object())
+    monkeypatch.setattr(mso_adapter, '_decode_bytes',
+                        lambda data, geom, hal, layout, trig, dec=None: {'analog': {}, 'digital': {}})
+    raw = types.SimpleNamespace(frames=[b'\x00' * 8] * 3, frame_times=[0.001, 0.0053, 0.0106])
+    out = mso_adapter.decode_frames(raw, {}, {})
+    assert [f['host_s'] for f in out] == [0.001, 0.0053, 0.0106]
+    bare = types.SimpleNamespace(frames=[b'\x00' * 8] * 3)          # a replay: no times, no key
+    assert all('host_s' not in f for f in mso_adapter.decode_frames(bare, {}, {}))
+
+
+def _timed_cap(n=3, step=0.0053):
+    import numpy as np
+    from openm454.capture import Capture
+    frames = _frames(n)
+    for i, f in enumerate(frames):
+        f['host_s'] = 0.05 + i * step
+    meta = {'channels': {'A0': {'zero_code': 128, 'volts_per_code': 0.034, 'probe': 1}},
+            'analog_rate_hz': 1e6, 'digital_rate_hz': 1e6, 't0_analog_s': 0.0, 't0_digital_s': 0.0,
+            'acq': {'repeat_frames': n, 'frames': n}, 'frames': n}
+    cap = Capture(meta, frames[0]['analog'], {})
+    cap.frames = frames
+    return cap
+
+
+def test_a_repeat_file_records_when_every_frame_arrived(tmp_path):
+    """The arrival time has to survive the .npz: it is an acquisition fact, like the trigger index, not a view."""
+    from openm454.capture import Capture, load_capture
+    cap = _timed_cap()
+    want = [0.05, 0.0553, 0.0606]
+    back = load_capture(cap.save(str(tmp_path / 'r.npz')))
+    assert back.meta['frame_host_s'] == pytest.approx(want)
+    assert [f['host_s'] for f in back.frames] == pytest.approx(want)
+    plain = _timed_cap()
+    plain.frames = _frames(3)                                        # a replay: frames without a time
+    plain._add_frames({})
+    assert 'frame_host_s' not in plain.meta                          # nothing to say, no key
+
+
+def test_the_frames_summary_reports_the_arrival_spacing():
+    """The summary carries the spacing, so a JSON reader sees whether frames arrived together (one event-loop pass,
+    reads batched) or one by one, without loading the .npz."""
+    from openm454 import cli
+    items, summary = cli._frame_summary(_timed_cap())
+    assert summary['host_s'] == {'first': 0.05, 'last': 0.0606,
+                                 'interval_ms': {'min': 5.3, 'median': 5.3, 'max': 5.3}}
+    assert [round(i['host_s'], 6) for i in items] == [0.05, 0.0553, 0.0606]
+    plain = _timed_cap()
+    for f in plain.frames:
+        f.pop('host_s')
+    assert 'host_s' not in cli._frame_summary(plain)[1]
+
+
 
 # ---------------------------------------------------------------- review fixes (2026-11-17)
 
