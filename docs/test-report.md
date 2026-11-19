@@ -12,7 +12,8 @@ files, 8396 test LOC.
 | clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 832 passed | **14.3 s** |
 | recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 1.9 s |
 | full offline | `python -m pytest tests -m "not hw"` | 833 passed, 554 skipped | **65.3 s** |
-| hardware | `python -m pytest tests -m hw` | needs the M454, never in CI | — |
+| hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0` | 53 passed on the AWG->A0 bench, never in CI | **24.8 s** |
+| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -25,9 +26,10 @@ at all (832 passed), and `-m traces` selects exactly the recorded-material group
 sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `time_step` line depends on the state
 before it); it carries the marker so the software suite has no skips at all.
 
-Re-measured 2026-11-18 on `feat/frame-arrival-time` (host arrival stamps; `tests/property/test_frame_times.py`
-added, the engine stamp test and the matrix grew a row): fast **838 passed, 554 skipped, 14.6 s**, full offline
-**839 passed, 554 skipped, 65.1 s**, test LOC 8843 → 8914. The tables above stay the PR #8 measurement.
+Re-measured 2026-11-18 on this branch (the hardware suite split into a functional and a long-run group, wiring
+declared in `tests/hardware/bench.json`; the branch builds on the host-arrival-stamps change): fast **852 passed,
+554 skipped, 14.6 s**, full offline **853 passed, 554 skipped, 65.1 s**, hardware functional **53 passed, 24.8 s**,
+hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8843 → 10527. The tables above stay the PR #8 measurement.
 
 ## Baseline vs. now
 
@@ -69,6 +71,96 @@ Per-directory times are the junit sum of test durations, so they exceed the wall
 | `tests/integration/test_mcp.py::test_log_plan_and_awg_arguments` | 60.02 s | `slow`, full suite only |
 | `tests/integration/test_logger.py::test_bench_without_device_records_the_allowance` | 2.18 s | stays in the fast suite |
 | `tests/integration/test_mcp.py::test_a_hung_command_never_hangs_the_call` | 1.83 s | stays in the fast suite |
+
+## Hardware suite
+
+`tests/hardware` runs against the real scope and is never part of CI: `hw` is outside the default marker set, and
+with no device (or `OPENM454_NO_USB`, which CI sets) every test skips with the reason. What the suite assumes about
+the bench is data, not prose: `tests/hardware/bench.json` declares each link — source, sink, probe attenuation,
+volts/div, offset, the signal to put on the wire, and the tolerance it must be seen within. The capture
+configuration *and* the expected measurement both come from that file, so a bench wired differently (a 10x probe in
+line, a divider, another channel) fails and names the file instead of reporting a strange number; a link that is not
+declared is never guessed — the test skips and lists what is declared.
+`tests/unit/test_bench_declaration.py` checks the declaration offline, in the fast suite: every link complete,
+physically consistent (the declared signal fits the declared screen and the generator's 0..3 V), and no hw test
+asking for an undeclared link.
+
+Both groups need `-n 0`: one device, one process (the conftest fails loudly instead of letting the other xdist
+workers skip).
+
+### Functional group (`hw and not hwsoak`)
+
+53 tests, **24.8 s** on the bench. What it proves, all through the declared link:
+
+- the connected scope is the declared model, and the declared 1 kHz / 3 V square arrives at 1 kHz and 3.1 Vpp
+  (declared tolerance 0.3 V, still tight enough to reject the factor-of-10 error of a wrong probe or divider);
+- every generator feature — sine, triangle, square duty 10/50/90 %, burst edge count, sweep period shortening, AM
+  envelope, DC, off — measured by the capture, not asserted from the command;
+- the rate ceilings (400/200/100 MSa/s for 1/2/3 channels), the 1024-sample floor, and the clamp of a rate above the
+  ceiling, with the applied rate taken from the capture;
+- the capture modes: forced and triggered single, repeat forced (16 frames) and repeat triggered (8 frames, distinct
+  trigger indices), back-to-back captures that leave the device idle (the loop `watch` runs), a stream stopped on
+  request, and `log` to RAM and to disk;
+- trigger paths: rise and fall level triggers, the holdoff being waited out, and a level the signal never reaches
+  reporting `TIMEOUT_NO_TRIGGER` (not a device error) with the scope usable afterwards;
+- the real faults: a second run reports `BUSY` while the first completes, an overdriven input is reported and the
+  declared signal comes back clean, a repeat run with no trigger says so and recovers, a stream stop leaves no
+  submitted transfer;
+- state: a capture adds no file under `state/`, the AWG record matches what was programmed, the engine is idle after
+  every run;
+- a link that is not declared skips with the declared names in the reason.
+
+Six of these are the hardware counterpart of an offline test — the offline suite proves the logic, these prove the
+device does it:
+
+| offline test | hardware check on the bench |
+| --- | --- |
+| `tests/unit/test_selftest.py` (fake scope) | the driver's own self-test on the device: V01 and V12 (forced 5 ms capture of all 12 channels at 100 MSa/s) pass, and the standard-fixture checks skip **with the reason they need that fixture** — no silent pass, no false claim on this wiring |
+| `tests/unit/test_timing.py` (keys, floors, refusals) | the floor profile is applied to the device: 186 ms per 1 ms capture with the traced spacing, **32 ms** with `gap=5 ms, quiet=5 ms, submit=5 ms, setup=2 ms, final=1 ms`, and the capture is still correct; a fixed key (`start=`) is refused with the scope idle |
+| the plan's repeat hold invariant | after a repeat run the next capture still pays the traced **100 ms** hold even with `quiet=5 ms` (measured 127 ms vs 29 ms) — the profile cannot shorten an untriggered stop |
+| `tests/unit/test_calib.py` | a table bound to this unit is applied (`applied.cal` present, identity table leaves the reading alone); a table from another unit is refused with `CAL_MISMATCH` and the scope stays usable |
+| `tests/golden/test_packet_golden.py` (recordings) | a live frame has the planned depth and rate, and a triggered repeat frame's `trig_index` sits at the requested 50 % of the window (±2 %) |
+| `tests/integration/test_cli_watch_measure.py` (saved files) | save → `load_capture` → `analyze` → `plot` on a real capture: the arrays and the measured numbers match, and the PNG is a real picture |
+| `tests/unit/test_scope_paths.py` (refusals) | `stream`/`log` with repeat and a negative repeat are refused **with the device untouched** (`engine.active` false, no run), and a capture still succeeds afterwards |
+
+### Long-run group (`hwsoak`, 60 s tier for the acceptance run)
+
+4 runs, **245.9 s**, one artifact set per run in `re/soaks/` (`.meta`, `.jsonl`, `.exit`, `.err`,
+`.summary.json`), every check's measured value in the summary:
+
+| run | what it did | measured |
+| --- | --- | --- |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.16 ms, interval drift 0.007 %, RSS steady 0.0 MiB |
+| stream | 163 records of 200 ms, 815 statistics rows | signal clock monotone, RSS steady 1.2 MiB |
+| log | 12 records x 5 s, to disk | 60 000 000 samples, 60.0 MB written, RSS steady 0.25 MiB |
+| lifecycle | open -> capture -> close, 63 cycles | open median 769.5 ms, open-time drift 0.11 %, RSS steady 6.2 MiB |
+
+Every run also asserts: no error row, frames/records counted, file descriptors and threads unchanged, the device
+released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run. The RSS
+check that matters is the steady-state one inside the last quarter: 21 open/close cycles grow RSS by 26 MiB over the
+first ~15 and then stay flat (measured), so the whole-run total is reported but only the steady growth fails a run.
+That check is tri-state — `pass` / `fail` / `insufficient_data` — and needs at least 40 samples: at the 60 s tier the
+log run has 12 and reports `insufficient_data` rather than counting as verified, while the other three pass. The
+10 min and 1 h tiers have enough points for all four.
+
+Seed defects, injected and reverted: dropping every frame's `host_s` fails the repeat run and the functional
+arrival-time test; a stop path that forgets to release the device fails `test_the_engine_is_idle_after_a_capture`,
+the back-to-back captures test and the repeat soak.
+
+Bench-safety contracts, each verified on the device:
+
+- **the generator is handed back, parameter by parameter**: the state file now records what was *asked* for
+  (`high_req_v` / `low_req_v`, `level_req_v`) plus `duty_pct` / `phase_deg` for the burst, sweep and modulation modes,
+  so the session fixture can rebuild the configuration instead of re-quantizing the reported levels (which drifted one
+  6.4 mV step per restore). Verified by programming each of the seven modes (continuous, DC, burst, sweep, AM, FM,
+  FSK), running a hardware test, and comparing the state file byte for byte: all seven come back identical. When the
+  state at start was off or unknown the output is parked at 0 V (`output_v = 0`), and a failed restore parks as well
+  and then raises — it is never a `pass`.
+- **an explicit hardware run fails when the device is gone**: only `OPENM454_NO_USB` skips; a busy or missing scope
+  is an error with the reason. Verified by holding the device lock from another process.
+- **the disk budget is the run's own size, on the run's own filesystem**: `rate x duration` bytes with a 1.25 margin,
+  measured on the path the data lands on (a one-hour log at 1 MSa/s is 3.6 GB, so a 1 GiB floor would have started a
+  run that cannot finish). The rule is unit-tested offline in `tests/unit/test_soak_budget.py`.
 
 ## Formal model (Quint + Apalache)
 
@@ -148,6 +240,8 @@ Representative tests: `test_misfires_are_discarded_and_rearmed`,
     python -m pytest tests -m "not hw"         # full offline, 65.3 s
     python -m pytest tests -m "not hw and not slow and not traces"   # software only, 0 skips
     python -m pytest tests -m traces           # the recorded-material group (needs re/traces/S01_warm)
+    python -m pytest tests -m "hw and not hwsoak" -n 0            # hardware, functional (24.8 s)
+    python -m pytest tests -m hwsoak -n 0 --soak-seconds 60       # hardware, long runs (tiers in bench.json)
     quint test specs/quint/capture.qnt --main=capture --match='repeat_ok|no_trigger_ok|stream_ok|log_ok'
     apalache-mc server &                       # then:
     quint verify specs/quint/capture.qnt --main=capture --init=init --step=step --max-steps=12 \
