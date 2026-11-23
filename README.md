@@ -102,9 +102,11 @@ is the wrong place to look — that is not proof that the device is the limit, o
 207 here (4 analog + 8 digital) and 267 MB/s for the one that sustains 287 (2 analog + 8 digital).
 
 Planning does not need a static ceiling: when this channel set has been measured at **another sample rate** the
-lowest such measurement is used (the readout follows the channel set far more than the rate), and only a set with no
-measurement at all falls back to the 190 MB/s planning ceiling. A run still probes the exact configuration before it
-starts; the plan says `provisional` while it does.
+lowest *full* measurement is used (the readout follows the channel set far more than the rate). A run in which the
+host merely kept up measures the rate it produced, not the readout, so it is treated as a floor: it decides whether
+the host can keep up, and it can raise the 190 MB/s planning ceiling, but a plan is never refused on it. A set with
+no measurement at all falls back to the ceiling. A run still probes the exact configuration before it starts; the
+plan says `provisional` while it does.
 
 What a channel configuration costs the signal itself is a separate question, measured the same way (300 records per
 configuration in four sessions, rate-matched, paired differences with 95 % intervals): see

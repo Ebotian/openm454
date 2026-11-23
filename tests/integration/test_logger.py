@@ -102,6 +102,28 @@ def test_measured_readout_replaces_the_assumed_one():
     assert make_plan(['A0', 'A1', 'A2'], ['D%d' % i for i in range(5)], 50e6, None)['verdict'] == 'sustained'
 
 
+def test_a_lower_bound_at_another_rate_cannot_refuse_a_run_the_hardware_keeps_up_with():
+    """A run where the host kept up records the rate it produced, not the readout: it is a floor, not a ceiling.
+
+    Offline reproduction from the review: 4 analog + 8 digital at 50 MSa/s (250 MB/s of data) planned for 4.5 s. With
+    no cache the plan passes (6.37 s gap-free at the static ceiling); with a 166.7 MB/s lower bound cached at another
+    rate it was refused (4.02 s), while the 207.4 MB/s the same set measured elsewhere gives 9.8 s.
+    """
+    host.readout_put(host.readout_key(4, 8, 25e6), 166.7, True, 125.0)      # the host kept up at 125 MB/s
+    pl = make_plan(*A4D8, 50e6, 4.5)
+    assert pl['readout_mb_s'] == 190.0 and pl['recommendation'] == 'log'
+    assert 'floor on the readout' in pl['readout_source']
+    assert pl['gapfree_max_s'] == pytest.approx(
+        math.floor(logger.BACKLOG_STOP * 190e6 / (250e6 * 60e6) * 100) / 100, abs=0.01)
+    host.readout_put(host.readout_key(4, 8, 25e6), 207.4, False, 125.0)     # a full measurement of the set wins
+    measured = make_plan(*A4D8, 50e6, 4.5)
+    assert measured['readout_mb_s'] == 207.4 and 'floor' not in measured['readout_source']
+    assert measured['gapfree_max_s'] == pytest.approx(
+        math.floor(logger.BACKLOG_STOP * 207.4e6 / (250e6 * 42.6e6) * 100) / 100, abs=0.01)
+    host.readout_put(host.readout_key(2, 0, 100e6), 250.0, True, 200.0)     # a floor above the ceiling still counts
+    assert make_plan(['A0', 'A1'], [], 200e6, 1)['readout_mb_s'] == 250.0
+
+
 def test_a_measurement_of_the_same_set_at_another_rate_is_used():
     """The readout depends on the channel set far more than on the rate: 2 analog + 8 digital measured 287 MB/s at
     200 MSa/s is the right planning value for 100 MSa/s, where the static 190 MB/s ceiling would refuse a run the

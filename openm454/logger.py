@@ -202,17 +202,28 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     # readout while acquiring for this channel set: measured (probe / bench, cached) or the planning ceiling
     rkey = host.readout_key(na, nd, r)
     cached = None if remeasure else host.readout_get(rkey)
-    near = host.readout_get_any_rate(na, nd) if cached is None and not remeasure else None
+    near = None if remeasure else host.readout_get_any_rate(na, nd)          # lowest: can the host keep up?
+    full = None if remeasure else host.readout_get_any_rate(na, nd, full_only=True)   # what the readout actually did
     bound = cached or near                       # a measurement of this channel set, at this rate or another
     if cached:
-        R = cached['mb_s'] * 1e6
         rsrc = 'measured %s%s' % (cached['time'], ' (lower bound: the host kept up)' if cached['lower_bound'] else '')
     elif near:
-        R = near['mb_s'] * 1e6
         rsrc = 'measured %s at another rate of this channel set (%s)%s' % (
             near['time'], near['key'].split('@', 1)[1], ' (lower bound: the host kept up)' if near['lower_bound'] else '')
     else:
-        R, rsrc = CEILING_BPS, 'assumed (planning ceiling)'
+        rsrc = 'assumed (planning ceiling)'
+    # The duration maths needs an estimate of the readout itself. A run where the host kept up only proves the readout
+    # is at least what it produced, so planning on that number refuses runs the hardware sustains; it is used as a
+    # floor (never below the static ceiling) and the plan says so.
+    if cached and not cached['lower_bound']:
+        R = cached['mb_s'] * 1e6
+    elif full:
+        R = full['mb_s'] * 1e6
+    else:
+        R = max(CEILING_BPS, (bound or {}).get('mb_s', 0.0) * 1e6)
+        if bound:
+            rsrc += '; planned at %.0f MB/s, a lower bound of %.0f MB/s is a floor on the readout, not the readout' % (
+                R / 1e6, bound['mb_s'])
     needs_probe = cached is None and data_bps > SUSTAINED_BPS     # another rate is good enough to plan, not to keep
     if needs_probe and defer:
         rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
