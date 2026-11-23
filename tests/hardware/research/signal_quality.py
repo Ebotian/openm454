@@ -95,16 +95,12 @@ def main(argv=None):
     scope = scopemod.Scope()
     scope.open()
     before = scope.awg_status()                  # the generator is write-only: restore what we found
-    restored = True
+    path = os.path.join(args.out_dir, 'signal-quality.csv')
+    keys = ['round', 'config', 'rate_hz', 'sigma_mv', 'amp_mv', 'evenodd_mv', 'mod4_mv', 'rise_ns', 'edge_ns']
+    rows, produced, crash = [], [], None
     try:
         link = benchmod.Bench(benchmod.load()).link('awg_to_a0')
         scope.awg_set('square', 1e3, SWING_V, 0.0)
-        benchmod.write_manifest(args.out_dir, scope, __file__, args,
-                                {'configs': [c[0] for c in CONFIGS], 'swing_v': SWING_V,
-                                 'vdiv_v': 0.05, 'link': link.name},
-                                files=[os.path.join(args.out_dir, 'signal-quality.csv')],
-                                candidates=['signal-quality.csv'])
-        rows = []
         for r in range(args.rounds):
             order = CONFIGS[r % len(CONFIGS):] + CONFIGS[:r % len(CONFIGS)]
             for name, an, dg, rate in order:
@@ -113,16 +109,25 @@ def main(argv=None):
                 rows.append(row)
             if (r + 1) % 10 == 0:
                 print('  %d/%d rounds' % (r + 1, args.rounds), file=sys.stderr, flush=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(','.join(keys) + '\n')
+            for row in rows:
+                f.write(','.join(str(row[k]) for k in keys) + '\n')
+        produced.append(path)                        # listed only once the file is really there
+    except BaseException as e:                       # a failed capture still leaves a manifest that says so
+        crash = repr(e)
+        raise
     finally:
+        extra = {'configs': [c[0] for c in CONFIGS], 'swing_v': SWING_V, 'vdiv_v': 0.05, 'link': 'awg_to_a0'}
+        if crash:
+            extra['error'] = crash
+        manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args, extra, files=produced,
+                                          candidates=['signal-quality.csv'])
+        if manifest['stale']:
+            print('%s not written this run: the file(s) there are from an earlier run' % ', '.join(manifest['stale']),
+                  file=sys.stderr)
         restored = benchmod.restore_or_park(scope, before)
         scope.close()
-
-    path = os.path.join(args.out_dir, 'signal-quality.csv')
-    keys = ['round', 'config', 'rate_hz', 'sigma_mv', 'amp_mv', 'evenodd_mv', 'mod4_mv', 'rise_ns', 'edge_ns']
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(','.join(keys) + '\n')
-        for row in rows:
-            f.write(','.join(str(row[k]) for k in keys) + '\n')
 
     summary = {}
     for name, *_ in CONFIGS:
