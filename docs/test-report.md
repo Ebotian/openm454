@@ -149,7 +149,8 @@ last quarter of the samples against the median of the first quarter and bounds w
 releasing 23 MiB drops RSS inside the tail, which is negative growth and not a leak, while a climb every pair agrees
 on is still reported at nearly its height. Both are tri-state — `pass` / `fail` / `insufficient_data` — and the
 steady one needs at least 40 samples: at the 60 s tier the log run has 12 and reports `insufficient_data` rather
-than counting as verified, while the other three pass. The 10 min and 1 h tiers have enough points for all four.
+than counting as verified, while the other three pass. The 10 min tier has enough points for all four (measured
+below); the 1 h tier for the lifecycle run only.
 
 Measured at the default 10 min tier (2026-11-23, one session, 4 passed, 2404.7 s): stream +17.40 / steady 0.06
 (1621 records), lifecycle +11.28 / steady 6.68 (626 cycles), repeat +0.06 / 0.04 (481 captures), log +0.004 / 0.00
@@ -157,9 +158,14 @@ Measured at the default 10 min tier (2026-11-23, one session, 4 passed, 2404.7 s
 to 24.0 MiB here, lifecycle's from 64.1 MiB — so the old whole-run bound of 64 MiB was within 0.05 MiB of failing
 the lifecycle run at this tier for allocator reasons alone. The lifecycle series is a staircase: ~1.5 MiB per
 open/close cycle paid out and mostly released again (net ~0.024 MiB/cycle over the 470 cycles after the warm-up),
-which is why its steady value (6.68) is the one number here close to the 8 MiB bound. No 1 h run has been taken; at
-that net rate the 1 h tier (~3750 cycles) would report ≈90 MiB after the warm-up and fail — that tier needs its own
-run before its result is quoted, and the cause of the staircase is open (fds and threads stay unchanged).
+which is why its steady value (6.68) is the one number there close to the 8 MiB bound.
+
+The 1 h tier was measured the same day on the lifecycle run (3764 cycles, 3601.8 s, passed): **+11.58 MiB** after the
+warm-up, **steady 3.86 MiB**, open time 768.8 ms median with 0.04 % drift across the hour, fds and threads unchanged.
+The staircase is not linear, so the 10 min run's ~0.024 MiB/cycle did not project: the first eighth carries the knee
+(58 -> 124 MiB) and the remaining seven climb 124 -> 137, i.e. ~0.004 MiB/cycle over 3300 cycles, with occasional
+1.5 MiB steps paid and returned (one eighth swings 11 MiB) — a projection from the shorter tier would have predicted
+~90 MiB and a failure that did not happen. Why each reopen pays ~1.5 MiB that is mostly returned later is still open.
 
 Seed defects, injected and reverted: dropping every frame's `host_s` fails the repeat run and the functional
 arrival-time test; a stop path that forgets to release the device fails `test_the_engine_is_idle_after_a_capture`,
