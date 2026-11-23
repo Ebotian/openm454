@@ -81,6 +81,7 @@ RESTART_S = 0.18                     # measured: stop handshake, 100 ms quiet, s
                                      # (the traced spacing; restart_s() follows an OPENM454_TIMING profile)
 RECORD_SAMPLES = 400_000_000         # a stream record: at most 400M samples per channel and 512 MiB
 PROBE_S = 2.0                        # readout probe before a log above SUSTAINED_BPS whose channel set was not measured
+ROUNDING_BPS = 1e3                   # state/host.json stores MB/s with three decimals: 1 kB/s of slack, no more
 PROBE_BACKLOG = 256 * 2 ** 20        # ... ends early once the scope is this far ahead (its data are dropped anyway)
 KEPT_UP = 0.99                       # a probe reading >= this x D: the host keeps up (R >= D, a lower bound)
 SMALL_PKT_TRANSFERS = 4              # small packets: DSWave queues 1 read of one block, the driver at least this many
@@ -238,7 +239,12 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     # SUSTAINED_BPS is a rule of thumb for a configuration nothing is known about; a measurement of this set that came
     # in below what the run will produce is a bottleneck whatever the rate (100 MB/s of data against a measured
     # 50 MB/s readout is gap-free for 5 s, not sustained).
-    at_readout = data_bps <= R * (1 + 1e-3)          # the cache stores MB/s rounded: 83.333 for 83.3333 counts
+    # The cache stores MB/s with three decimals, so a comparison needs a 1 kB/s rounding allowance — and nothing more
+    # for a full measurement, where the value is an estimate of the readout and 0.1 % of it (0.125 MB/s at 125 MB/s)
+    # would hide a real deficit that reaches the backlog guard in ~84 min. A lower bound of this same rate keeps the
+    # cache's own 1e-3: "the host kept up" describes a run, not a reading.
+    slack = R * 1e-3 if (cached and cached['lower_bound']) else ROUNDING_BPS
+    at_readout = data_bps <= R + slack
     if bound and not at_readout:
         verdict = 'burst'
     elif data_bps <= SUSTAINED_BPS or kept_up or (bound and data_bps <= 0.95 * R):

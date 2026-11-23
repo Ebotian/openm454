@@ -156,6 +156,22 @@ def test_a_lower_bound_at_another_rate_cannot_refuse_a_run_the_hardware_keeps_up
     assert make_plan(['A0', 'A1'], [], 200e6, 1)['readout_mb_s'] == 250.0
 
 
+def test_a_full_measurement_within_a_tenth_of_a_percent_is_not_sustained():
+    """The review's case: another rate of this set measured 49.98 MB/s, the run will produce 50 MB/s.
+
+    The 1e-3 allowance belongs to the cache's three decimals and to a same-rate "the host kept up"; applied to a full
+    measurement it hid a 20 kB/s deficit that fills the backlog guard in ~7 h (0.1 % of 125 MB/s hid ~84 min).
+    """
+    host.readout_put(host.readout_key(1, 0, 200e6), 49.98, False, 200.0)
+    pl = make_plan(['A0'], [], 50e6, 3000)
+    assert pl['verdict'] == 'burst' and pl['readout_mb_s'] == 50.0          # reported rounded to 0.1 MB/s
+    assert pl['gapfree_max_s'] == pytest.approx(math.floor(logger.BACKLOG_STOP * 49.98e6 / (50e6 * 20e3) * 100) / 100,
+                                                abs=0.01)
+    with pytest.raises(DscopeError) as refused:                    # forever: no estimate of the readout pretends it fits
+        make_plan(['A0'], [], 50e6, None)
+    assert refused.value.code == 'NEEDS_FORCE'
+
+
 def test_cli_remeasure_probes_even_below_the_sustained_rate():
     """The review's case: 'log --remeasure' at 50 MSa/s asked for a measurement and got none, because the CLI only
     bypassed the cache and the automatic probe rule skips everything below the sustained rate."""
