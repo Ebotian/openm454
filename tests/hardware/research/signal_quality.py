@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Signal quality against the channel configuration, on one bench (run by hand; not part of pytest).
 
-    python tests/hardware/research/signal_quality.py --rounds 60
+    python tests/hardware/research/signal_quality.py --bench-confirmed --rounds 60
 
 Every round captures each configuration once, in rotation, so a slow drift of the generator or the front end cannot be
 mistaken for a configuration effect. Only the declared link's channel carries a signal (the built-in generator, here
@@ -85,7 +85,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--rounds', type=int, default=60)
     ap.add_argument('--out-dir', default=HERE)
+    ap.add_argument('--bench-confirmed', action='store_true',
+                    help='the bench owner confirmed for this run that the bench is wired exactly as '
+                         'tests/hardware/bench.json declares (the script drives the generator into it)')
     args = ap.parse_args(argv)
+    if not args.bench_confirmed:                     # before the scope is opened: nothing is driven unconfirmed
+        raise SystemExit(benchmod.wiring_gate_message('this research script'))
 
     scope = scopemod.Scope()
     scope.open()

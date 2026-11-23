@@ -20,6 +20,21 @@ def load(path=None):
         return json.load(f)
 
 
+def wiring_gate_message(who='the hardware suite'):
+    """The refusal every caller prints when nobody confirmed, for this run, the wiring the declaration assumes.
+
+    The declaration is about a physical bench that may have been rewired since it was written, so it is an assumption,
+    not a fact: pytest asks with --bench-confirmed (tests/hardware/conftest.py), and the research scripts drive the
+    generator through the same gate, because a script that programs a signal into an undeclared input is the failure
+    mode this guard exists for.
+    """
+    links = load().get('links') or {}
+    lines = ['%s: %s' % (k, v.get('summary', '')) for k, v in sorted(links.items())] or ['(no links declared)']
+    return ('%s assumes the bench is wired as tests/hardware/bench.json declares:\n  %s\n'
+            'ask the bench owner whether it is wired exactly like that right now, and only then rerun with '
+            '--bench-confirmed (never assume the wiring was kept since the last run)' % (who, '\n  '.join(lines)))
+
+
 class Link:
     """One declared connection: a source driving a sink, and what a capture of that sink has to look like."""
 

@@ -3,8 +3,11 @@
 
 Run by hand on a machine with the M454 attached (it is not part of pytest):
 
-    python tests/hardware/research/usb_ceiling.py            # matrix + transfer trace, writes the two CSVs
-    python tests/hardware/research/usb_ceiling.py --quick    # matrix only
+    python tests/hardware/research/usb_ceiling.py --bench-confirmed            # matrix + trace, writes the two CSVs
+    python tests/hardware/research/usb_ceiling.py --bench-confirmed --quick    # matrix only
+
+It drives the generator into the declared input, so it asks for the same per-run confirmation the hardware suite does
+(--bench-confirmed): without it the script stops before opening the scope and lists the declared links.
 
 What it measures, and why the columns are separate:
   logical_mb_s  rate x (analog + digital/8), the program's own number
@@ -103,7 +106,12 @@ def main(argv=None):
     ap.add_argument('--seconds', type=float, default=1.2, help='planned window per configuration')
     ap.add_argument('--quick', action='store_true', help='skip the transfer trace')
     ap.add_argument('--out-dir', default=HERE)
+    ap.add_argument('--bench-confirmed', action='store_true',
+                    help='the bench owner confirmed for this run that the bench is wired exactly as '
+                         'tests/hardware/bench.json declares (the script drives the generator into it)')
     args = ap.parse_args(argv)
+    if not args.bench_confirmed:                     # before the scope is opened: nothing is driven unconfirmed
+        raise SystemExit(benchmod.wiring_gate_message('this research script'))
 
     scope = scopemod.Scope()
     scope.open()

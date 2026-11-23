@@ -11,8 +11,11 @@ scope directly.
 
 Run them on the bench (the scope attached, the generator wired to the declared input):
 
-    python tests/hardware/research/usb_ceiling.py            # ~30 s
-    python tests/hardware/research/signal_quality.py --rounds 300  # ~7 min, 1800 captures
+    python tests/hardware/research/usb_ceiling.py --bench-confirmed                # ~30 s
+    python tests/hardware/research/signal_quality.py --bench-confirmed --rounds 300  # ~7 min, 1800 captures
+
+Both drive the generator into the declared input, so both ask for the same per-run confirmation the hardware suite
+does: without `--bench-confirmed` they stop before opening the scope and print the links `bench.json` declares.
 
 Both read the declared link from `tests/hardware/bench.json` (channel, probe) and set their own levels: the signal
 quality experiment deliberately uses 0.20 V at 0.05 V/div so that 1 LSB = 1.7 mV, which the 3 V declared signal could

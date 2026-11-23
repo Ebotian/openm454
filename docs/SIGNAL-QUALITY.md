@@ -96,7 +96,9 @@ sessions for the same reason.
 round, configuration, applied rate, sigma, amplitude, even/odd, mod-4, rise, edge position) and prints the per-config
 medians with bootstrap intervals plus the paired differences:
 
-    python tests/hardware/research/signal_quality.py --rounds 300      # ~7 min on one bench
+    python tests/hardware/research/signal_quality.py --bench-confirmed --rounds 300   # ~7 min on one bench
 
+Both scripts drive the generator, so both require `--bench-confirmed` for the run (the same per-run wiring
+confirmation the hardware tests ask for) and restore the generator afterwards.
 `tests/hardware/research/usb_ceiling.py` produces the readout-ceiling table and the transfer trace quoted in the
 README. Both are run by hand on a bench with the scope attached; neither is part of pytest.
