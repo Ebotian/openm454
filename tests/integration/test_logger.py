@@ -103,11 +103,10 @@ def test_measured_readout_replaces_the_assumed_one():
 
 
 def test_the_engine_delivers_nothing_after_it_says_stop(monkeypatch):
-    """The measurement point of the backlog model, at the engine: after the stop flag says yes, nothing is counted.
+    """The logger's side of the stop: it freezes the model on the pass its flag says yes, and nothing follows.
 
-    BacklogMeter.stop() freezes the production term so a drain cannot inflate the peak, but the loop returns on the
-    same pass, so the clamp is never exercised by production. This pins the invariant the clamp relies on instead of
-    leaving it to a unit test that feeds the model by hand.
+    This drives the logger over a scope double, so it says nothing about the engine loop; the production loop is
+    pinned by tests/stateful/test_acquire_sim.py::test_nothing_is_delivered_after_the_stop_flag_says_yes.
     """
     updates, stops = [], []
     real_update, real_stop = logger.BacklogMeter.update, logger.BacklogMeter.stop
