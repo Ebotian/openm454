@@ -77,6 +77,23 @@ def drift(values, tolerance):
     return {'first': first, 'last': last, 'relative': rel, 'tolerance': tolerance, 'ok': rel <= tolerance}
 
 
+def sustained_peak(values, window):
+    """The highest level the series *held* for a whole window: one sample is not a level.
+
+    The steady check counts growth only above the peak the run already reached, and that peak has to be sustained: an
+    early sample at 180 MiB must not hide a later climb from 100 to 136 MiB, while an earlier plateau does mark
+    territory the run has already been in. Windows step by a quarter of their width — enough to find the level, and a
+    1 h run's estimate stays cheap.
+    """
+    if not values:
+        return 0.0
+    if len(values) <= window:
+        return max(values)
+    step = max(1, window // 4)
+    return max(statistics.median(values[i:i + window])
+               for i in range(0, len(values) - window + 1, step))
+
+
 def slope_series(tail):
     """The samples that enter the pairwise slopes: at most SLOPE_POINTS, evenly spaced, as (index, value).
 
@@ -117,7 +134,7 @@ def steady_growth(values, tolerance, min_samples=40):
     ramp = statistics.median(slopes) * (len(tail) - 1)
     k = max(3, len(tail) // 10)                   # at least three samples: one sample is a spike, not a level
     end = statistics.median(tail[-k:])
-    prior = max(values[:3 * len(values) // 4])    # the highest level the run already reached
+    prior = sustained_peak(values[:3 * len(values) // 4], k)      # the highest level the run *held* before the quarter
     # Growth has to be new territory. The stream run on this bench swings ~33 MiB (1.5 MiB per record paid and mostly
     # returned), so a quarter that climbs but stays below the peak the run already reached is the allocator's
     # staircase: measured once at 29.6 MiB of slope while ending 11 MiB under its own peak. Only a quarter that reaches

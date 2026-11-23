@@ -73,6 +73,16 @@ def test_a_quarter_that_climbs_without_passing_the_peak_is_recovery():
     assert grown["state"] == "fail" and grown["value"] > 8.0
 
 
+def test_an_early_spike_does_not_hide_a_later_climb():
+    """The review's case: one sample at 180 MiB at the start used to set the level the run had already reached, so a
+    tail climbing 100 -> 136 MiB read as 0 MiB and passed. A level has to be held for a window."""
+    climb = [100.0] * 61 + [100.0 + i for i in range(36)] + [136.0] * 3
+    plain = soakmod.steady_growth(climb, 8.0)
+    spiked = soakmod.steady_growth([180.0] + climb[1:], 8.0)
+    assert plain["state"] == "fail" and spiked["state"] == "fail"
+    assert spiked["value"] == plain["value"], 'the spike is not a level: it changes nothing'
+
+
 def test_the_slope_uses_at_most_the_declared_number_of_points():
     """The review's case: 511 samples in the quarter, floor division gave step 1 and 130 305 pairwise slopes."""
     for n in (511, 941, 2430):
