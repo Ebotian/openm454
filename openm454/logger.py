@@ -141,7 +141,8 @@ def loop_hal(st, rate, fold=False, divider=None):
 
 
 def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_budget=None, chunk_s=None,
-         zero_info=None, force=False, keep_last=False, disk_budget=None, defer=False, remeasure=False):
+         zero_info=None, force=False, keep_last=False, disk_budget=None, defer=False, remeasure=False,
+         probe=None):
     """Offline plan of a loop log. duration None = until stopped. Raises INVALID_ARG for what cannot work.
     The readout while acquiring (R) depends on the channel set: it comes from state/host.json (measured by a probe
     or an earlier run), else the planning ceiling of 190 MB/s is assumed. Above R the scope's memory fills at D - R
@@ -150,7 +151,9 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     piece (or one record holds the whole duration), else NEEDS_FORCE: log gives the longest gap-free piece, and
     force records it and stops when the scope is BACKLOG_STOP ahead (stop_reason 'ring_full'). Both errors carry
     the numbers in .plan. defer=True: with an assumed R nothing is refused (the run measures R first);
-    remeasure: ignore the cached R (with defer: measure it again before deciding).
+    remeasure: ignore the cached R (with defer: measure it again before deciding);
+    probe: True measure this channel set before the run whatever the rate, False never measure (plan with the cache
+    or the ceiling), None decide from the cache and the sustained rate.
     keep_last: a RAM log longer than the budget keeps the newest budget's worth (ring) instead of being refused.
     disk_budget: bytes a disk log may use (default: the owner's allowance in state/host.json, else 90 % of free)."""
     from .scope import _cached_zero, no_repeat
@@ -224,7 +227,9 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         if bound:
             rsrc += '; planned at %.0f MB/s, a lower bound of %.0f MB/s is a floor on the readout, not the readout' % (
                 R / 1e6, bound['mb_s'])
-    needs_probe = cached is None and data_bps > SUSTAINED_BPS     # another rate is good enough to plan, not to keep
+    # probe: True measures this channel set first, False never does, None decides from the cache and the sustained
+    # rate (the CLI's default). Another rate is good enough to plan, not to keep.
+    needs_probe = bool(probe) if probe is not None else (cached is None and data_bps > SUSTAINED_BPS)
     if needs_probe and defer:
         rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
     kept_up = bool(bound and bound['lower_bound'] and data_bps <= R * (1 + 1e-3))    # stored rounded
