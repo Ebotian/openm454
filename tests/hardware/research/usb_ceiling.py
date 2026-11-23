@@ -116,21 +116,16 @@ def main(argv=None):
     scope = scopemod.Scope()
     scope.open()
     before = scope.awg_status()                  # the generator is write-only: restore what we found
+    ceiling = os.path.join(args.out_dir, 'usb-ceiling.csv')
+    transfers_path = os.path.join(args.out_dir, 'usb-transfers.csv')
+    produced, crash = [], None
     try:
         link = benchmod.Bench(benchmod.load()).link('awg_to_a0')
         link.program(scope)
-        ceiling = os.path.join(args.out_dir, 'usb-ceiling.csv')
-        transfers = os.path.join(args.out_dir, 'usb-transfers.csv')
-        produced = [ceiling] if args.quick else [ceiling, transfers]
-        manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args,
-                                          {'configs': [c[0] for c in CONFIGS], 'seconds': args.seconds},
-                                          files=produced, candidates=['usb-ceiling.csv', 'usb-transfers.csv'])
-        if manifest['stale']:                        # --quick keeps the trace of an older run: say whose it is
-            print('%s not written this run: the file(s) there are from an earlier run' % ', '.join(manifest['stale']),
-                  file=sys.stderr)
         print('matrix:', file=sys.stderr)
         rows = matrix(scope, args.seconds)
         write_csv(ceiling, rows)
+        produced.append(ceiling)                     # only a file this run wrote is listed in the manifest
         if not args.quick:
             print('transfer trace: 1 analog at 400 MSa/s, 1 s', file=sys.stderr)
             trace = transfers(scope)
@@ -143,11 +138,24 @@ def main(argv=None):
                     min(t[2] for t in trace), statistics.median([t[2] for t in trace]),
                     max(t[2] for t in trace)), file=sys.stderr)
                 t0 = trace[0][0]
-                write_csv(transfers,
+                write_csv(transfers_path,
                           [{'t_s': round(t - t0, 6), 'bytes': n, 'inflight': i} for t, n, i in trace])
+                produced.append(transfers_path)
+    except BaseException as e:                       # a crash still leaves a manifest that says what happened
+        crash = repr(e)
+        raise
     finally:
+        extra = {'configs': [c[0] for c in CONFIGS], 'seconds': args.seconds}
+        if crash:
+            extra['error'] = crash
+        manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args, extra, files=produced,
+                                          candidates=['usb-ceiling.csv', 'usb-transfers.csv'])
+        if manifest['stale']:                        # an older run's file: say whose it is, never delete it
+            print('%s not written this run: the file(s) there are from an earlier run' % ', '.join(manifest['stale']),
+                  file=sys.stderr)
         restored = benchmod.restore_or_park(scope, before)
         scope.close()
+
     return 0 if restored else 1
 
 
