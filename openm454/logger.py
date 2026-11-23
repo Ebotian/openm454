@@ -217,16 +217,20 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         rsrc = 'assumed (planning ceiling)'
     # The duration maths needs an estimate of the readout itself. A run where the host kept up only proves the readout
     # is at least what it produced, so planning on that number refuses runs the hardware sustains; it is used as a
-    # floor (never below the static ceiling) and the plan says so.
+    # floor (never below the static ceiling) and the plan says so. This rate's own measurement wins over anything
+    # measured at another rate: a set that kept up here at 250 MB/s is not refused because another rate measured
+    # 207.4 MB/s, and its own run is the only evidence about this configuration.
     if cached and not cached['lower_bound']:
         R = cached['mb_s'] * 1e6
-    elif full:
-        R = full['mb_s'] * 1e6
     else:
-        R = max(CEILING_BPS, (bound or {}).get('mb_s', 0.0) * 1e6)
-        if bound:
-            rsrc += '; planned at %.0f MB/s, a lower bound of %.0f MB/s is a floor on the readout, not the readout' % (
-                R / 1e6, bound['mb_s'])
+        estimate = full['mb_s'] * 1e6 if full else CEILING_BPS          # a full measurement of the set, or the ceiling
+        floor = cached['mb_s'] * 1e6 if cached else 0.0                 # this rate kept up: the readout is at least this
+        if near and near['lower_bound']:
+            floor = max(floor, near['mb_s'] * 1e6)                      # ... or another rate's run did
+        R = max(estimate, floor)
+        if floor:
+            rsrc += '; a lower bound of %.0f MB/s is a floor on the readout, not the readout, so the plan uses ' \
+                    '%.0f MB/s' % (floor / 1e6, R / 1e6)
     # probe: True measures this channel set first, False never does, None decides from the cache and the sustained
     # rate (the CLI's default). Another rate is good enough to plan, not to keep.
     needs_probe = bool(probe) if probe is not None else (cached is None and data_bps > SUSTAINED_BPS)

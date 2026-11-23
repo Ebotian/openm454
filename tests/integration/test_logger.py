@@ -157,6 +157,18 @@ def test_a_lower_bound_at_another_rate_cannot_refuse_a_run_the_hardware_keeps_up
     assert make_plan(['A0', 'A1'], [], 200e6, 1)['readout_mb_s'] == 250.0
 
 
+def test_this_rates_own_measurement_wins_over_another_rates():
+    """The review's case: a set that kept up here at 250 MB/s must not be refused because another rate of the same set
+    measured 207.4 MB/s. A cross-rate value is an estimate for a configuration that has never run; once this rate has
+    its own run (kept up at 250 MB/s means the readout is at least 250), that is the evidence that counts."""
+    host.readout_put(host.readout_key(4, 8, 50e6), 250.0, True, 250.0)       # this rate kept up at 250 MB/s
+    assert make_plan(*A4D8, 50e6, 12)['verdict'] == 'sustained'
+    host.readout_put(host.readout_key(4, 8, 100e6), 207.4, False, 500.0)     # another rate's full measurement
+    pl = make_plan(*A4D8, 50e6, 12)
+    assert pl['readout_mb_s'] == 250.0 and pl['verdict'] == 'sustained' and pl['gapfree_max_s'] is None
+    assert 'floor on the readout' in pl['readout_source']
+
+
 def test_a_measurement_of_the_same_set_at_another_rate_is_used():
     """The readout depends on the channel set far more than on the rate: 2 analog + 8 digital measured 287 MB/s at
     200 MSa/s is the right planning value for 100 MSa/s, where the static 190 MB/s ceiling would refuse a run the
