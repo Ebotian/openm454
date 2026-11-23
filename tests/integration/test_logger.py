@@ -185,6 +185,40 @@ def test_a_measured_readout_below_the_data_rate_is_not_sustained():
     assert make_plan(['A0', 'A1'], [], 50e6, 60)['verdict'] == 'sustained'   # 100 MB/s, nothing measured
 
 
+def test_an_estimate_does_not_refuse_a_run_before_it_is_measured():
+    """The review's case: with only a cross-rate 50 MB/s cached, the CLI refused a 12 s run of 100 MB/s and never probed.
+
+    An estimate is for a configuration that has never run; refusing on it denied a run the device sustains (the same
+    set measured 100 MB/s with --remeasure). With defer (a real log) the plan now asks for the probe instead.
+    """
+    host.readout_put(host.readout_key(1, 0, 200e6), 50.0, False, 200.0)      # another rate: 50 MB/s measured
+    pl = make_plan(['A0'], [], 100e6, 12, defer=True)
+    assert pl['_needs_probe'] and pl['provisional'] and pl['readout_mb_s'] == 50.0
+    assert 'probe' in pl['readout_source']
+    with pytest.raises(DscopeError) as refused:                              # probe=False means never: refuses
+        make_plan(['A0'], [], 100e6, 12, defer=True, probe=False)
+    assert refused.value.code == 'NEEDS_FORCE'
+    host.readout_put(host.readout_key(1, 0, 100e6), 50.0, False, 100.0)      # this rate measured: the refusal stands
+    with pytest.raises(DscopeError) as measured:
+        make_plan(['A0'], [], 100e6, 12, defer=True)
+    assert measured.value.code == 'NEEDS_FORCE'
+
+
+def test_a_rounded_cache_still_counts_as_kept_up():
+    """The review's case: 33.333333 MB/s of data confirmed kept up, cached as 33.333 MB/s (three decimals).
+
+    data_bps > R then fired before the rounding tolerance, so a forever run was refused on a 0.000033 MB/s difference.
+    Both sides now compare with the same tolerance the kept-up rule uses.
+    """
+    first = make_plan(['A0'], [], 33.333e6, None)
+    key, data_bps = first['_readout_key'], first['_data_bps']
+    host.readout_put(key, round(data_bps / 1e6, 3), True, data_bps / 1e6)                     # stored rounded down
+    host.readout_put(host.readout_key(1, 0, 200e6), round(data_bps / 1e6, 3) - 3.0, False, 200.0)
+    pl = make_plan(['A0'], [], 33.333e6, None)
+    assert pl['verdict'] == 'sustained' and pl['gapfree_max_s'] is None and pl['recommendation'] == 'log'
+    assert data_bps > pl['readout_mb_s'] * 1e6, 'the case is only interesting when the cache rounds below the data'
+
+
 def test_this_rates_own_measurement_wins_over_another_rates():
     """The review's case: a set that kept up here at 250 MB/s must not be refused because another rate of the same set
     measured 207.4 MB/s. A cross-rate value is an estimate for a configuration that has never run; once this rate has

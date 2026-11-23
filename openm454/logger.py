@@ -234,17 +234,16 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     # probe: True measures this channel set first, False never does, None decides from the cache and the sustained
     # rate (the CLI's default). Another rate is good enough to plan, not to keep.
     needs_probe = bool(probe) if probe is not None else (cached is None and data_bps > SUSTAINED_BPS)
-    if needs_probe and defer:
-        rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
     kept_up = bool(bound and bound['lower_bound'] and data_bps <= R * (1 + 1e-3))    # stored rounded
     # SUSTAINED_BPS is a rule of thumb for a configuration nothing is known about; a measurement of this set that came
     # in below what the run will produce is a bottleneck whatever the rate (100 MB/s of data against a measured
     # 50 MB/s readout is gap-free for 5 s, not sustained).
-    if bound and data_bps > R:
+    at_readout = data_bps <= R * (1 + 1e-3)          # the cache stores MB/s rounded: 83.333 for 83.3333 counts
+    if bound and not at_readout:
         verdict = 'burst'
     elif data_bps <= SUSTAINED_BPS or kept_up or (bound and data_bps <= 0.95 * R):
         verdict = 'sustained'
-    elif data_bps <= R:
+    elif at_readout:
         verdict = 'near_limit'
         warnings.append('%.0f MB/s is near the readout limit of this channel set (%.0f MB/s, %s); the backlog is '
                         'watched and the run stops before data could be lost' % (data_bps / 1e6, R / 1e6, rsrc))
@@ -264,6 +263,13 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
         better = alt['same_rates'] and (alt['records'] == 1 or alt['record_s'] >= burst_s)
         recommendation = 'stream' if better else 'log --force'
     what = 'forever' if duration is None else '%g s' % duration
+    # An estimate must not refuse a run nobody measured: when this rate has no measurement of its own and the plan
+    # would refuse, measure this channel set first and decide on the measurement (the CLI re-plans with it). A refusal
+    # on a measurement of this rate stands, and probe=False still means never.
+    if defer and probe is not False and cached is None and too_long and not force:
+        needs_probe = True
+    if needs_probe and defer:
+        rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
     if too_long and not force and not (defer and needs_probe):
         why = ('%s at %.0f MB/s: log is gap-free for the first %.2f s only (readout %.0f MB/s, %s: the scope gets '
                '%.0f MB/s ahead, and nothing can be read after a stop)' % (what, data_bps / 1e6, gapfree, R / 1e6, rsrc,
