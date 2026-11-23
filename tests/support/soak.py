@@ -12,7 +12,7 @@ import time
 
 STATE = 'state'
 MIB = 1024.0 * 1024.0
-SLOPE_POINTS = 256        # at most this many samples per quarter enter the pairwise slopes: 32 640 pairs, ~1 MiB
+SLOPE_POINTS = 256        # at most this many samples per quarter enter the pairwise slopes: 32 640 pairs, ~2 MiB
                           # (a quarter of a 1 h stream run is ~2 400 samples, i.e. 2.9 M pairs and 125 MiB otherwise)
 
 
@@ -77,6 +77,16 @@ def drift(values, tolerance):
     return {'first': first, 'last': last, 'relative': rel, 'tolerance': tolerance, 'ok': rel <= tolerance}
 
 
+def slope_series(tail):
+    """The samples that enter the pairwise slopes: at most SLOPE_POINTS, evenly spaced, as (index, value).
+
+    The ceiling has to be reached by the step, not by luck: 511 samples with floor division (511 // 256 = 1) would keep
+    all of them, i.e. 130 305 pairs, four times the window this bound is about.
+    """
+    step = max(1, (len(tail) + SLOPE_POINTS - 1) // SLOPE_POINTS)
+    return [(i, tail[i]) for i in range(0, len(tail), step)]
+
+
 def steady_growth(values, tolerance, min_samples=40):
     """Growth inside the last quarter of a series: pass, fail, or insufficient_data — never a silent pass.
 
@@ -100,8 +110,7 @@ def steady_growth(values, tolerance, min_samples=40):
         return {'value': None, 'tolerance': tolerance, 'ok': None, 'state': 'insufficient_data',
                 'note': 'too few samples (%d < %d) to judge steady growth' % (len(values), min_samples)}
     tail = values[3 * len(values) // 4:]
-    step = max(1, len(tail) // SLOPE_POINTS)      # bounded: a 1 h stream run has ~9 700 samples, its quarter ~2 400
-    pts = [(i, tail[i]) for i in range(0, len(tail), step)]
+    pts = slope_series(tail)
     slopes = [(b - a) / (j - i) for i, a in pts for j, b in pts if j > i]
     ramp = statistics.median(slopes) * (len(tail) - 1)
     k = max(3, len(tail) // 10)                   # at least three samples: one sample is a spike, not a level

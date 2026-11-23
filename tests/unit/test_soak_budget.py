@@ -59,6 +59,16 @@ def test_a_step_that_stays_is_growth_even_when_most_of_the_tail_is_flat():
     assert steady["state"] == "fail" and steady["ok"] is False and steady["value"] == 100.0
 
 
+def test_the_slope_uses_at_most_the_declared_number_of_points():
+    """The review's case: 511 samples in the quarter, floor division gave step 1 and 130 305 pairwise slopes."""
+    for n in (511, 941, 2430):
+        pts = soakmod.slope_series(list(range(n)))
+        assert len(pts) <= soakmod.SLOPE_POINTS, n
+        assert len({b[0] - a[0] for a, b in zip(pts, pts[1:])}) == 1, 'evenly spaced'
+        assert pts[0][0] == 0 and pts[-1][0] < n
+    assert len(soakmod.slope_series(list(range(511)))) == 256
+
+
 def test_a_single_sample_at_the_end_is_not_growth():
     """Offline reproduction from the review's second round: 62 samples at 100 MiB and one at 140 MiB.
 
