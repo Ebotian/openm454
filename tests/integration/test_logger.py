@@ -102,6 +102,39 @@ def test_measured_readout_replaces_the_assumed_one():
     assert make_plan(['A0', 'A1', 'A2'], ['D%d' % i for i in range(5)], 50e6, None)['verdict'] == 'sustained'
 
 
+def test_the_engine_delivers_nothing_after_it_says_stop(monkeypatch):
+    """The measurement point of the backlog model, at the engine: after the stop flag says yes, nothing is counted.
+
+    BacklogMeter.stop() freezes the production term so a drain cannot inflate the peak, but the loop returns on the
+    same pass, so the clamp is never exercised by production. This pins the invariant the clamp relies on instead of
+    leaving it to a unit test that feeds the model by hand.
+    """
+    updates, stops = [], []
+    real_update, real_stop = logger.BacklogMeter.update, logger.BacklogMeter.stop
+
+    def traced_update(self, now, received):
+        updates.append(now)
+        return real_update(self, now, received)
+
+    def traced_stop(self, now):
+        real_stop(self, now)
+        stops.append(now)
+    monkeypatch.setattr(logger.BacklogMeter, 'update', traced_update)
+    monkeypatch.setattr(logger.BacklogMeter, 'stop', traced_stop)
+    pl = make_plan(*A2D8, 20e6, 5)
+    _layout, _an, _dg, stream = fake_signal(pl, 1.0)
+    calls = {'n': 0}
+
+    def stop_flag():
+        calls['n'] += 1
+        return calls['n'] > 2                     # stop while the ring still holds data
+    res = logger.run(FakeScope(stream, pl['packet_bytes']), settings(*A2D8), pl, None, stop_flag=stop_flag)
+    assert res['acq']['stop_reason'] == 'stop_request' and calls['n'] > 2
+    assert stops, 'the stop wrapper has to freeze the model when it says yes'
+    late = [now for now in updates if now > min(stops)]
+    assert not late, 'the engine must not feed the model after the stop: it returns on that pass'
+
+
 def test_a_lower_bound_at_another_rate_cannot_refuse_a_run_the_hardware_keeps_up_with():
     """A run where the host kept up records the rate it produced, not the readout: it is a floor, not a ceiling.
 

@@ -28,8 +28,11 @@ def test_the_backlog_grows_at_the_difference_and_the_peak_is_bounded():
 
 
 def test_nothing_is_added_after_the_stop():
-    """After the stop the device produces nothing more: the reads that still arrive are the drain, so the model must
-    freeze its production term instead of growing the peak by (D - R) x drain."""
+    """The model's contract for reads that arrive after a stop request: production is frozen, so the reads only drain.
+
+    The engine loop returns on the pass its stop flag says yes, so it never feeds this case (pinned by
+    tests/integration/test_logger.py::test_the_engine_delivers_nothing_after_it_says_stop); a caller that does read the
+    drain must get this behaviour instead of a peak that grows by (D - R) x drain."""
     m = logger.BacklogMeter(400 * MB, 0.0)
     t, got = _feed(m, 1.2, 400 * MB, received=287 * MB)
     peak = m.max

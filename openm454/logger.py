@@ -795,9 +795,12 @@ class BacklogMeter:
 
     def stop(self, now):
         """The device produces nothing after the stop request: whatever still arrives is the drain of data already in
-        the ring, so from here on the model must not keep adding D per second. (A run that ends on the byte target
-        reaches the stop only after the last read, so this clamp matters for the paths that stop while data is still
-        queued: a user stop, the backlog guard, a stalled link.)"""
+        the ring, so from here on the model must not keep adding D per second.
+
+        The engine loop returns as soon as its stop flag says yes, so it delivers no chunk after this point and the
+        clamp is not exercised by it (tests/integration/test_logger.py pins that: no update after the stop). It stays
+        here as the model's contract for any caller that does read the drain — the value it protects is the peak, which
+        would otherwise grow by (D - R) x drain while nothing is being produced."""
         if self.t_stop is None:
             self.t_stop = now
 
@@ -966,9 +969,10 @@ def run(scope, st, pl, out_stem=None, emit=None, stop_flag=None, heartbeat=None,
         return False
 
     def stop():
-        """The engine's stop flag. Once it says yes the device is about to stop producing, so freeze the backlog
-        model first: what the host reads after that is the drain of data already produced, and counting it as new
-        production inflated the peak by (D - R) x drain (58 MB on a 1.2 s run at 400 MB/s read at 287)."""
+        """The engine's stop flag. Freeze the backlog model's production term on the pass that says yes: the device is
+        about to stop producing, so anything read after that is the drain of data already produced. The engine returns
+        on that same pass, which makes this a no-op for the loop as it is today and keeps the model honest for a
+        caller that reads the drain."""
         yes = _stop()
         if yes and s['meter'] is not None:
             s['meter'].stop(time.perf_counter())
