@@ -157,6 +157,17 @@ def test_a_lower_bound_at_another_rate_cannot_refuse_a_run_the_hardware_keeps_up
     assert make_plan(['A0', 'A1'], [], 200e6, 1)['readout_mb_s'] == 250.0
 
 
+def test_cli_remeasure_probes_even_below_the_sustained_rate():
+    """The review's case: 'log --remeasure' at 50 MSa/s asked for a measurement and got none, because the CLI only
+    bypassed the cache and the automatic probe rule skips everything below the sustained rate."""
+    ap = cli.build_parser()
+    base = ['log', '-c', 'A0', '--rate', '50M', '--duration', '1s', '--no-save']
+    assert cli.log_plan(ap.parse_args(base + ['--remeasure']), defer=True)[1]['_needs_probe']
+    assert not cli.log_plan(ap.parse_args(base), defer=True)[1]['_needs_probe']
+    fast = ['log', '-c', 'A0', '--rate', '200M', '--duration', '1s', '--no-save']
+    assert cli.log_plan(ap.parse_args(fast), defer=True)[1]['_needs_probe']      # the automatic rule still applies
+
+
 def test_a_measured_readout_below_the_data_rate_is_not_sustained():
     """The 150 MB/s rule of thumb is for a set nothing is known about.
 
