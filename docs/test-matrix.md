@@ -56,7 +56,8 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   of its last tenth against its first and the peak the run already reached, each tenth at least three samples so one
   sample is a spike and not a step (a step that stays is growth; a release is negative growth, not a leak; a quarter
   that climbs without passing the earlier peak is the allocator's swing, not growth) and is
-  tri-state (`pass` / `fail` / `insufficient_data`): a short run says it cannot judge
+  tri-state (`pass` / `fail` / `insufficient_data`), needs 200 samples, so the 60 s tier says it cannot judge
+  (12-162 samples, less than the knee and the per-cycle staircase it would have to see past)
   instead of counting as verified; the growth after the allocator warm-up is bounded separately, by comparing the
   median of the first quarter of the samples with the median of the last. Seven of the functional checks are the device counterpart of an offline test
   (self-test, spacing profile and its repeat-hold invariant, calibration bound/foreign, live packet geometry and

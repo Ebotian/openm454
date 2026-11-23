@@ -133,10 +133,10 @@ device does it:
 
 | run | what it did | measured |
 | --- | --- | --- |
-| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.17 ms, RSS +8.29 MiB after the warm-up, steady 0.01 MiB |
-| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS +13.79 MiB after the warm-up, steady 0.00 MiB |
-| log | 12 records x 5 s, to disk | 60 000 000 samples in 24 files, RSS +0.01 MiB after the warm-up, steady `insufficient_data` (12 samples) |
-| lifecycle | open -> capture -> close, 63 cycles | open median 768.7 ms, RSS +37.14 MiB after the warm-up (the knee spans the 60 s tier's first quarter), steady 1.10 MiB |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.17 ms, RSS +0.05 MiB after the warm-up, steady `insufficient_data` (49 samples) |
+| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS +6.20 MiB after the warm-up, steady `insufficient_data` (162 samples) |
+| log | 12 records x 5 s, to disk | 60 000 000 samples in 24 files, RSS +0.00 MiB after the warm-up, steady `insufficient_data` (12 samples) |
+| lifecycle | open -> capture -> close, 63 cycles | open median 768.7 ms, RSS +41.01 MiB after the warm-up (the knee spans the 60 s tier's first quarter), steady `insufficient_data` (63 samples) |
 
 Every run also asserts: no error row, frames/records counted, file descriptors and threads unchanged, the device
 released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run.
@@ -157,9 +157,12 @@ so a quarter that climbs without passing the peak the run already reached is rec
 samples of the quarter (32 640 pairwise slopes, ~2 MiB): a 1 h stream run has ~2 400 samples in its quarter, and the
 full cross product cost 125 MiB at the end of the run for a number that the bounded estimate gives to within
 0.003 MiB. Both are tri-state — `pass` / `fail` / `insufficient_data` — and the
-steady one needs at least 40 samples: at the 60 s tier the log run has 12 and reports `insufficient_data` rather
-than counting as verified, while the other three pass. The 10 min tier has enough points for all four (measured
-below); the 1 h tier for the lifecycle run only.
+steady one needs at least 200 samples, so the 60 s tier judges nothing: its runs hold 12-162 samples, and there the
+26 MiB knee and the ~1.5 MiB per-cycle staircase are both larger than the 8 MiB bound — this bench measured 32-42 MiB
+of net growth at 60 s against 11 MiB over 10 min and 1 h, so a 60 s verdict would be the knee, not a leak. All four
+report `insufficient_data` there and the run still asserts the net bound, frame/record counts, gaps, fds, threads and
+the released device. The 10 min tier has enough points for all four (measured below); the 1 h tier for the lifecycle
+run only.
 
 Measured at the default 10 min tier (2026-11-23, one session, 4 passed, 2404.7 s): stream +17.40 / steady 0.00
 (1621 records), lifecycle +11.28 / steady 6.68 (626 cycles), repeat +0.06 / 0.04 (481 captures), log +0.004 / 0.00
