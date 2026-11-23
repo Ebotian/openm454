@@ -91,6 +91,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if not args.bench_confirmed:                     # before the scope is opened: nothing is driven unconfirmed
         raise SystemExit(benchmod.wiring_gate_message('this research script'))
+    os.makedirs(args.out_dir, exist_ok=True)         # a first run into a new directory must not fail after the run
 
     scope = scopemod.Scope()
     scope.open()
@@ -98,6 +99,7 @@ def main(argv=None):
     path = os.path.join(args.out_dir, 'signal-quality.csv')
     keys = ['round', 'config', 'rate_hz', 'sigma_mv', 'amp_mv', 'evenodd_mv', 'mod4_mv', 'rise_ns', 'edge_ns']
     rows, produced, crash = [], [], None
+    restored, manifest_ok = True, True
     try:
         link = benchmod.Bench(benchmod.load()).link('awg_to_a0')
         scope.awg_set('square', 1e3, SWING_V, 0.0)
@@ -118,16 +120,23 @@ def main(argv=None):
         crash = repr(e)
         raise
     finally:
-        extra = {'configs': [c[0] for c in CONFIGS], 'swing_v': SWING_V, 'vdiv_v': 0.05, 'link': 'awg_to_a0'}
-        if crash:
-            extra['error'] = crash
-        manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args, extra, files=produced,
-                                          candidates=['signal-quality.csv'])
-        if manifest['stale']:
-            print('%s not written this run: the file(s) there are from an earlier run' % ', '.join(manifest['stale']),
-                  file=sys.stderr)
-        restored = benchmod.restore_or_park(scope, before)
-        scope.close()
+        # The generator and the device are released before anything else can fail: a full disk must not leave the
+        # bench driving a signal (the review caught the manifest write skipping the restore).
+        try:
+            extra = {'configs': [c[0] for c in CONFIGS], 'swing_v': SWING_V, 'vdiv_v': 0.05, 'link': 'awg_to_a0'}
+            if crash:
+                extra['error'] = crash
+            manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args, extra, files=produced,
+                                              candidates=['signal-quality.csv'])
+            if manifest['stale']:
+                print('%s not written this run: the file(s) there are from an earlier run'
+                      % ', '.join(manifest['stale']), file=sys.stderr)
+        except Exception as e:                       # noqa: BLE001 - reported, never fatal: the run's data is written
+            manifest_ok = False
+            print('the manifest could not be written (%r): %s' % (e, args.out_dir), file=sys.stderr)
+        finally:
+            restored = benchmod.restore_or_park(scope, before)
+            scope.close()
 
     summary = {}
     for name, *_ in CONFIGS:
@@ -150,7 +159,7 @@ def main(argv=None):
             deltas = [float(db[r][field]) - float(da[r][field]) for r in rounds if r in da and r in db]
             diffs[key][field] = median_ci(deltas)
     print(json.dumps({'configs': summary, 'paired': diffs}, indent=1))
-    return 0 if restored else 1
+    return 0 if (restored and manifest_ok) else 1
 
 
 if __name__ == '__main__':

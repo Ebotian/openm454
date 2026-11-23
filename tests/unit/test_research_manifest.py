@@ -18,6 +18,23 @@ class _Scope:
         return {}
 
 
+def test_a_failing_manifest_still_parks_the_generator(tmp_path, monkeypatch):
+    """The review's P1 on the second script: the manifest write sat before the restore in the same finally block."""
+    from tests.hardware.research import signal_quality as script
+    monkeypatch.setattr(script.scopemod, 'Scope', _FailingScope)
+    monkeypatch.setattr(script.benchmod, 'Bench', lambda declaration: _Bench())
+    monkeypatch.setattr(script, 'one', lambda scope, an, dg, rate: {
+        'sigma_mv': 2.0, 'amp_mv': 214.0, 'evenodd_mv': 0.1, 'mod4_mv': 0.1, 'rise_ns': 85.0, 'edge_ns': 90.0,
+        'rate_hz': float(rate)})
+    monkeypatch.setattr(script.benchmod, 'write_manifest',
+                        lambda *a, **kw: (_ for _ in ()).throw(OSError('disk full')))
+    out = tmp_path / 'out'
+    code = script.main(['--bench-confirmed', '--out-dir', str(out), '--rounds', '1'])
+    assert code == 1 and (out / 'signal-quality.csv').exists()
+    scope = CREATED[-1]
+    assert scope.parked == 1 and scope.closed == 1
+
+
 def manifest(out_dir, tmp_path, files, candidates):
     args = argparse.Namespace(quick=False, seconds=1.2, out_dir=str(out_dir))
     doc = benchmod.write_manifest(str(out_dir), _Scope(), str(tmp_path / 'usb_ceiling.py'), args,
@@ -53,13 +70,21 @@ class _Link:
         pass
 
 
+CREATED = []
+
+
 class _FailingScope:
     """The scope the signal-quality script drives: usable, but the first capture raises."""
+    def __init__(self, *a, **kw):
+        self.parked = 0
+        self.closed = 0
+        CREATED.append(self)
+
     def open(self):
         pass
 
     def close(self):
-        pass
+        self.closed += 1
 
     def awg_status(self):
         return None
@@ -68,7 +93,7 @@ class _FailingScope:
         pass
 
     def awg_off(self):
-        pass
+        self.parked += 1
 
     def info(self):
         return {'device': {'model': 'stand-in'}}

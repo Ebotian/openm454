@@ -112,6 +112,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if not args.bench_confirmed:                     # before the scope is opened: nothing is driven unconfirmed
         raise SystemExit(benchmod.wiring_gate_message('this research script'))
+    os.makedirs(args.out_dir, exist_ok=True)         # a first run into a new directory must not fail after the run
 
     scope = scopemod.Scope()
     scope.open()
@@ -119,6 +120,7 @@ def main(argv=None):
     ceiling = os.path.join(args.out_dir, 'usb-ceiling.csv')
     transfers_path = os.path.join(args.out_dir, 'usb-transfers.csv')
     produced, crash = [], None
+    restored, manifest_ok = True, True
     try:
         link = benchmod.Bench(benchmod.load()).link('awg_to_a0')
         link.program(scope)
@@ -145,18 +147,25 @@ def main(argv=None):
         crash = repr(e)
         raise
     finally:
-        extra = {'configs': [c[0] for c in CONFIGS], 'seconds': args.seconds}
-        if crash:
-            extra['error'] = crash
-        manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args, extra, files=produced,
-                                          candidates=['usb-ceiling.csv', 'usb-transfers.csv'])
-        if manifest['stale']:                        # an older run's file: say whose it is, never delete it
-            print('%s not written this run: the file(s) there are from an earlier run' % ', '.join(manifest['stale']),
-                  file=sys.stderr)
-        restored = benchmod.restore_or_park(scope, before)
-        scope.close()
+        # The generator and the device are released before anything else can fail: a full disk must not leave the
+        # bench driving a signal (the review caught the manifest write skipping the restore).
+        try:
+            extra = {'configs': [c[0] for c in CONFIGS], 'seconds': args.seconds}
+            if crash:
+                extra['error'] = crash
+            manifest = benchmod.write_manifest(args.out_dir, scope, __file__, args, extra, files=produced,
+                                              candidates=['usb-ceiling.csv', 'usb-transfers.csv'])
+            if manifest['stale']:                    # an older run's file: say whose it is, never delete it
+                print('%s not written this run: the file(s) there are from an earlier run'
+                      % ', '.join(manifest['stale']), file=sys.stderr)
+        except Exception as e:                       # noqa: BLE001 - reported, never fatal: the run's data is written
+            manifest_ok = False
+            print('the manifest could not be written (%r): %s' % (e, args.out_dir), file=sys.stderr)
+        finally:
+            restored = benchmod.restore_or_park(scope, before)
+            scope.close()
 
-    return 0 if restored else 1
+    return 0 if (restored and manifest_ok) else 1
 
 
 if __name__ == '__main__':
