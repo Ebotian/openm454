@@ -79,17 +79,41 @@ def steady_growth(values, tolerance, min_samples=40):
     """Growth inside the last quarter of a series: pass, fail, or insufficient_data — never a silent pass.
 
     Measured on this bench: 21 open/close cycles grow RSS by 26 MiB over the first ~15 of them and then stay flat, so
-    the total growth is not a leak signal — the steady-state slope is. A series with too few points cannot judge it,
-    and says so instead of counting as verified.
+    the total growth is not a leak signal — the steady-state slope is. The value is the median of every pairwise slope
+    inside that quarter (Theil-Sen) times the quarter's span, so a single step cannot decide the verdict: a stream run
+    that ends by releasing 23 MiB drops RSS inside the tail, which is negative growth and not a leak, while a climb
+    that every pair agrees on is still reported at nearly its full height. A series with too few points cannot judge
+    it, and says so instead of counting as verified.
     """
     values = [v for v in values if v is not None]
     if len(values) < min_samples:
         return {'value': None, 'tolerance': tolerance, 'ok': None, 'state': 'insufficient_data',
                 'note': 'too few samples (%d < %d) to judge steady growth' % (len(values), min_samples)}
     tail = values[3 * len(values) // 4:]
-    grow = max(tail) - min(tail)
+    slopes = [(b - a) / (j - i) for i, a in enumerate(tail) for j, b in enumerate(tail) if j > i]
+    grow = round(statistics.median(slopes) * (len(tail) - 1), 3)
     ok = grow <= tolerance
-    return {'value': round(grow, 3), 'tolerance': tolerance, 'ok': ok, 'state': 'pass' if ok else 'fail'}
+    return {'value': grow, 'tolerance': tolerance, 'ok': ok, 'state': 'pass' if ok else 'fail'}
+
+
+def net_growth(values, tolerance, warmup=0.25):
+    """RSS left after the allocator warm-up: median of the last warmup-fraction of the samples against the first.
+
+    The warm-up is real work, not a leak: a cold stream process climbs 57 -> 119 MiB over its first records and then
+    stays flat, which made a 64 MiB whole-run bound fail by 0.4 MiB, while a warm process grew 0.4 MiB over the same
+    run because its warm-up had happened inside an earlier test. Skipping the first quarter leaves the check the run
+    actually promises — a step that stays — and a release is negative growth, not a failure. Tri-state like the
+    steady check: a series too short to judge says so instead of counting as verified.
+    """
+    values = [v for v in values if v is not None]
+    if len(values) < 4:
+        return {'value': None, 'tolerance': tolerance, 'ok': None, 'state': 'insufficient_data',
+                'note': 'too few samples (%d < 4) to judge growth after the warm-up' % len(values)}
+    k = max(1, int(len(values) * warmup))
+    base, end = statistics.median(values[:k]), statistics.median(values[-k:])
+    grow = round(end - base, 3)
+    ok = grow <= tolerance
+    return {'value': grow, 'tolerance': tolerance, 'ok': ok, 'state': 'pass' if ok else 'fail'}
 
 
 class Soak:

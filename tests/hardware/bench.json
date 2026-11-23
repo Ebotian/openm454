@@ -32,7 +32,7 @@
     "external signal source -> any channel"
   ],
   "soak": {
-    "_readme": "Budgets and thresholds of the long-run group. Durations are tiers; --soak-seconds overrides the tier for one run. Every number here is a check the run asserts, not a comment. rss_growth_mib bounds the whole run (it includes the allocator warm-up: measured 26 MiB over the first 15 open/close cycles); rss_steady_mib is the leak check, taken inside the last quarter of the run.",
+    "_readme": "Budgets and thresholds of the long-run group. Durations are tiers; --soak-seconds overrides the tier for one run. Every number here is a check the run asserts, not a comment. rss_after_warmup_mib bounds the growth left after the allocator warm-up, measured as the median of the last quarter of the samples against the first quarter (a cold stream process climbs 57 -> 119 MiB in that first quarter, a warm one grows 0.4 MiB over the whole run); rss_steady_mib is the leak check, the median pairwise slope inside the last quarter, where a release is negative growth and a climb that every pair agrees on fails.",
     "tiers": {
       "5min": 300,
       "10min": 600,
@@ -47,7 +47,7 @@
     "log_record_s": 5,
     "max_gap_ms": 50,
     "drift_tolerance": 0.01,
-    "rss_growth_mib": 64,
+    "rss_after_warmup_mib": 64,
     "open_time_drift": 0.2,
     "artifact_dir": "re/soaks",
     "require": {
