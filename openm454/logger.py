@@ -237,7 +237,12 @@ def plan(st, rate, duration=None, every=1.0, out_dir=None, storage='ram', ram_bu
     if needs_probe and defer:
         rsrc += '; a probe of up to %.0f s measures it when the log starts (the plan may change)' % PROBE_S
     kept_up = bool(bound and bound['lower_bound'] and data_bps <= R * (1 + 1e-3))    # stored rounded
-    if data_bps <= SUSTAINED_BPS or kept_up or (bound and data_bps <= 0.95 * R):
+    # SUSTAINED_BPS is a rule of thumb for a configuration nothing is known about; a measurement of this set that came
+    # in below what the run will produce is a bottleneck whatever the rate (100 MB/s of data against a measured
+    # 50 MB/s readout is gap-free for 5 s, not sustained).
+    if bound and data_bps > R:
+        verdict = 'burst'
+    elif data_bps <= SUSTAINED_BPS or kept_up or (bound and data_bps <= 0.95 * R):
         verdict = 'sustained'
     elif data_bps <= R:
         verdict = 'near_limit'

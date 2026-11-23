@@ -157,6 +157,24 @@ def test_a_lower_bound_at_another_rate_cannot_refuse_a_run_the_hardware_keeps_up
     assert make_plan(['A0', 'A1'], [], 200e6, 1)['readout_mb_s'] == 250.0
 
 
+def test_a_measured_readout_below_the_data_rate_is_not_sustained():
+    """The 150 MB/s rule of thumb is for a set nothing is known about.
+
+    The review's case: 100 MB/s of data against a probe that read 50 MB/s. Nothing about that is sustained — the plan
+    has to report the gap-free limit, warn, and refuse a run longer than it.
+    """
+    host.readout_put(host.readout_key(1, 0, 100e6), 50.0, False, 100.0)
+    pl = make_plan(['A0'], [], 100e6, 3)
+    assert pl['verdict'] == 'burst' and pl['readout_mb_s'] == 50.0
+    assert pl['gapfree_max_s'] == pytest.approx(math.floor(logger.BACKLOG_STOP * 50e6 / (100e6 * 50e6) * 100) / 100,
+                                                abs=0.01)
+    assert pl['backlog_growth_mb_s'] == 50.0
+    with pytest.raises(DscopeError) as refused:
+        make_plan(['A0'], [], 100e6, 12)
+    assert refused.value.code == 'NEEDS_FORCE' and 'only' in refused.value.message
+    assert make_plan(['A0', 'A1'], [], 50e6, 60)['verdict'] == 'sustained'   # 100 MB/s, nothing measured
+
+
 def test_this_rates_own_measurement_wins_over_another_rates():
     """The review's case: a set that kept up here at 250 MB/s must not be refused because another rate of the same set
     measured 207.4 MB/s. A cross-rate value is an estimate for a configuration that has never run; once this rate has
