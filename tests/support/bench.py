@@ -159,9 +159,12 @@ def restore_or_park(scope, before):
         return False
 
 
-def write_manifest(out_dir, scope, script, args, extra=None):
+def write_manifest(out_dir, scope, script, args, extra=None, files=(), candidates=()):
     """Where and how the numbers were taken: device, host, script and bench declaration, plus a session id.
 
+    files: the names this run writes. candidates: the names the script may write, so one that exists in out_dir but was
+    not written now (a --quick run leaves an older trace behind) is recorded as stale instead of passing for this
+    run's output — a manifest that cannot tell the two apart makes the directory unreadable a week later.
     The CSVs of a research run are only comparable when the unit, the script and the declaration are named, so every
     run writes one manifest.json next to them.
     """
@@ -195,7 +198,11 @@ def write_manifest(out_dir, scope, script, args, extra=None):
            'kernel': platform.release(), 'platform': platform.platform(), 'python': platform.python_version(),
            'device': {k: dev.get(k) for k in ('model', 'fw_version', 'panel_version', 'fpga_bin_version',
                                               'usb_speed')},
-           'args': {k: v for k, v in vars(args).items() if k != 'out_dir'}, 'extra': extra or {}}
+           'args': {k: v for k, v in vars(args).items() if k != 'out_dir'}, 'extra': extra or {},
+           'files': [os.path.basename(str(f)) for f in files],
+           'stale': sorted(n for n in candidates
+                           if n not in [os.path.basename(str(f)) for f in files]
+                           and os.path.exists(os.path.join(out_dir, n)))}
     os.makedirs(out_dir, exist_ok=True)
     name = 'manifest-%s.json' % os.path.splitext(os.path.basename(script))[0]
     with open(os.path.join(out_dir, name), 'w', encoding='utf-8') as f:

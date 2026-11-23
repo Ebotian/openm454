@@ -101,7 +101,9 @@ def main(argv=None):
         scope.awg_set('square', 1e3, SWING_V, 0.0)
         benchmod.write_manifest(args.out_dir, scope, __file__, args,
                                 {'configs': [c[0] for c in CONFIGS], 'swing_v': SWING_V,
-                                 'vdiv_v': 0.05, 'link': link.name})
+                                 'vdiv_v': 0.05, 'link': link.name},
+                                files=[os.path.join(args.out_dir, 'signal-quality.csv')],
+                                candidates=['signal-quality.csv'])
         rows = []
         for r in range(args.rounds):
             order = CONFIGS[r % len(CONFIGS):] + CONFIGS[:r % len(CONFIGS)]
