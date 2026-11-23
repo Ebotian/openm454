@@ -96,11 +96,13 @@ def steady_growth(values, tolerance, min_samples=40):
 
       slope  median of every pairwise slope inside the quarter (Theil-Sen) times its span, so a slow climb that every
              pair agrees on is reported at nearly its full height and one spike cannot decide it;
-      level  the median of the last tenth of the quarter against the median of its first tenth, so a step that stays
-             is growth even when most of the quarter is still flat — 92 samples at 100 MiB and 8 at 200 MiB is
-             100 MiB of retained memory, and both medians alone report 0. Each tenth is at least three samples, so a
-             single sample above the plateau (62 samples at 100 MiB and one at 140 MiB: a 63-sample 60 s lifecycle
-             run has exactly that shape) is not a step: at least two of the three have to show the new level.
+      level  the median of the last tenth of the quarter against the higher of its first tenth and the peak the run
+             already reached, so a step that stays is growth even when most of the quarter is still flat — 92 samples at
+             100 MiB and 8 at 200 MiB is 100 MiB of retained memory, and both medians alone report 0. Each tenth is at
+             least three samples, so a single sample above the plateau (62 samples at 100 MiB and one at 140 MiB: a
+             63-sample 60 s lifecycle run has exactly that shape) is not a step: at least two of the three have to show
+             the new level. A quarter that climbs without passing the peak the run already reached is recovery inside
+             the allocator's oscillation, not growth; the slope counts only when the quarter reaches above it.
 
     A release is negative in both terms and floors at zero: a stream run that ends by freeing 23 MiB must not fail.
     A series with too few points cannot judge it, and says so instead of counting as verified.
@@ -114,8 +116,14 @@ def steady_growth(values, tolerance, min_samples=40):
     slopes = [(b - a) / (j - i) for i, a in pts for j, b in pts if j > i]
     ramp = statistics.median(slopes) * (len(tail) - 1)
     k = max(3, len(tail) // 10)                   # at least three samples: one sample is a spike, not a level
-    level = statistics.median(tail[-k:]) - statistics.median(tail[:k])
-    grow = round(max(0.0, ramp, level), 3)
+    end = statistics.median(tail[-k:])
+    prior = max(values[:3 * len(values) // 4])    # the highest level the run already reached
+    # Growth has to be new territory. The stream run on this bench swings ~33 MiB (1.5 MiB per record paid and mostly
+    # returned), so a quarter that climbs but stays below the peak the run already reached is the allocator's
+    # staircase: measured once at 29.6 MiB of slope while ending 11 MiB under its own peak. Only a quarter that reaches
+    # above that peak counts, and then both terms apply.
+    level = end - max(prior, statistics.median(tail[:k]))
+    grow = round(max(0.0, level, ramp if end > prior else 0.0), 3)
     ok = grow <= tolerance
     return {'value': grow, 'tolerance': tolerance, 'ok': ok, 'state': 'pass' if ok else 'fail'}
 

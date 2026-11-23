@@ -59,6 +59,20 @@ def test_a_step_that_stays_is_growth_even_when_most_of_the_tail_is_flat():
     assert steady["state"] == "fail" and steady["ok"] is False and steady["value"] == 100.0
 
 
+def test_a_quarter_that_climbs_without_passing_the_peak_is_recovery():
+    """The 60 s stream run on this bench pays ~1.5 MiB per record and mostly returns it: the swing is ~33 MiB.
+
+    Measured once: the last quarter climbed 23 MiB (a 29.6 MiB slope) while ending 11 MiB under the peak the run had
+    already reached, and the check failed a run that had not grown. Growth has to be new territory.
+    """
+    under_the_peak = [190.0] * 30 + [160.0] * 45 + [160.0 + 1.5 * i for i in range(20)] + [190.0] * 5
+    recovered = soakmod.steady_growth(under_the_peak, 8.0)
+    assert recovered["state"] == "pass" and recovered["value"] == 0.0
+    new_territory = [190.0] * 30 + [160.0] * 45 + [160.0 + 2.5 * i for i in range(20)] + [210.0] * 5
+    grown = soakmod.steady_growth(new_territory, 8.0)
+    assert grown["state"] == "fail" and grown["value"] > 8.0
+
+
 def test_the_slope_uses_at_most_the_declared_number_of_points():
     """The review's case: 511 samples in the quarter, floor division gave step 1 and 130 305 pairwise slopes."""
     for n in (511, 941, 2430):
