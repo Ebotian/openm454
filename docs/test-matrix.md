@@ -53,8 +53,9 @@ layers: an example/golden oracle (left) and a generated one (right). Update this
   default marker set and CI never select them; only `OPENM454_NO_USB` skips — a busy or missing scope is an error,
   and the session fixture hands the generator back mode by mode (levels, duty and phase included) or parks it. The
   long-run steady-RSS check takes the larger of the median pairwise slope inside the last quarter and the level
-  of its last tenth against its first, each tenth at least three samples so one sample is a spike and not a step
-  (a step that stays is growth; a release is negative growth, not a leak) and is
+  of its last tenth against its first and the peak the run already reached, each tenth at least three samples so one
+  sample is a spike and not a step (a step that stays is growth; a release is negative growth, not a leak; a quarter
+  that climbs without passing the earlier peak is the allocator's swing, not growth) and is
   tri-state (`pass` / `fail` / `insufficient_data`): a short run says it cannot judge
   instead of counting as verified; the growth after the allocator warm-up is bounded separately, by comparing the
   median of the first quarter of the samples with the median of the last. Seven of the functional checks are the device counterpart of an offline test

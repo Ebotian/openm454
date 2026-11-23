@@ -8,12 +8,12 @@ base measurement is 823 passed, 554 skipped, 86.40 s, 26 test files, 8396 test L
 
 | suite | command | result | wall time |
 | --- | --- | --- | ---: |
-| fast (PR) | `python -m pytest tests` | 882 passed, 554 skipped | **14.9 s** |
-| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 882 passed | **14.8 s** |
+| fast (PR) | `python -m pytest tests` | 888 passed, 554 skipped | **14.9 s** |
+| clean software (no skips) | `python -m pytest tests -m "not hw and not slow and not traces"` | 888 passed | **14.9 s** |
 | recorded material only | `python -m pytest tests -m traces` | 554 skipped without the recording | 1.9 s |
-| full offline | `python -m pytest tests -m "not hw"` | 883 passed, 554 skipped | **65.5 s** |
+| full offline | `python -m pytest tests -m "not hw"` | 889 passed, 554 skipped | **65.5 s** |
 | hw functional | `python -m pytest tests -m "hw and not hwsoak" -n 0 --bench-confirmed` | 53 passed on the AWG->A0 bench, never in CI | **24.8 s** |
-| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60 --bench-confirmed` | 4 passed, artifacts in `re/soaks/` | **245.7 s** |
+| hw soak (60 s tier) | `python -m pytest tests -m hwsoak -n 0 --soak-seconds 60 --bench-confirmed` | 4 passed, artifacts in `re/soaks/` | **245.6 s** |
 | model | `quint test specs/quint/capture.qnt --match=...` | 4 runs pass | 0.02 s |
 | model invariants | `quint verify ... --max-steps=12` | 7 invariants, no violation | 0.64 s |
 | fuzz | `python tests/fuzz/fuzz_packet.py -max_total_time=300` | 12.9 M execs, no crash | 301 s |
@@ -22,15 +22,15 @@ The fast suite is the default marker set (`not hw and not slow`) under `pytest-x
 the full suite adds the `slow` test. Every one of the 554 skips is a `traces` test: it compares against the DSWave
 recording in `re/traces/S01_warm`, which .gitignore keeps out of the repository (the recorded runs contain the
 device's security key). No firmware test skips. `-m "not traces"` therefore runs the software suite with no skips
-at all (882 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
+at all (888 passed), and `-m traces` selects exactly the recorded-material group (554 today). One of them, the
 sweep scenario `swp_lin_eq_5k_1s`, would skip even with the recording (every `time_step` line depends on the state
 before it); it carries the marker so the software suite has no skips at all. What the recorded material is and how it was made: `docs/TRACES.md`.
 
 Measured 2026-11-23 on the merged tree (0.4.0 plus `--bench-confirmed`, `docs/TRACES.md`, the two soak RSS
-checks re-based below, and the review rounds' fixes): fast **882 passed, 554 skipped, 14.9 s**, clean software
-group **882 passed, 0 skipped**, full offline **883 passed, 554 skipped, 65.5 s**, hardware functional **53 passed,
-24.8 s** on the AWG->A0 bench, hardware soak (60 s tier) **4 passed, 245.7 s**, test LOC 8396 → 11431. The two
-tables below stay the PR #8 measurement.
+checks re-based below, and the four review rounds' fixes): fast **888 passed, 554 skipped, 14.9 s**, clean
+software group **888 passed, 0 skipped**, full offline **889 passed, 554 skipped, 65.5 s**, hardware functional
+**53 passed, 24.8 s** on the AWG->A0 bench, hardware soak (60 s tier) **4 passed, 245.6 s**, test LOC 8396 → 11628.
+The two tables below stay the PR #8 measurement.
 
 ## Baseline vs. PR #8 (kept as that change's measurement)
 
@@ -133,10 +133,10 @@ device does it:
 
 | run | what it did | measured |
 | --- | --- | --- |
-| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.16 ms, RSS +0.03 MiB after the warm-up, steady 0.01 MiB |
-| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS +13.73 MiB after the warm-up, steady 1.58 MiB |
-| log | 12 records x 5 s, to disk | 60 000 000 samples in 24 files, RSS +0.03 MiB after the warm-up, steady `insufficient_data` (12 samples) |
-| lifecycle | open -> capture -> close, 63 cycles | open median 768.8 ms, RSS +42.46 MiB after the warm-up (the knee spans the 60 s tier's first quarter), steady 0.02 MiB |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.17 ms, RSS +8.29 MiB after the warm-up, steady 0.01 MiB |
+| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS +13.79 MiB after the warm-up, steady 0.00 MiB |
+| log | 12 records x 5 s, to disk | 60 000 000 samples in 24 files, RSS +0.01 MiB after the warm-up, steady `insufficient_data` (12 samples) |
+| lifecycle | open -> capture -> close, 63 cycles | open median 768.7 ms, RSS +37.14 MiB after the warm-up (the knee spans the 60 s tier's first quarter), steady 1.10 MiB |
 
 Every run also asserts: no error row, frames/records counted, file descriptors and threads unchanged, the device
 released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run.
@@ -150,15 +150,18 @@ last quarter of the samples against the median of the first quarter and bounds w
 against its first tenth (a step that stays is growth even when most of the quarter is still flat — 92 samples at
 100 MiB and 8 at 200 MiB is 100 MiB retained, which the slope alone reports as 0). Each tenth is at least three
 samples, so one sample above the plateau is a spike, not a step — a 63-sample 60 s lifecycle run has exactly that
-few. A release is negative in both and floors at zero: a stream run that ends by freeing 23 MiB is not a leak. The
-slope is estimated on at most 256 evenly spaced samples of the quarter (32 640 pairwise slopes, ~2 MiB): a 1 h
-stream run has ~2 400 samples in its quarter, and the full cross product cost 125 MiB at the end of the run for a
-number that the bounded estimate gives to within 0.003 MiB. Both are tri-state — `pass` / `fail` / `insufficient_data` — and the
+few. A release is negative in both and floors at zero: a stream run that ends by freeing 23 MiB is not a leak. Growth
+also has to be new territory: the stream run on this bench swings ~33 MiB (1.5 MiB paid per record, mostly returned),
+so a quarter that climbs without passing the peak the run already reached is recovery, not growth (measured once: a
+29.6 MiB slope in a run that ended 11 MiB under its own peak). The slope is estimated on at most 256 evenly spaced
+samples of the quarter (32 640 pairwise slopes, ~2 MiB): a 1 h stream run has ~2 400 samples in its quarter, and the
+full cross product cost 125 MiB at the end of the run for a number that the bounded estimate gives to within
+0.003 MiB. Both are tri-state — `pass` / `fail` / `insufficient_data` — and the
 steady one needs at least 40 samples: at the 60 s tier the log run has 12 and reports `insufficient_data` rather
 than counting as verified, while the other three pass. The 10 min tier has enough points for all four (measured
 below); the 1 h tier for the lifecycle run only.
 
-Measured at the default 10 min tier (2026-11-23, one session, 4 passed, 2404.7 s): stream +17.40 / steady 0.06
+Measured at the default 10 min tier (2026-11-23, one session, 4 passed, 2404.7 s): stream +17.40 / steady 0.00
 (1621 records), lifecycle +11.28 / steady 6.68 (626 cycles), repeat +0.06 / 0.04 (481 captures), log +0.004 / 0.00
 (116 records). The warm-up is amortised as expected — stream's whole-run growth falls from 64.4 MiB at the 60 s tier
 to 24.0 MiB here, lifecycle's from 64.1 MiB — so the old whole-run bound of 64 MiB was within 0.05 MiB of failing
