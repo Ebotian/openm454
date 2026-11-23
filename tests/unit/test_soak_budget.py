@@ -48,6 +48,17 @@ def test_a_release_inside_the_last_quarter_is_not_a_leak():
     assert released["state"] == "pass" and released["ok"] is True and released["value"] <= 0.0
 
 
+def test_a_step_that_stays_is_growth_even_when_most_of_the_tail_is_flat():
+    """Offline reproduction from the review: 92 samples at 100 MiB, then 8 at 200 MiB.
+
+    Both medians (the pairwise slope and the first/last quarter for the total) stay at the plateau, so the old pair
+    reported 0 MiB and let 100 MiB of retained memory through; the level term sees the last tenth of the window.
+    """
+    late_step = [100.0] * 92 + [200.0] * 8
+    steady = soakmod.steady_growth(late_step, 8.0)
+    assert steady["state"] == "fail" and steady["ok"] is False and steady["value"] == 100.0
+
+
 def test_one_spike_does_not_decide_the_steady_verdict():
     """A single sample 40 MiB above the plateau is not a trend: the median pairwise slope stays at the plateau's."""
     spiked = [120.0] * 60 + [160.0] + [120.0] * 19

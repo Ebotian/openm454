@@ -133,10 +133,10 @@ device does it:
 
 | run | what it did | measured |
 | --- | --- | --- |
-| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.83 ms, interval drift 9.2e-05 relative, RSS +0.02 MiB after the warm-up, steady 0.00 MiB |
-| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS +10.05 MiB after the warm-up, steady 0.00 MiB |
-| log | 12 records x 5 s, to disk | 60 000 000 samples in 24 files, 60.0 MB written, RSS +0.03 MiB after the warm-up, steady `insufficient_data` (12 samples) |
-| lifecycle | open -> capture -> close, 63 cycles | open median 769.1 ms, drift 0.002, RSS +37.57 MiB after the warm-up (the knee spans the 60 s tier's first quarter), steady 0.02 MiB |
+| repeat | 49 captures x 512 frames | 25 088 frames, worst frame gap 2.49 ms, interval drift 4.2e-05 relative, RSS +8.42 MiB after the warm-up, steady 2.12 MiB |
+| stream | 162 records of 200 ms, 810 statistics rows | signal clock monotone, RSS +20.00 MiB after the warm-up, steady 0.00 MiB |
+| log | 12 records x 5 s, to disk | 60 000 000 samples in 24 files, 60.0 MB written, RSS +0.02 MiB after the warm-up, steady `insufficient_data` (12 samples) |
+| lifecycle | open -> capture -> close, 63 cycles | open median 768.8 ms, RSS +32.04 MiB after the warm-up (the knee spans the 60 s tier's first quarter), steady 0.03 MiB |
 
 Every run also asserts: no error row, frames/records counted, file descriptors and threads unchanged, the device
 released and usable afterwards. Tiers are 5/10/60 min in `bench.json`; `--soak-seconds` overrides one run.
@@ -145,9 +145,11 @@ Two RSS checks, and neither may read allocator behaviour as a leak. 21 open/clos
 first ~15 and then stay flat (measured), and a cold stream process climbs 57 -> 119 MiB over its first records, so
 the growth of a whole short run is warm-up, not drift: `rss_after_warmup_mib` therefore compares the median of the
 last quarter of the samples against the median of the first quarter and bounds what is left. The leak check is
-`rss_steady_mib`, the median pairwise slope inside the last quarter times its span — a stream run that ends by
-releasing 23 MiB drops RSS inside the tail, which is negative growth and not a leak, while a climb every pair agrees
-on is still reported at nearly its height. Both are tri-state — `pass` / `fail` / `insufficient_data` — and the
+`rss_steady_mib`, the larger of two robust terms inside the last quarter: the median pairwise slope times its span
+(a slow climb every pair agrees on is reported at nearly its full height) and the median of the quarter's last tenth
+against its first tenth (a step that stays is growth even when most of the quarter is still flat — 92 samples at
+100 MiB and 8 at 200 MiB is 100 MiB retained, which the slope alone reports as 0). A release is negative in both and
+floors at zero: a stream run that ends by freeing 23 MiB is not a leak. Both are tri-state — `pass` / `fail` / `insufficient_data` — and the
 steady one needs at least 40 samples: at the 60 s tier the log run has 12 and reports `insufficient_data` rather
 than counting as verified, while the other three pass. The 10 min tier has enough points for all four (measured
 below); the 1 h tier for the lifecycle run only.

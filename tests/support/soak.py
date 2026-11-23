@@ -79,11 +79,17 @@ def steady_growth(values, tolerance, min_samples=40):
     """Growth inside the last quarter of a series: pass, fail, or insufficient_data — never a silent pass.
 
     Measured on this bench: 21 open/close cycles grow RSS by 26 MiB over the first ~15 of them and then stay flat, so
-    the total growth is not a leak signal — the steady-state slope is. The value is the median of every pairwise slope
-    inside that quarter (Theil-Sen) times the quarter's span, so a single step cannot decide the verdict: a stream run
-    that ends by releasing 23 MiB drops RSS inside the tail, which is negative growth and not a leak, while a climb
-    that every pair agrees on is still reported at nearly its full height. A series with too few points cannot judge
-    it, and says so instead of counting as verified.
+    the total growth is not a leak signal — the steady-state slope is. Two robust terms are taken inside the last
+    quarter and the larger one is reported, floored at zero:
+
+      slope  median of every pairwise slope inside the quarter (Theil-Sen) times its span, so a slow climb that every
+             pair agrees on is reported at nearly its full height and one spike cannot decide it;
+      level  the median of the last tenth of the quarter against the median of its first tenth, so a step that stays
+             is growth even when most of the quarter is still flat — 92 samples at 100 MiB and 8 at 200 MiB is
+             100 MiB of retained memory, and both medians alone report 0.
+
+    A release is negative in both terms and floors at zero: a stream run that ends by freeing 23 MiB must not fail.
+    A series with too few points cannot judge it, and says so instead of counting as verified.
     """
     values = [v for v in values if v is not None]
     if len(values) < min_samples:
@@ -91,7 +97,10 @@ def steady_growth(values, tolerance, min_samples=40):
                 'note': 'too few samples (%d < %d) to judge steady growth' % (len(values), min_samples)}
     tail = values[3 * len(values) // 4:]
     slopes = [(b - a) / (j - i) for i, a in enumerate(tail) for j, b in enumerate(tail) if j > i]
-    grow = round(statistics.median(slopes) * (len(tail) - 1), 3)
+    ramp = statistics.median(slopes) * (len(tail) - 1)
+    k = max(1, len(tail) // 10)
+    level = statistics.median(tail[-k:]) - statistics.median(tail[:k])
+    grow = round(max(0.0, ramp, level), 3)
     ok = grow <= tolerance
     return {'value': grow, 'tolerance': tolerance, 'ok': ok, 'state': 'pass' if ok else 'fail'}
 
