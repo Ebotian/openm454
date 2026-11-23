@@ -59,6 +59,19 @@ def test_a_step_that_stays_is_growth_even_when_most_of_the_tail_is_flat():
     assert steady["state"] == "fail" and steady["ok"] is False and steady["value"] == 100.0
 
 
+def test_a_single_sample_at_the_end_is_not_growth():
+    """Offline reproduction from the review's second round: 62 samples at 100 MiB and one at 140 MiB.
+
+    The window of a 63-sample 60 s lifecycle run is that short, and a one-sample window read the spike as a 40 MiB
+    step. Each tenth is at least three samples now, so one sample cannot move the median.
+    """
+    spike_at_the_end = [100.0] * 62 + [140.0]
+    steady = soakmod.steady_growth(spike_at_the_end, 8.0)
+    assert steady["state"] == "pass" and steady["value"] == 0.0
+    two_samples = [100.0] * 61 + [140.0, 140.0]          # two of three still move the median: that is a step
+    assert soakmod.steady_growth(two_samples, 8.0)["state"] == "fail"
+
+
 def test_one_spike_does_not_decide_the_steady_verdict():
     """A single sample 40 MiB above the plateau is not a trend: the median pairwise slope stays at the plateau's."""
     spiked = [120.0] * 60 + [160.0] + [120.0] * 19

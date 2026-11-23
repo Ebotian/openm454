@@ -86,7 +86,9 @@ def steady_growth(values, tolerance, min_samples=40):
              pair agrees on is reported at nearly its full height and one spike cannot decide it;
       level  the median of the last tenth of the quarter against the median of its first tenth, so a step that stays
              is growth even when most of the quarter is still flat — 92 samples at 100 MiB and 8 at 200 MiB is
-             100 MiB of retained memory, and both medians alone report 0.
+             100 MiB of retained memory, and both medians alone report 0. Each tenth is at least three samples, so a
+             single sample above the plateau (62 samples at 100 MiB and one at 140 MiB: a 63-sample 60 s lifecycle
+             run has exactly that shape) is not a step: at least two of the three have to show the new level.
 
     A release is negative in both terms and floors at zero: a stream run that ends by freeing 23 MiB must not fail.
     A series with too few points cannot judge it, and says so instead of counting as verified.
@@ -98,7 +100,7 @@ def steady_growth(values, tolerance, min_samples=40):
     tail = values[3 * len(values) // 4:]
     slopes = [(b - a) / (j - i) for i, a in enumerate(tail) for j, b in enumerate(tail) if j > i]
     ramp = statistics.median(slopes) * (len(tail) - 1)
-    k = max(1, len(tail) // 10)
+    k = max(3, len(tail) // 10)                   # at least three samples: one sample is a spike, not a level
     level = statistics.median(tail[-k:]) - statistics.median(tail[:k])
     grow = round(max(0.0, ramp, level), 3)
     ok = grow <= tolerance
